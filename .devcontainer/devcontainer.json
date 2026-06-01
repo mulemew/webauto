@@ -1,0 +1,52 @@
+{
+  "name": "AutoOps Dev",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspace",
+
+  "forwardPorts": [
+    8080,
+    5173,
+    5432
+  ],
+  "portsAttributes": {
+    "8080": { "label": "API Server" },
+    "5173": { "label": "Web UI (Vite)" },
+    "5432": { "label": "PostgreSQL" }
+  },
+
+  "onCreateCommand": "pnpm install",
+  "postStartCommand": "pnpm --filter @workspace/db run push",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "bradlc.vscode-tailwindcss",
+        "ms-vscode.vscode-typescript-next",
+        "prisma.prisma",
+        "mtxr.sqltools",
+        "mtxr.sqltools-driver-pg",
+        "ms-azuretools.vscode-docker",
+        "usernamehw.errorlens"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "typescript.tsdk": "node_modules/typescript/lib",
+        "sqltools.connections": [
+          {
+            "name": "AutoOps Dev DB",
+            "driver": "PostgreSQL",
+            "host": "localhost",
+            "port": 5432,
+            "database": "autoops",
+            "username": "autoops",
+            "password": "devpassword"
+          }
+        ]
+      }
+    }
+  }
+}

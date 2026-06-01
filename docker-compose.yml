@@ -1,0 +1,95 @@
+services:
+    # ── PostgreSQL ────────────────────────────────────────────────
+    db:
+      image: postgres:16-alpine
+      environment:
+        POSTGRES_USER: autoops
+        POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+        POSTGRES_DB: autoops
+      volumes:
+        - pgdata:/var/lib/postgresql/data
+      ports:
+        - "5432:5432"
+      healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U autoops -d autoops"]
+        interval: 5s
+        timeout: 5s
+        retries: 20
+        start_period: 120s
+      restart: unless-stopped
+
+    # ── Browserless (remote Chrome via CDP WebSocket) ─────────────
+    browserless:
+      image: ghcr.io/browserless/chromium:latest
+      environment:
+        CONNECTION_TIMEOUT: "60000"
+        MAX_CONCURRENT_SESSIONS: "5"
+        DEFAULT_LAUNCH_ARGS: '["--disable-blink-features=AutomationControlled"]'
+      healthcheck:
+        test: ["CMD-SHELL", "wget -qO- http://localhost:3000/json/version || exit 1"]
+        interval: 10s
+        timeout: 5s
+        retries: 6
+        start_period: 30s
+      restart: unless-stopped
+
+    # ── CF Proxy (SeleniumBase UC — Cloudflare bypass) ────────────
+    # Runs Chrome in headed mode (Xvfb virtual display) via undetected-chromedriver.
+    # Exposes a REST API on port 7317 for the app to create/manage browser sessions
+    # that transparently bypass Cloudflare JS challenges and Turnstile.
+    # Usage: set BROWSER_PROVIDER=seleniumbase in the app environment (or via Settings).
+    cf-proxy:
+      build:
+        context: artifacts/cf-proxy
+        dockerfile: Dockerfile
+      environment:
+        PORT: "7317"
+        CF_RECONNECT_TIME: "${CF_RECONNECT_TIME:-4}"
+        SESSION_TIMEOUT_S: "1800"
+        POOL_SIZE: "${POOL_SIZE:-1}"
+      shm_size: 2g
+      healthcheck:
+        test: ["CMD-SHELL", "wget -qO- http://localhost:7317/health || exit 1"]
+        interval: 15s
+        timeout: 10s
+        retries: 5
+        start_period: 60s
+      restart: unless-stopped
+
+    # ── App (API + Web UI) ────────────────────────────────────────
+    # Runs DB migrations automatically on startup (CREATE TABLE IF NOT EXISTS).
+    # Switching databases? Just update DATABASE_URL and restart — tables are
+    # created on first connect, no separate migration step needed.
+    app:
+      image: ghcr.io/mulemew/webauto:latest
+      build:
+        context: .
+        dockerfile: Dockerfile
+      environment:
+        DATABASE_URL: ${DATABASE_URL:-postgresql://autoops:${POSTGRES_PASSWORD:-changeme}@db:5432/autoops}
+        PORT: "8080"
+        NODE_ENV: production
+        DATA_DIR: /app/data
+        SESSION_SECRET: ${SESSION_SECRET:-}
+        ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+        DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+        BROWSERLESS_URL: "ws://browserless:3000"
+        BROWSER_PROVIDER: "${BROWSER_PROVIDER:-playwright}"
+        CF_PROXY_URL: "http://cf-proxy:7317"
+      ports:
+        - "${PORT:-80}:8080"
+      volumes:
+        - autoops_data:/app/data
+      depends_on:
+        db:
+          condition: service_healthy
+        browserless:
+          condition: service_healthy
+        cf-proxy:
+          condition: service_healthy
+      restart: unless-stopped
+
+
+volumes:
+  pgdata:
+  autoops_data:

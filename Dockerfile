@@ -1,0 +1,110 @@
+# =============================================================
+# AutoOps — single container (API + Web UI + bundled Chromium)
+# Includes Playwright's Chromium for the "local" browser provider.
+# Also works with remote CDP services (browserless, etc.) via the
+# "playwright" or "puppeteer" provider settings.
+# =============================================================
+
+# ─── Stage 1: Build web UI ───────────────────────────────────
+# --platform=$BUILDPLATFORM: compile JS on the build host (amd64) natively.
+# The Vite/Rollup output is pure JS — platform-agnostic — so this is safe.
+FROM --platform=$BUILDPLATFORM node:20-bookworm AS web-builder
+
+WORKDIR /workspace
+RUN npm install -g pnpm
+
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
+COPY tsconfig.base.json tsconfig.json ./
+COPY lib/ lib/
+COPY artifacts/web-ui/ artifacts/web-ui/
+
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+RUN pnpm install --frozen-lockfile
+
+ENV BASE_PATH=/ NODE_ENV=production
+RUN pnpm --filter @workspace/web-ui run build
+
+# ─── Stage 2: Build API server ───────────────────────────────
+FROM --platform=$BUILDPLATFORM node:20-bookworm AS api-builder
+
+WORKDIR /workspace
+RUN npm install -g pnpm
+
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
+COPY tsconfig.base.json tsconfig.json ./
+COPY lib/ lib/
+COPY artifacts/api-server/ artifacts/api-server/
+
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+RUN pnpm install --frozen-lockfile
+RUN pnpm --filter @workspace/api-server run build
+
+# ─── Stage 3: Production runtime ─────────────────────────────
+FROM node:20-bookworm-slim AS runner
+
+# Install system dependencies required by Chromium + wget for healthcheck.
+# These are the libraries Playwright's Chromium needs at runtime.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    # xdotool + Xvfb + window manager — required for OS-level mouse clicks (bypasses CF Turnstile)
+    xdotool xvfb x11-utils fluxbox \
+    # Chromium runtime dependencies
+    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+    libdrm2 libdbus-1-3 libxkbcommon0 libatspi2.0-0 \
+    libx11-6 libxcomposite1 libxdamage1 libxext6 libxfixes3 \
+    libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 \
+    libxshmfence1 \
+    # Fonts — needed for proper text rendering in screenshots
+    fonts-liberation fonts-noto-color-emoji \
+    fonts-noto-cjk fonts-wqy-microhei fonts-wqy-zenhei \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install puppeteer and playwright (with Chromium browser).
+# puppeteer: skip download — used only for remote CDP connections.
+# playwright: install Chromium for the "local" browser provider.
+COPY artifacts/api-server/package.json ./package-src.json
+RUN node -e "\
+  const p = JSON.parse(require('fs').readFileSync('./package-src.json', 'utf-8'));\
+  const out = { name: 'autoops', version: '1.0.0', type: 'module',\
+    dependencies: {\
+      puppeteer: p.dependencies.puppeteer,\
+      'playwright-core': p.dependencies['playwright-core']\
+    }\
+  };\
+  require('fs').writeFileSync('./package.json', JSON.stringify(out, null, 2));\
+  " && rm package-src.json
+
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+RUN npm install --omit=dev
+
+# Install Playwright's bundled Chromium (used by the "local" provider).
+# This is Playwright's patched Chromium with built-in anti-detection —
+# significantly better at bypassing Cloudflare Turnstile than stock Chrome.
+RUN npx playwright install chromium
+
+# API bundle (pino workers are included by esbuild-plugin-pino)
+COPY --from=api-builder /workspace/artifacts/api-server/dist ./dist
+
+# Web UI static assets — Express serves these from dist/public at runtime
+COPY --from=web-builder /workspace/artifacts/web-ui/dist/public ./dist/public
+
+ENV NODE_ENV=production
+ENV PORT=8080
+ENV DATA_DIR=/app/data
+
+RUN mkdir -p /app/data/screenshots
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD wget -qO- http://localhost:8080/api/healthz || exit 1
+
+# Start Xvfb (virtual display) before the Node process so the local browser
+# provider can launch Chromium in headed mode. Headed mode is critical for
+# bypassing Cloudflare Turnstile — headless is detectable. Also enables
+# xdotool for OS-level mouse clicks that CF cannot distinguish from human input.
+CMD ["sh", "-c", "Xvfb :99 -screen 0 1920x1080x24 -ac &>/dev/null & export DISPLAY=:99 && sleep 0.5 && fluxbox &>/dev/null & sleep 0.5 && exec node --enable-source-maps dist/index.mjs"]

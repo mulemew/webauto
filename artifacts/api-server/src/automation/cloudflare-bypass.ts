@@ -1,0 +1,702 @@
+import type { PageAdapter } from "./page-adapter";
+import { logger } from "../lib/logger";
+import { execSync, execFileSync } from "child_process";
+
+type CfChallengeType = "js_challenge" | "turnstile_click" | "waf_blocked" | "none";
+
+// ── xdotool availability (checked once at startup) ──────────────────────────
+
+let _xdotoolAvailable: boolean | null = null;
+function isXdotoolAvailable(): boolean {
+  if (_xdotoolAvailable === null) {
+    try {
+      execSync("which xdotool", { stdio: "ignore" });
+      _xdotoolAvailable = true;
+      logger.info("xdotool detected — OS-level clicking enabled for Turnstile");
+    } catch {
+      _xdotoolAvailable = false;
+      logger.debug("xdotool not found — falling back to CDP mouse events");
+    }
+  }
+  return _xdotoolAvailable;
+}
+
+// ── Turnstile iframe expansion script ───────────────────────────────────────
+// Ported from the JustRunMy.App reference project.
+// Forcefully expands hidden/overflow:hidden containers around the Turnstile
+// widget so that the checkbox is visible and clickable.
+
+const EXPAND_TURNSTILE_JS = `
+(function() {
+  var ts = document.querySelector('input[name="cf-turnstile-response"]');
+  if (!ts) {
+    // Also try shadow DOM host containers
+    var containers = document.querySelectorAll('.cf-turnstile, [data-sitekey]');
+    if (containers.length === 0) return 'no-turnstile';
+  }
+  // Expand overflow:hidden ancestors
+  var el = ts ? ts : containers[0];
+  for (var i = 0; i < 20; i++) {
+    el = el.parentElement;
+    if (!el) break;
+    var s = window.getComputedStyle(el);
+    if (s.overflow === 'hidden' || s.overflowX === 'hidden' || s.overflowY === 'hidden')
+      el.style.overflow = 'visible';
+    el.style.minWidth = 'max-content';
+  }
+  // Make Turnstile iframes visible and properly sized
+  document.querySelectorAll('iframe').forEach(function(f){
+    if (f.src && (f.src.includes('challenges.cloudflare.com') || f.src.includes('turnstile'))) {
+      f.style.width = '300px'; f.style.height = '65px';
+      f.style.minWidth = '300px';
+      f.style.visibility = 'visible'; f.style.opacity = '1';
+      f.style.position = 'relative'; f.style.zIndex = '999999';
+    }
+  });
+  return 'done';
+})()
+`;
+
+// ── xdotool-based physical click ────────────────────────────────────────────
+// Uses OS-level X11 events that are indistinguishable from real human input.
+// CF's Turnstile cannot detect these as automation because they come from the
+// window system, not from CDP's Input.dispatchMouseEvent.
+
+function xdotoolActivateChrome(): string | null {
+  const classNames = ["chrome", "chromium", "Chromium", "Chrome", "google-chrome"];
+  for (const cls of classNames) {
+    try {
+      const result = execFileSync("xdotool", ["search", "--onlyvisible", "--class", cls], {
+        timeout: 3000, encoding: "utf-8",
+      }).trim();
+      const wids = result.split("\n").filter(Boolean);
+      if (wids.length > 0) {
+        execFileSync("xdotool", ["windowactivate", "--sync", wids[0]], {
+          timeout: 3000, stdio: "ignore",
+        });
+        return wids[0];
+      }
+    } catch { /* try next class name */ }
+  }
+  try {
+    execFileSync("xdotool", ["getactivewindow", "windowactivate"], {
+      timeout: 3000, stdio: "ignore",
+    });
+  } catch { /* ignore */ }
+  return null;
+}
+
+/**
+ * Get the actual window position via xdotool getwindowgeometry.
+ * This is reliable in Xvfb unlike window.screenX/screenY which return 0.
+ */
+function xdotoolGetWindowGeometry(wid: string): { x: number; y: number } | null {
+  try {
+    const out = execFileSync("xdotool", ["getwindowgeometry", "--shell", wid], {
+      timeout: 3000, encoding: "utf-8",
+    });
+    let x = 0, y = 0;
+    for (const line of out.trim().split("\n")) {
+      if (line.startsWith("X=")) x = parseInt(line.split("=")[1], 10);
+      else if (line.startsWith("Y=")) y = parseInt(line.split("=")[1], 10);
+    }
+    return { x, y };
+  } catch {
+    return null;
+  }
+}
+
+function xdotoolClick(x: number, y: number): void {
+  xdotoolActivateChrome();
+  try {
+    execFileSync("xdotool", ["mousemove", "--sync", String(Math.round(x)), String(Math.round(y))], {
+      timeout: 3000, stdio: "ignore",
+    });
+    execFileSync("xdotool", ["click", "1"], { timeout: 2000, stdio: "ignore" });
+    logger.info({ x: Math.round(x), y: Math.round(y) }, "xdotool physical click dispatched");
+  } catch (err) {
+    logger.debug({ err }, "xdotool click failed, falling back");
+  }
+}
+
+/**
+ * Attempt a physical OS-level click on the Turnstile checkbox.
+ * Falls back to CDP click if xdotool is unavailable.
+ */
+async function physicalClickTurnstile(page: PageAdapter): Promise<boolean> {
+  // Get Turnstile iframe coordinates via JS injection
+  const coords = await page.evaluate(() => {
+    // First try iframes
+    const iframes = document.querySelectorAll("iframe");
+    for (let i = 0; i < iframes.length; i++) {
+      const src = iframes[i].src || "";
+      if (src.includes("cloudflare") || src.includes("turnstile") || src.includes("challenges")) {
+        const r = iframes[i].getBoundingClientRect();
+        if (r.width > 0 && r.height > 0)
+          return { cx: Math.round(r.x + 30), cy: Math.round(r.y + r.height / 2) };
+      }
+    }
+    // Fallback: container element
+    const containers = Array.from(document.querySelectorAll<HTMLElement>(".cf-turnstile, [data-sitekey]"));
+    for (const container of containers) {
+      const r = container.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0)
+        return { cx: Math.round(r.x + 30), cy: Math.round(r.y + r.height / 2) };
+    }
+    return null;
+  }) as { cx: number; cy: number } | null;
+
+  if (!coords) {
+    logger.debug("Could not locate Turnstile coordinates for physical click");
+    return false;
+  }
+
+  if (isXdotoolAvailable()) {
+    // Get browser window position to compute absolute screen coordinates
+    // Prefer xdotool getwindowgeometry (accurate in Xvfb) over window.screenX/Y
+    const wid = xdotoolActivateChrome();
+    let winX = 0, winY = 0;
+    if (wid) {
+      const geo = xdotoolGetWindowGeometry(wid);
+      if (geo) {
+        winX = geo.x;
+        winY = geo.y;
+      }
+    }
+
+    const winInfo = await page.evaluate(() => ({
+      sx: (window as any).screenX || 0,
+      sy: (window as any).screenY || 0,
+      oh: window.outerHeight,
+      ih: window.innerHeight,
+    })) as { sx: number; sy: number; oh: number; ih: number };
+
+    // Use xdotool geometry if available, fall back to JS values
+    if (winX === 0 && winY === 0) {
+      winX = winInfo.sx;
+      winY = winInfo.sy;
+    }
+    const titleBarHeight = Math.max(0, winInfo.oh - winInfo.ih);
+    const absX = coords.cx + winX;
+    const absY = coords.cy + winY + titleBarHeight;
+
+    logger.info({ absX, absY, coords, winX, winY, titleBarHeight }, "Attempting xdotool physical click on Turnstile");
+    xdotoolClick(absX, absY);
+    return true;
+  }
+
+  // Fallback: CDP click (less effective but better than nothing)
+  logger.debug({ coords }, "Falling back to CDP mouse click on Turnstile");
+  await page.mouse.move(coords.cx, coords.cy);
+  await sleep(150 + Math.random() * 200);
+  await page.mouse.click(coords.cx, coords.cy);
+  return true;
+}
+
+/** DOM selectors that indicate an active CF challenge overlay */
+const CF_CHALLENGE_SELECTORS = [
+  "#challenge-running",
+  "#cf-challenge-running",
+  ".cf-browser-verification",
+  "#challenge-overlay",
+  "#cf-wrapper #challenge-body",
+];
+
+/** Partial URL strings that identify CF Turnstile iframes */
+const CF_FRAME_PATTERNS = ["challenges.cloudflare.com", "cf-turnstile"];
+
+// ── Detection ─────────────────────────────────────────────────────────────────
+
+async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
+  let isCfPage = false;
+
+  // Pre-fetch frames for SeleniumBase adapter (frames() is sync but needs async HTTP)
+  if ("fetchFrames" in page && typeof (page as any).fetchFrames === "function") {
+    await (page as any).fetchFrames();
+  }
+
+  // ── WAF block detection — "Sorry, you have been blocked" ──────────────
+  // CF WAF blocks show a different page from challenges. These cannot be
+  // bypassed by any browser technique — the IP/fingerprint is blocked at
+  // the WAF level. Detect early to avoid wasting time on bypass attempts.
+  try {
+    const isBlocked = await page.evaluate(() => {
+      const bodyText = document.body?.innerText ?? "";
+      const title = document.title ?? "";
+      return (
+        bodyText.includes("you have been blocked") ||
+        bodyText.includes("You are unable to access") ||
+        title.includes("Attention Required") ||
+        (bodyText.includes("Cloudflare") && bodyText.includes("blocked"))
+      );
+    }) as boolean;
+    if (isBlocked) {
+      logger.warn("Cloudflare WAF block detected — IP/fingerprint is blocked");
+      return "waf_blocked";
+    }
+  } catch {
+    // ignore
+  }
+
+  // Title-based detection
+  try {
+    const title = await page.title();
+    isCfPage =
+      title === "Just a moment..." ||
+      title === "Attention Required! | Cloudflare" ||
+      title.includes("DDoS protection by Cloudflare");
+  } catch {
+    // page may have been closed
+  }
+
+  // DOM selector-based detection
+  if (!isCfPage) {
+    for (const sel of CF_CHALLENGE_SELECTORS) {
+      try {
+        const el = await page.$(sel);
+        if (el) {
+          const visible = await el
+            .evaluate((e: Element) => {
+              const r = e.getBoundingClientRect();
+              return r.width > 0 && r.height > 0;
+            })
+            .catch(() => false);
+          if (visible) {
+            isCfPage = true;
+            break;
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  if (!isCfPage) return "none";
+
+  // Distinguish JS-only challenge vs interactive Turnstile checkbox.
+  //
+  // NOTE: Turnstile renders its iframe inside a **closed shadow DOM**, which
+  // means `document.querySelectorAll("iframe")` cannot find it. We check both
+  // the DOM and Playwright's frames() API (which sees through shadow DOM).
+  try {
+    // Method 1: Playwright frames API (works with closed shadow DOM)
+    let hasTurnstileFrame = false;
+    try {
+      hasTurnstileFrame = page.frames().some(
+        (f: { url(): string }) => CF_FRAME_PATTERNS.some((p) => f.url().includes(p)),
+      );
+    } catch {
+      // frames() may not be available in all adapters
+    }
+
+    // Method 2: DOM query fallback
+    if (!hasTurnstileFrame) {
+      hasTurnstileFrame = await page.evaluate((patterns: unknown) => {
+        return Array.from(document.querySelectorAll("iframe")).some((f) =>
+          (patterns as string[]).some((p) => (f.src ?? "").includes(p)),
+        );
+      }, CF_FRAME_PATTERNS as never) as boolean;
+    }
+
+    return hasTurnstileFrame ? "turnstile_click" : "js_challenge";
+  } catch {
+    return "js_challenge";
+  }
+}
+
+// ── Turnstile solved state check ────────────────────────────────────────────
+// Ported from reference project's _SOLVED_JS.
+// Checks if the Turnstile hidden input already has a valid token.
+
+async function isTurnstileSolved(page: PageAdapter): Promise<boolean> {
+  try {
+    return await page.evaluate(() => {
+      const input = document.querySelector<HTMLInputElement>('input[name="cf-turnstile-response"]');
+      return !!(input && input.value && input.value.length > 20);
+    }) as boolean;
+  } catch {
+    return false;
+  }
+}
+
+// ── Human behaviour simulation ───────────────────────────────────────────────
+
+/**
+ * Interpolate points along a quadratic Bézier curve.
+ * Adds a random control point to make the path look organic.
+ */
+function bezierPath(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  steps: number,
+): Array<{ x: number; y: number }> {
+  const cx = x0 + (x1 - x0) * 0.3 + (Math.random() - 0.5) * 120;
+  const cy = y0 + (y1 - y0) * 0.7 + (Math.random() - 0.5) * 120;
+  return Array.from({ length: steps + 1 }, (_, i) => {
+    const t = i / steps;
+    const mt = 1 - t;
+    return {
+      x: Math.round(mt * mt * x0 + 2 * mt * t * cx + t * t * x1),
+      y: Math.round(mt * mt * y0 + 2 * mt * t * cy + t * t * y1),
+    };
+  });
+}
+
+const rand = (min: number, max: number) => Math.floor(Math.random() * (max - min) + min);
+
+/**
+ * Simulate human-like mouse movement across the viewport.
+ * Generates 4–8 bezier-curve paths with randomised speed.
+ * This triggers mouse-event listeners that CF's JS challenge observes.
+ */
+export async function simulateHumanMouseMovement(page: PageAdapter): Promise<void> {
+  const vp = page.viewport() ?? { width: 1280, height: 800 };
+
+  let x = rand(vp.width * 0.1, vp.width * 0.9);
+  let y = rand(vp.height * 0.1, vp.height * 0.9);
+  await page.mouse.move(x, y).catch(() => {});
+  await sleep(rand(150, 300));
+
+  const moves = rand(4, 9);
+  for (let i = 0; i < moves; i++) {
+    const tx = rand(vp.width * 0.1, vp.width * 0.9);
+    const ty = rand(vp.height * 0.1, vp.height * 0.9);
+    const steps = rand(12, 25);
+    const pts = bezierPath(x, y, tx, ty, steps);
+    for (const pt of pts) {
+      await page.mouse.move(pt.x, pt.y).catch(() => {});
+      await sleep(rand(8, 25));
+    }
+    x = tx;
+    y = ty;
+    await sleep(rand(80, 350));
+  }
+}
+
+/**
+ * Simulate random page scrolling — CF and similar systems track scroll events
+ * as a strong "human" signal.
+ */
+async function simulateHumanScroll(page: PageAdapter): Promise<void> {
+  const scrollCount = rand(2, 5);
+  for (let i = 0; i < scrollCount; i++) {
+    const deltaY = rand(50, 300) * (Math.random() > 0.3 ? 1 : -1);
+    await page.evaluate((dy: unknown) => {
+      window.scrollBy({ top: dy as number, behavior: "smooth" });
+    }, deltaY as never).catch(() => {});
+    await sleep(rand(200, 600));
+  }
+}
+
+/**
+ * Simulate random keyboard events — pressing Tab, Arrow keys, etc.
+ * These are cheap but CF's challenge JS observes keyboard activity.
+ */
+async function simulateHumanKeyboard(page: PageAdapter): Promise<void> {
+  const keys = ["Tab", "ArrowDown", "ArrowUp", "ArrowRight", "ArrowLeft"];
+  const count = rand(1, 4);
+  for (let i = 0; i < count; i++) {
+    const key = keys[rand(0, keys.length)];
+    await page.keyboard.press(key).catch(() => {});
+    await sleep(rand(100, 400));
+  }
+}
+
+/**
+ * Combined human presence simulation — mouse + scroll + keyboard.
+ * Presents a much more realistic interaction pattern than mouse-only.
+ */
+async function simulateHumanPresence(page: PageAdapter): Promise<void> {
+  await simulateHumanMouseMovement(page);
+  // 70% chance to also scroll
+  if (Math.random() < 0.7) await simulateHumanScroll(page);
+  // 50% chance to also use keyboard
+  if (Math.random() < 0.5) await simulateHumanKeyboard(page);
+}
+
+// ── Turnstile checkbox click ──────────────────────────────────────────────────
+
+/**
+ * Locate the Cloudflare Turnstile iframe and click the "I am human" checkbox inside it.
+ * Returns true if a click was successfully delivered.
+ *
+ * Strategy order:
+ *   1. Expand hidden Turnstile iframes (port from JustRunMy.App reference)
+ *   2. Physical OS-level click via xdotool (if available) — undetectable by CF
+ *   3. CDP widget bounding box click (fallback)
+ *   4. Cross-origin iframe element click (last resort)
+ */
+export async function clickTurnstileCheckbox(page: PageAdapter): Promise<boolean> {
+  try {
+    // ── SeleniumBase shortcut: use cf-proxy's native Turnstile clicker ──
+    // cf-proxy has access to uc_gui_click_captcha (PyAutoGUI) and xdotool,
+    // which produce OS-level events undetectable by CF.
+    if ("clickTurnstile" in page && typeof (page as any).clickTurnstile === "function") {
+      logger.info("Using cf-proxy native Turnstile click (uc_gui_click_captcha + xdotool)");
+      const solved = await (page as any).clickTurnstile(3);
+      if (solved) {
+        logger.info("Turnstile solved via cf-proxy native click");
+        return true;
+      }
+      logger.debug("cf-proxy native Turnstile click did not solve — falling back to standard strategies");
+    }
+    // ── Step 0: Expand hidden Turnstile containers ──────────────────────
+    // Many sites hide the Turnstile iframe inside overflow:hidden containers.
+    // Without expansion, the iframe may have zero dimensions and be unclickable.
+    try {
+      await page.evaluate(EXPAND_TURNSTILE_JS as unknown as string);
+      await sleep(300);
+    } catch { /* non-critical */ }
+
+    // ── Strategy 1: Physical OS-level click via xdotool ─────────────────
+    // This produces genuine X11 input events that are indistinguishable from
+    // real human mouse clicks. CF's Turnstile cannot detect these as automation.
+    if (isXdotoolAvailable()) {
+      const clicked = await physicalClickTurnstile(page);
+      if (clicked) return true;
+    }
+
+    // ── Strategy 2: Click via the main-page widget/iframe bounding box ──
+    // This works reliably even for cross-origin iframes where we cannot
+    // access the frame's DOM. The Turnstile checkbox is typically at a
+    // fixed offset from the widget's left edge (~26px).
+    const widgetSelectors = [
+      ".cf-turnstile",
+      "[data-sitekey]",
+      "iframe[src*='turnstile']",
+      "iframe[src*='challenges.cloudflare.com']",
+    ];
+    for (const wSel of widgetSelectors) {
+      const widget = await page.$(wSel);
+      if (!widget) continue;
+      const wBox = await widget.boundingBox();
+      if (!wBox || wBox.width === 0 || wBox.height === 0) continue;
+
+      const clickX = wBox.x + 26 + (Math.random() * 4 - 2);
+      const clickY = wBox.y + wBox.height / 2 + (Math.random() * 4 - 2);
+      await page.mouse.move(clickX, clickY);
+      await sleep(150 + Math.random() * 200);
+      await page.mouse.click(clickX, clickY);
+      logger.info({ selector: wSel, x: clickX, y: clickY }, "Clicked Turnstile via widget coords");
+      return true;
+    }
+
+    // ── Strategy 3: Cross-origin iframe element click (when available) ──
+    // NOTE: Turnstile uses closed shadow DOM, so DOM-based iframe queries fail.
+    // The Playwright frames() API sees through shadow DOM boundaries.
+    const cfFrame = page
+      .frames()
+      .find((f: { url(): string }) => CF_FRAME_PATTERNS.some((p) => f.url().includes(p)));
+
+    if (!cfFrame) {
+      logger.debug("Turnstile iframe not found in frame list");
+      return false;
+    }
+
+    // Try explicit checkbox selector first
+    const checkbox = await cfFrame.$(
+      "input[type='checkbox'], .cf-checkbox-label, #challenge-stage input, .mark",
+    );
+    if (checkbox) {
+      const box = await checkbox.boundingBox();
+      if (box) {
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await sleep(200 + Math.random() * 200);
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        logger.info("Clicked Turnstile checkbox via iframe element");
+        return true;
+      }
+    }
+
+    // Fallback: click the centre of the iframe body
+    const body = await cfFrame.$("body");
+    if (body) {
+      const box = await body.boundingBox();
+      if (box) {
+        const cx = box.x + box.width / 2;
+        const cy = box.y + box.height / 2;
+        await page.mouse.move(cx, cy);
+        await sleep(150);
+        await page.mouse.click(cx, cy);
+        logger.info("Clicked CF iframe body (fallback)");
+        return true;
+      }
+    }
+
+    return false;
+  } catch (err) {
+    logger.debug({ err }, "Turnstile click failed");
+    return false;
+  }
+}
+
+// ── Main entry point ──────────────────────────────────────────────────────────
+
+/**
+ * Attempt to bypass an active Cloudflare challenge page.
+ *
+ * Returns:
+ *   "passed"        — challenge cleared, page is now usable
+ *   "failed"        — challenge not cleared after all attempts
+ *   "not_detected"  — no CF challenge was found on the page
+ */
+export async function bypassCloudflareChallenge(
+  page: PageAdapter,
+): Promise<"passed" | "failed" | "blocked" | "not_detected"> {
+  const challengeType = await detectCfChallenge(page);
+  if (challengeType === "none") return "not_detected";
+  if (challengeType === "waf_blocked") return "blocked";
+
+  logger.info({ challengeType }, "Cloudflare challenge detected — attempting bypass");
+
+  // Inject CF-specific environment patches before interacting.
+  // These make the browser look more like a real user session to CF's JS probes.
+  await injectCfEnvironmentPatches(page);
+
+  // Expand any hidden Turnstile iframes upfront
+  try { await page.evaluate(EXPAND_TURNSTILE_JS as unknown as string); } catch { /* ignore */ }
+
+  // Quick check: Turnstile may have already been solved silently
+  const alreadySolved = await isTurnstileSolved(page);
+  if (alreadySolved) {
+    logger.info("Turnstile already solved silently (token present)");
+    return "passed";
+  }
+
+  if (challengeType === "js_challenge") {
+    for (let attempt = 1; attempt <= 10; attempt++) {
+      // Expand any hidden Turnstile containers before interaction
+      try { await page.evaluate(EXPAND_TURNSTILE_JS as unknown as string); } catch { /* ignore */ }
+      // Full human presence simulation (mouse + scroll + keyboard)
+      await simulateHumanPresence(page);
+      // CF JS challenge typically resolves within 5s; increase wait each attempt
+      // On first attempt, give CF's JS more time to complete fingerprinting
+      const waitMs = attempt === 1
+        ? 3_000 + Math.random() * 2_000
+        : 2_000 + attempt * 400 + Math.random() * 1_000;
+      await sleep(waitMs);
+
+      const still = await detectCfChallenge(page);
+      if (still === "none") {
+        logger.info({ attempt }, "Cloudflare JS challenge bypassed");
+        return "passed";
+      }
+      // If it upgraded to turnstile_click, try clicking
+      if (still === "turnstile_click") {
+        logger.info({ attempt }, "JS challenge upgraded to Turnstile click — attempting click");
+        // Human presence before clicking the checkbox
+        await simulateHumanPresence(page);
+        await sleep(500 + Math.random() * 500);
+        await clickTurnstileCheckbox(page);
+        await sleep(3_000 + Math.random() * 2_000);
+        // Check both challenge status and Turnstile token
+        if (await isTurnstileSolved(page)) {
+          logger.info({ attempt }, "Turnstile token populated after click");
+          return "passed";
+        }
+        const afterClick = await detectCfChallenge(page);
+        if (afterClick === "none") {
+          logger.info({ attempt }, "Cloudflare challenge bypassed after click");
+          return "passed";
+        }
+      }
+      logger.debug({ attempt }, "CF JS challenge still active, retrying");
+    }
+    logger.warn("Cloudflare JS challenge did not clear after 10 attempts");
+    return "failed";
+  }
+
+  if (challengeType === "turnstile_click") {
+    for (let attempt = 1; attempt <= 8; attempt++) {
+      // Expand hidden Turnstile containers before each attempt
+      try { await page.evaluate(EXPAND_TURNSTILE_JS as unknown as string); } catch { /* ignore */ }
+      // Full human presence simulation before clicking
+      await simulateHumanPresence(page);
+      await sleep(800 + Math.random() * 1200);
+
+      const clicked = await clickTurnstileCheckbox(page);
+      if (!clicked) {
+        logger.warn({ attempt }, "Could not locate Turnstile checkbox, waiting for it to appear");
+        await sleep(2_000 + Math.random() * 1_000);
+        continue;
+      }
+
+      // Wait for page navigation or challenge to clear — use domcontentloaded
+      // instead of networkidle2 to avoid premature timeouts on CF pages
+      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 12_000 }).catch(() => {});
+      await sleep(2_000 + Math.random() * 1_500);
+
+      const still = await detectCfChallenge(page);
+      if (still === "none") {
+        logger.info({ attempt }, "Cloudflare Turnstile click challenge bypassed");
+        return "passed";
+      }
+
+      // Challenge still active — simulate more complex human activity before retrying
+      logger.debug({ attempt }, "Turnstile still active after click, simulating more activity");
+      await simulateHumanPresence(page);
+      await sleep(2_000 + Math.random() * 2_000);
+
+      // Re-check — sometimes it clears with a delay
+      const recheck = await detectCfChallenge(page);
+      if (recheck === "none") {
+        logger.info({ attempt }, "Cloudflare Turnstile cleared after additional wait");
+        return "passed";
+      }
+    }
+    logger.warn("Cloudflare Turnstile click challenge not bypassed after 8 attempts");
+    return "failed";
+  }
+
+  return "failed";
+}
+
+// ── CF environment patches ───────────────────────────────────────────────────
+
+/**
+ * Inject runtime patches that specifically target CF's JS challenge probes.
+ * These are separate from the general stealth script because they should
+ * only run when a CF challenge is actually detected.
+ */
+async function injectCfEnvironmentPatches(page: PageAdapter): Promise<void> {
+  try {
+    await page.evaluate((() => {
+      // CF checks window.navigator.connection — simulate a typical broadband connection
+      // @ts-ignore
+      if (!navigator.connection) {
+        Object.defineProperty(navigator, "connection", {
+          get: () => ({
+            effectiveType: "4g",
+            rtt: 50,
+            downlink: 10,
+            saveData: false,
+          }),
+        });
+      }
+      // CF may probe Notification.permission
+      try {
+        if (typeof Notification !== "undefined" && Notification.permission === "default") {
+          Object.defineProperty(Notification, "permission", { get: () => "default", configurable: true });
+        }
+      } catch {}
+      // Inject realistic performance timing entries
+      try {
+        if (performance.getEntriesByType("navigation").length === 0) {
+          // Can't add entries, but ensure performance.now() has realistic offset
+          const origNow = performance.now.bind(performance);
+          const offset = Math.random() * 100;
+          performance.now = () => origNow() + offset;
+        }
+      } catch {}
+    }) as unknown as string).catch(() => {});
+  } catch {
+    // Non-critical — continue with bypass
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}

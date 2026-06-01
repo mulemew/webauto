@@ -1,0 +1,17 @@
+# Override file for using an external PostgreSQL database.
+  #
+  # Usage:
+  #   docker compose -f docker-compose.yml -f docker-compose.external-db.yml up -d
+  #
+  # Set DATABASE_URL in your .env file. The app migrates automatically on startup.
+  #
+  services:
+    db:
+      deploy:
+        replicas: 0
+
+    app:
+      environment:
+        DATABASE_URL: ${DATABASE_URL}
+      depends_on: {}
+  

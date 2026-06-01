@@ -1,0 +1,79 @@
+services:
+  db:
+    image: postgres:16-alpine
+    network_mode: host
+    environment:
+      POSTGRES_USER: autoops
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: autoops
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autoops -d autoops"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 120s
+    restart: unless-stopped
+
+  browserless:
+    image: ghcr.io/browserless/chromium:latest
+    network_mode: host
+    environment:
+      CONNECTION_TIMEOUT: "60000"
+      MAX_CONCURRENT_SESSIONS: "5"
+      DEFAULT_LAUNCH_ARGS: '["--disable-blink-features=AutomationControlled"]'
+      PORT: "3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/json/version || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    restart: unless-stopped
+
+    cf-proxy:
+    image: ghcr.io/mulemew/webauto-cf-proxy:latest
+    network_mode: host
+    environment:
+      PORT: "7317"
+      CF_RECONNECT_TIME: ${CF_RECONNECT_TIME:-4}
+      SESSION_TIMEOUT_S: "1800"
+      POOL_SIZE: "${POOL_SIZE:-1}"
+    shm_size: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7317/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  app:
+    image: ghcr.io/mulemew/webauto:latest
+    network_mode: host
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://autoops:${POSTGRES_PASSWORD:-changeme}@localhost:5432/autoops}
+      PORT: "80"
+      NODE_ENV: production
+      DATA_DIR: /app/data
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+      BROWSERLESS_URL: "ws://localhost:3000"
+      BROWSER_PROVIDER: ${BROWSER_PROVIDER:-playwright}
+      CF_PROXY_URL: "http://localhost:7317"
+    volumes:
+      - autoops_data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+      browserless:
+        condition: service_healthy
+      cf-proxy:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  autoops_data:

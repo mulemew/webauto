@@ -1,0 +1,93 @@
+# =============================================================
+  # AutoOps — 拉取预构建镜像部署（无需克隆代码）
+  #
+  # 使用方法：
+  #   1. 下载此文件
+  #   2. 同目录创建 .env，至少填入 POSTGRES_PASSWORD
+  #      DASHBOARD_PASSWORD 可不填，首次访问会在浏览器里设置密码
+  #   3. docker compose -f docker-compose.image.yml up -d
+  #
+  # 如需使用 Cloudflare 绕过功能（SeleniumBase），cf-proxy 已包含在内，
+  # 无需额外操作，启动后在设置页选择"SeleniumBase UC (cf-proxy)"即可。
+  # =============================================================
+
+  services:
+    db:
+      image: postgres:16-alpine
+      environment:
+        POSTGRES_USER: autoops
+        POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+        POSTGRES_DB: autoops
+      volumes:
+        - pgdata:/var/lib/postgresql/data
+      healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U autoops -d autoops"]
+        interval: 5s
+        timeout: 5s
+        retries: 20
+        start_period: 120s
+      restart: unless-stopped
+
+    browserless:
+      image: ghcr.io/browserless/chromium:latest
+      environment:
+        CONNECTION_TIMEOUT: "60000"
+        MAX_CONCURRENT_SESSIONS: "5"
+        DEFAULT_LAUNCH_ARGS: '["--disable-blink-features=AutomationControlled"]'
+      healthcheck:
+        test: ["CMD-SHELL", "wget -qO- http://localhost:3000/json/version || exit 1"]
+        interval: 10s
+        timeout: 5s
+        retries: 6
+        start_period: 30s
+      restart: unless-stopped
+
+    # ── CF Proxy（SeleniumBase UC — Cloudflare 绕过）────────────────────────────
+    # 通过 undetected-chromedriver 运行 Chrome，绕过 Cloudflare JS 挑战和 Turnstile。
+    # 启动后在设置页将浏览器提供商切换为"SeleniumBase UC (cf-proxy)"即可使用。
+    cf-proxy:
+      image: ghcr.io/mulemew/webauto-cf-proxy:latest
+      environment:
+        PORT: "7317"
+        CF_RECONNECT_TIME: "${CF_RECONNECT_TIME:-4}"
+        SESSION_TIMEOUT_S: "1800"
+        POOL_SIZE: "${POOL_SIZE:-1}"
+      shm_size: 2g
+      healthcheck:
+        test: ["CMD-SHELL", "wget -qO- http://localhost:7317/health || exit 1"]
+        interval: 15s
+        timeout: 10s
+        retries: 5
+        start_period: 60s
+      restart: unless-stopped
+
+    app:
+      image: ghcr.io/mulemew/webauto:latest
+      environment:
+        DATABASE_URL: ${DATABASE_URL:-postgresql://autoops:${POSTGRES_PASSWORD:-changeme}@db:5432/autoops}
+        PORT: "8080"
+        NODE_ENV: production
+        DATA_DIR: /app/data
+        SESSION_SECRET: ${SESSION_SECRET:-}
+        ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+        DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+        BROWSERLESS_URL: "ws://browserless:3000"
+        BROWSER_PROVIDER: "${BROWSER_PROVIDER:-playwright}"
+        CF_PROXY_URL: "http://cf-proxy:7317"
+      ports:
+        - "${PORT:-80}:8080"
+      volumes:
+        - autoops_data:/app/data
+      depends_on:
+        db:
+          condition: service_healthy
+        browserless:
+          condition: service_healthy
+        cf-proxy:
+          condition: service_healthy
+      restart: unless-stopped
+
+  volumes:
+    pgdata:
+    autoops_data:
+  

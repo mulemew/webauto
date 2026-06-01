@@ -1,0 +1,846 @@
+import { logger } from "../lib/logger";
+import { SeleniumBaseProvider } from "./seleniumbase-adapter";
+import { wrapPuppeteerPage, wrapPlaywrightPage, puppeteer, chromium } from "./page-adapter";
+import type { PageAdapter } from "./page-adapter";
+import { execSync, spawn } from "child_process";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Which browser backend to use:
+ *
+ *   playwright  — chromium.connectOverCDP()   (default)
+ *                 Universal CDP. Works with any CDP-compatible service:
+ *                 self-hosted Chrome, browserless, BrightData, Steel.dev, etc.
+ *
+ *   puppeteer   — puppeteer.connect({ browserWSEndpoint })
+ *                 Universal CDP via the Puppeteer library. Same compatibility
+ *                 as "playwright" — choose based on which library you prefer.
+ *
+ *   local       — chromium.launch()
+ *                 Launches Playwright's bundled Chromium directly on the host.
+ *                 Does NOT require a remote browser service. Best anti-detection
+ *                 because Playwright's Chromium has built-in stealth patches.
+ *                 Requires Chromium installed on the host (npm i playwright-core
+ *                 && npx playwright install chromium).
+ *                 wsEndpoint is ignored when provider is "local".
+ *
+ * Stealth and anti-detection are handled entirely client-side via init scripts
+ * and Chrome launch args (DEFAULT_LAUNCH_ARGS in docker-compose), so the
+ * connection method does not affect anti-detection capability.
+ */
+export type BrowserProviderType =
+  | "playwright"
+  | "puppeteer"
+  | "local"
+  | "seleniumbase";
+
+export interface BrowserProviderConfig {
+    provider: BrowserProviderType;
+    /** WebSocket endpoint — required for all providers */
+    wsEndpoint?: string;
+    /** URL used for the connection test in the Settings page */
+    testUrl?: string;
+    /**
+     * Browser session timeout in milliseconds (appended as ?timeout= to the WS URL).
+     * Browserless.io and compatible services honour this parameter.
+     * Default: 1_800_000 ms (30 minutes).
+     */
+    sessionTimeoutMs?: number;
+    /**
+     * Enable stealth mode.
+     * When true, comprehensive client-side anti-detection scripts are injected
+     * into every page (navigator.webdriver, plugins, WebGL, media codecs, etc.).
+     * For full coverage, also set DEFAULT_LAUNCH_ARGS in your browserless
+     * docker-compose to include --disable-blink-features=AutomationControlled.
+     */
+    stealth?: boolean;
+    /**
+     * Block ads and trackers.
+     * ─ Playwright: blocked client-side via context.route() against a built-in
+     *   ad domain blocklist (works with any CDP service).
+     * ─ Puppeteer:  adds blockAds=true to the WS URL (browserless service-side).
+     */
+    blockAds?: boolean;
+    /**
+     * HTTP or SOCKS proxy URL (e.g. "http://user:pass@host:1080").
+     * ─ Playwright: applied via newContext({ proxy }) — universal.
+     * ─ Puppeteer:  injected as --proxy-server Chrome flag via ?launch= (browserless).
+     */
+    proxyUrl?: string;
+    /**
+     * Ignore HTTPS certificate errors (self-signed, expired, etc.).
+     * ─ Playwright: applied via newContext({ ignoreHTTPSErrors }) — universal.
+     * ─ Puppeteer:  injected as --ignore-certificate-errors via ?launch= (browserless).
+     */
+    ignoreHTTPS?: boolean;
+    /**
+     * Browser viewport width in pixels. If both viewportWidth and viewportHeight
+     * are set, the specified dimensions are used for every session. Otherwise a
+     * random common resolution is picked per session for anti-fingerprinting.
+     */
+    viewportWidth?: number;
+    /**
+     * Browser viewport height in pixels. See viewportWidth.
+     */
+    viewportHeight?: number;
+  }
+
+export interface BrowserProvider {
+  newPage(): Promise<PageAdapter>;
+  close(): Promise<void>;
+}
+
+// ── Stealth constants ─────────────────────────────────────────────────────────
+
+/** Pool of recent real-world Chrome UA strings — one is picked at random per session. */
+const UA_POOL = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+];
+
+function pickRandom<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+const VIEWPORT_POOL = [
+  { width: 1920, height: 1080 },
+  { width: 1536, height: 864 },
+  { width: 1440, height: 900 },
+  { width: 1366, height: 768 },
+  { width: 1280, height: 800 },
+  { width: 1280, height: 720 },
+];
+
+/**
+ * Returns the viewport to use for a session. If the config specifies both
+ * viewportWidth and viewportHeight, those are used as-is. Otherwise a random
+ * common resolution is picked for anti-fingerprinting.
+ */
+function resolveViewport(config: BrowserProviderConfig): { width: number; height: number } {
+  if (config.viewportWidth && config.viewportHeight) {
+    return { width: config.viewportWidth, height: config.viewportHeight };
+  }
+  return pickRandom(VIEWPORT_POOL);
+}
+
+/**
+ * Comprehensive stealth init script.
+ * Covers all major detection vectors used by Cloudflare, DataDome, PerimeterX, etc.
+ */
+const STEALTH_INIT_SCRIPT = () => {
+  // ── 1. navigator.webdriver ────────────────────────────────────────────
+  Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+  // Also delete from prototype chain
+  // @ts-ignore
+  delete Navigator.prototype.webdriver;
+
+  // ── 2. navigator.plugins — realistic PluginArray ──────────────────────
+  const makePlugin = (name: string, desc: string, filename: string) => {
+    const p = Object.create(Plugin.prototype);
+    Object.defineProperties(p, {
+      name: { value: name, enumerable: true },
+      description: { value: desc, enumerable: true },
+      filename: { value: filename, enumerable: true },
+      length: { value: 1, enumerable: true },
+    });
+    p[0] = { type: "application/pdf", suffixes: "pdf", description: "Portable Document Format" };
+    return p;
+  };
+  const fakePlugins = [
+    makePlugin("PDF Viewer", "Portable Document Format", "internal-pdf-viewer"),
+    makePlugin("Chrome PDF Viewer", "Portable Document Format", "internal-pdf-viewer"),
+    makePlugin("Chromium PDF Viewer", "Portable Document Format", "internal-pdf-viewer"),
+    makePlugin("Microsoft Edge PDF Viewer", "Portable Document Format", "internal-pdf-viewer"),
+    makePlugin("WebKit built-in PDF", "Portable Document Format", "internal-pdf-viewer"),
+  ];
+  Object.defineProperty(navigator, "plugins", {
+    get: () => {
+      const arr = fakePlugins as unknown as PluginArray;
+      Object.setPrototypeOf(arr, PluginArray.prototype);
+      return arr;
+    },
+  });
+  Object.defineProperty(navigator, "mimeTypes", {
+    get: () => {
+      const arr = [{ type: "application/pdf", suffixes: "pdf", description: "Portable Document Format", enabledPlugin: fakePlugins[0] }] as unknown as MimeTypeArray;
+      Object.setPrototypeOf(arr, MimeTypeArray.prototype);
+      return arr;
+    },
+  });
+
+  // ── 3. navigator.languages ────────────────────────────────────────────
+  Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
+
+  // ── 4. navigator.hardwareConcurrency & deviceMemory ───────────────────
+  Object.defineProperty(navigator, "hardwareConcurrency", { get: () => 8 });
+  // @ts-ignore — deviceMemory is only available in secure contexts
+  Object.defineProperty(navigator, "deviceMemory", { get: () => 8 });
+
+  // ── 5. navigator.platform — match UA ──────────────────────────────────
+  // This gets overridden per-session in the provider to match the UA chosen.
+
+  // ── 6. window.chrome — realistic Chrome object ────────────────────────
+  // @ts-ignore
+  if (!window.chrome) {
+    // @ts-ignore
+    window.chrome = {};
+  }
+  // @ts-ignore
+  window.chrome.runtime = {
+    // ProgrammaticallySendMessage signature present in real Chrome
+    connect: function () {},
+    sendMessage: function () {},
+    id: undefined,
+  };
+  // @ts-ignore
+  window.chrome.loadTimes = function () {
+    return {
+      requestTime: Date.now() / 1000 - Math.random() * 2,
+      startLoadTime: Date.now() / 1000 - Math.random(),
+      commitLoadTime: Date.now() / 1000 - Math.random() * 0.5,
+      finishDocumentLoadTime: Date.now() / 1000,
+      finishLoadTime: Date.now() / 1000,
+      firstPaintTime: Date.now() / 1000 - Math.random() * 0.3,
+      firstPaintAfterLoadTime: 0,
+      navigationType: "Other",
+      wasFetchedViaSpdy: false,
+      wasNpnNegotiated: true,
+      npnNegotiatedProtocol: "h2",
+      wasAlternateProtocolAvailable: false,
+      connectionInfo: "h2",
+    };
+  };
+  // @ts-ignore
+  window.chrome.csi = function () {
+    return { startE: Date.now(), onloadT: Date.now(), pageT: Date.now() - performance.timing.navigationStart, tran: 15 };
+  };
+  // @ts-ignore
+  window.chrome.app = { isInstalled: false, InstallState: { DISABLED: "disabled", INSTALLED: "installed", NOT_INSTALLED: "not_installed" }, RunningState: { CANNOT_RUN: "cannot_run", READY_TO_RUN: "ready_to_run", RUNNING: "running" } };
+
+  // ── 7. Permissions.query — mask automation-specific behaviour ──────────
+  const originalQuery = window.navigator.permissions?.query?.bind(window.navigator.permissions);
+  if (originalQuery) {
+    // @ts-ignore
+    window.navigator.permissions.query = (parameters: PermissionDescriptor) => {
+      if (parameters.name === "notifications") {
+        return Promise.resolve({ state: Notification.permission as PermissionState, onchange: null } as PermissionStatus);
+      }
+      return originalQuery(parameters);
+    };
+  }
+
+  // ── 8. iframe contentWindow — prevent cross-origin detection ──────────
+  // Ensure accessing contentWindow on same-origin iframes doesn't reveal
+  // the automation context.
+  try {
+    const origGetter = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "contentWindow");
+    if (origGetter?.get) {
+      Object.defineProperty(HTMLIFrameElement.prototype, "contentWindow", {
+        get: function () {
+          const w = origGetter.get!.call(this);
+          if (w) {
+            try { Object.defineProperty(w, "chrome", { value: (window as unknown as Record<string, unknown>).chrome, configurable: true }); } catch {}
+          }
+          return w;
+        },
+      });
+    }
+  } catch {}
+
+  // ── 9. WebGL renderer / vendor spoofing ───────────────────────────────
+  const getParameterProto = WebGLRenderingContext.prototype.getParameter;
+  WebGLRenderingContext.prototype.getParameter = function (param: GLenum) {
+    // UNMASKED_VENDOR_WEBGL
+    if (param === 0x9245) return "Google Inc. (NVIDIA)";
+    // UNMASKED_RENDERER_WEBGL
+    if (param === 0x9246) return "ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 Direct3D11 vs_5_0 ps_5_0, D3D11)";
+    return getParameterProto.call(this, param);
+  };
+  // Also patch WebGL2
+  const getParameter2Proto = WebGL2RenderingContext.prototype.getParameter;
+  WebGL2RenderingContext.prototype.getParameter = function (param: GLenum) {
+    if (param === 0x9245) return "Google Inc. (NVIDIA)";
+    if (param === 0x9246) return "ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 Direct3D11 vs_5_0 ps_5_0, D3D11)";
+    return getParameter2Proto.call(this, param);
+  };
+
+  // ── 10. Prevent sourceURL / toString leaks ────────────────────────────
+  // Make evaluateOnNewDocument scripts harder to fingerprint
+  const origToString = Function.prototype.toString;
+  // @ts-ignore
+  Function.prototype.toString = function () {
+    // If this is a native function being spoofed, return the native signature
+    if (this === Function.prototype.toString) return "function toString() { [native code] }";
+    return origToString.call(this);
+  };
+
+  // ── 11. Media codecs — realistic canPlayType responses ─────────────
+  const origCanPlayType = HTMLMediaElement.prototype.canPlayType;
+  HTMLMediaElement.prototype.canPlayType = function (type: string) {
+    // Return realistic responses for common probes used by fingerprinters
+    if (type === 'video/mp4; codecs="avc1.42E01E"') return "probably";
+    if (type === 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"') return "probably";
+    if (type === "video/webm") return "probably";
+    if (type === 'video/webm; codecs="vp8, vorbis"') return "probably";
+    if (type === 'video/webm; codecs="vp9"') return "probably";
+    if (type === "audio/mpeg") return "probably";
+    if (type === 'audio/mp4; codecs="mp4a.40.2"') return "probably";
+    if (type === "audio/webm") return "probably";
+    if (type === 'audio/ogg; codecs="vorbis"') return "probably";
+    return origCanPlayType.call(this, type);
+  };
+
+  // ── 12. navigator.vendor — match Chrome ───────────────────────────────
+  Object.defineProperty(navigator, "vendor", { get: () => "Google Inc." });
+
+  // ── 13. Screen dimensions — match viewport ────────────────────────────
+    // Will be overridden by the provider to match the random viewport chosen.
+
+    // ── 14–16. Canvas / Audio / ClientRects fingerprint patches ────────────
+    //
+    // REMOVED.  These patches injected noise into getImageData, AudioContext,
+    // and getBoundingClientRect to randomise fingerprints across sessions.
+    //
+    // However, Cloudflare Turnstile (and similar PoW-based captchas) call
+    // these APIs multiple times and perform consistency checks.  ANY noise —
+    // even deterministic-per-session — causes the PoW to fail because:
+    //   • Canvas: Turnstile reads, draws, reads again → results must match
+    //   • ClientRects: repeated calls on the same element must be identical
+    //   • Audio: Turnstile compares successive analyser snapshots
+    //
+    // When running through browserless (stock Chromium + these JS patches),
+    // Turnstile permanently stuck on "Verifying…" because PoW never passed.
+    // Local Playwright was unaffected because it uses its own bundled Chromium
+    // with built-in anti-detection that does NOT patch these APIs.
+    //
+    // The other stealth patches (webdriver, plugins, chrome object, WebGL,
+    // permissions, Function.toString, media codecs) are sufficient for
+    // anti-detection without breaking captcha verification.
+
+    // ── 17. WebRTC IP leak prevention ────────────────────────────────────────
+    // Neuter WebRTC to prevent IP leaks, but keep APIs visible with realistic
+    // mock implementations.  Setting them to undefined is itself a detection
+    // signal since real browsers always expose these APIs.
+    try {
+      Object.defineProperty(navigator, "mediaDevices", {
+        get: () => ({
+          enumerateDevices: () => Promise.resolve([]),
+          getUserMedia: () => Promise.reject(new DOMException("Permission denied", "NotAllowedError")),
+          getDisplayMedia: () => Promise.reject(new DOMException("Permission denied", "NotAllowedError")),
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          dispatchEvent: () => true,
+        }),
+      });
+    } catch {}
+    try {
+      const _FakeRTC = function () { throw new DOMException("Permission denied", "NotAllowedError"); } as any;
+      _FakeRTC.prototype = {};
+      _FakeRTC.generateCertificate = () => Promise.reject(new DOMException("Not supported"));
+      (window as any).RTCPeerConnection = _FakeRTC;
+      (window as any).webkitRTCPeerConnection = _FakeRTC;
+    } catch {}
+
+    // ── 18. Battery API mock ──────────────────────────────────────────────────
+    // Headless Chrome has no battery info — a well-known headless signal.
+    // Return a plausible "plugged-in laptop" state.
+    try {
+      (navigator as any).getBattery = () => Promise.resolve({
+        charging: true, chargingTime: 0, dischargingTime: Infinity,
+        level: 0.87 + Math.random() * 0.1,
+        addEventListener: () => {}, removeEventListener: () => {},
+      });
+    } catch {}
+
+    // ── 19. CDP / automation runtime trace cleanup ────────────────────────────
+    // ChromeDriver and some CDP setups leave window.cdc_* globals.
+    // Playwright doesn't inject them, but defensive cleanup costs nothing.
+    try {
+      const g = window as unknown as Record<string, unknown>;
+      for (const key of Object.keys(g)) {
+        if (/^(cdc_|__driver_|__webdriver_|__nightmare|_phantom|callPhantom)/.test(key)) {
+          try { delete g[key]; } catch {}
+        }
+      }
+    } catch {}
+  };
+
+// ── Ad / tracker domain blocklist (compact EasyList subset) ──────────────────
+
+/**
+ * High-impact ad and tracker domains. Requests matching these patterns are
+ * aborted at the network layer when blockAds is enabled.
+ *
+ * Playwright path: blocked via context.route() (client-side, universal).
+ * Puppeteer path:  blocked via ?blockAds=true on the WS URL (browserless service-side).
+ */
+const AD_DOMAIN_PATTERNS = [
+  // ── Major ad networks ──
+  "doubleclick.net",
+  "googlesyndication.com",
+  "googleadservices.com",
+  "google-analytics.com",
+  "googletagmanager.com",
+  "adnxs.com",
+  "adsrvr.org",
+  "amazon-adsystem.com",
+  "facebook.net",
+  "fbcdn.net",
+  "analytics.tiktok.com",
+  "ads-twitter.com",
+  "ads.linkedin.com",
+  // ── Programmatic / SSP / DSP ──
+  "rubiconproject.com",
+  "pubmatic.com",
+  "openx.net",
+  "casalemedia.com",
+  "criteo.com",
+  "criteo.net",
+  "taboola.com",
+  "outbrain.com",
+  "moatads.com",
+  "serving-sys.com",
+  "adform.net",
+  "bidswitch.net",
+  "sharethis.com",
+  "sharethrough.com",
+  // ── Tracking / analytics ──
+  "scorecardresearch.com",
+  "quantserve.com",
+  "bluekai.com",
+  "demdex.net",
+  "krxd.net",
+  "exelator.com",
+  "tapad.com",
+  "rlcdn.com",
+  "hotjar.com",
+  "mouseflow.com",
+  "fullstory.com",
+  "newrelic.com",
+  "nr-data.net",
+  "sentry.io",
+  // ── Pop-ups / malware / annoyances ──
+  "popads.net",
+  "popcash.net",
+  "propellerads.com",
+  "revenuehits.com",
+];
+
+/** Pre-compiled regex for ad domain matching (used by Playwright route). */
+const AD_BLOCK_RE = new RegExp(
+  AD_DOMAIN_PATTERNS.map((d) => d.replace(/\./g, "\\.")).join("|"),
+);
+
+// ── Navigation timeout ────────────────────────────────────────────────────────
+
+/**
+ * Default navigation timeout for all page.goto() / waitForNavigation() calls.
+ * Remote browser services inject a low default (10 s) that causes premature
+ * failures on slow or JS-heavy pages. We always override it.
+ */
+const NAV_TIMEOUT_MS = 60_000;
+
+// ── Puppeteer CDP provider ────────────────────────────────────────────────────
+
+class PuppeteerCDPProvider implements BrowserProvider {
+    constructor(private readonly config: BrowserProviderConfig & { wsEndpoint: string }) {}
+
+    async newPage(): Promise<PageAdapter> {
+      // For Puppeteer CDP, proxy and ignoreHTTPS must be baked into the WS URL as
+      // Chrome launch flags (browserless reads them from the ?launch= JSON param).
+      const ws = buildWsUrl(this.config, true);
+      const safeUrl = ws.replace(/([?&]token=)[^&]*/g, "$1***");
+      logger.info({ wsEndpoint: safeUrl }, "Connecting to remote CDP browser (Puppeteer)");
+
+      const browser = await puppeteer.connect({ browserWSEndpoint: ws });
+    const page = await browser.newPage();
+
+    page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+    page.setDefaultTimeout(NAV_TIMEOUT_MS);
+
+    const vp = resolveViewport(this.config);
+    const ua = pickRandom(UA_POOL);
+    await page.setViewport(vp);
+    await page.setUserAgent(ua);
+    // Merge all per-page init scripts into ONE evaluateOnNewDocument call to
+      // cut CDP round-trips over the remote browserless connection. Every extra
+      // evaluateOnNewDocument is a separate CDP message exchange — with stealth
+      // enabled this was 3 round-trips per page; now it is 1.
+      const platform = ua.includes("Macintosh") ? "MacIntel" : ua.includes("Linux") ? "Linux x86_64" : "Win32";
+      const combinedInitScript = `(${STEALTH_INIT_SCRIPT.toString()})();
+  Object.defineProperty(screen,'width',{get:()=>${vp.width}});
+  Object.defineProperty(screen,'height',{get:()=>${vp.height}});
+  Object.defineProperty(screen,'availWidth',{get:()=>${vp.width}});
+  Object.defineProperty(screen,'availHeight',{get:()=>${vp.height - 40}});
+  Object.defineProperty(window,'outerWidth',{get:()=>${vp.width}});
+  Object.defineProperty(window,'outerHeight',{get:()=>${vp.height}});
+  Object.defineProperty(navigator,'platform',{get:()=>"${platform}"});`;
+      await page.evaluateOnNewDocument(combinedInitScript);
+
+    const adapter = wrapPuppeteerPage(page);
+
+    const origClose = adapter.close.bind(adapter);
+    adapter.close = async (opts) => {
+      await origClose(opts).catch(() => {});
+      await browser.disconnect().catch(() => {});
+    };
+
+    const makePuppeteerNewPageWaiter = (opts?: { timeout?: number }): Promise<PageAdapter> =>
+      new Promise<PageAdapter>((resolve, reject) => {
+        const timeout = opts?.timeout ?? 30000;
+        const timer = setTimeout(
+          () => reject(new Error(`Timeout waiting for new page (${timeout}ms)`)),
+          timeout,
+        );
+        browser.once("targetcreated", async (target) => {
+          if (target.type() === "page") {
+            clearTimeout(timer);
+            try {
+              const newPage = await target.asPage();
+              newPage.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+              newPage.setDefaultTimeout(NAV_TIMEOUT_MS);
+              await newPage.setViewport(vp);
+              await newPage.setUserAgent(ua);
+              await newPage.evaluateOnNewDocument(STEALTH_INIT_SCRIPT);
+              const newAdapter = wrapPuppeteerPage(newPage);
+              newAdapter.close = async () => { await newPage.close().catch(() => {}); };
+              newAdapter.waitForNewPage = makePuppeteerNewPageWaiter;
+              resolve(newAdapter);
+            } catch (e) {
+              reject(e);
+            }
+          }
+        });
+      });
+
+    adapter.waitForNewPage = makePuppeteerNewPageWaiter;
+    return adapter;
+  }
+
+  async close(): Promise<void> {}
+}
+
+// ── Playwright CDP provider ───────────────────────────────────────────────────
+
+class PlaywrightCDPProvider implements BrowserProvider {
+    constructor(protected readonly config: BrowserProviderConfig & { wsEndpoint: string }) {}
+
+    async newPage(): Promise<PageAdapter> {
+      // For Playwright providers, proxy and ignoreHTTPS are context-level options —
+      // they work universally regardless of which remote service is in use.
+      const ws = buildWsUrl(this.config, false);
+      const safeUrl = ws.replace(/([?&]token=)[^&]*/g, "$1***");
+      logger.info({ wsEndpoint: safeUrl }, "Connecting to remote CDP browser (Playwright connectOverCDP)");
+
+      const browser = await chromium.connectOverCDP(ws);
+      return this._makePageAdapter(browser);
+    }
+
+    protected async _makePageAdapter(browser: Awaited<ReturnType<typeof chromium.connectOverCDP>>): Promise<PageAdapter> {
+      const vp = resolveViewport(this.config);
+      const ua = pickRandom(UA_POOL);
+      const context = await browser.newContext({
+        viewport: vp,
+        userAgent: ua,
+        screen: vp,
+        ...(this.config.proxyUrl ? { proxy: { server: this.config.proxyUrl } } : {}),
+        ignoreHTTPSErrors: this.config.ignoreHTTPS ?? false,
+      });
+
+    context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+    context.setDefaultTimeout(NAV_TIMEOUT_MS);
+
+    // Block ads & trackers at the network layer (client-side implementation)
+    if (this.config.blockAds) {
+      await context.route((url) => AD_BLOCK_RE.test(url.hostname), (route) => route.abort());
+    }
+
+    await context.addInitScript(STEALTH_INIT_SCRIPT);
+    // Override screen dimensions and navigator.platform to match chosen UA/viewport
+    const pwPlatform = ua.includes("Macintosh") ? "MacIntel" : ua.includes("Linux") ? "Linux x86_64" : "Win32";
+    await context.addInitScript(([w, h, p]: [number, number, string]) => {
+      Object.defineProperty(screen, "width", { get: () => w });
+      Object.defineProperty(screen, "height", { get: () => h });
+      Object.defineProperty(screen, "availWidth", { get: () => w });
+      Object.defineProperty(screen, "availHeight", { get: () => h - 40 });
+      Object.defineProperty(window, "outerWidth", { get: () => w });
+      Object.defineProperty(window, "outerHeight", { get: () => h });
+      Object.defineProperty(navigator, "platform", { get: () => p });
+    }, [vp.width, vp.height, pwPlatform] as [number, number, string]);
+    const page = await context.newPage();
+
+    page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+    page.setDefaultTimeout(NAV_TIMEOUT_MS);
+
+    const makeAdapter = (p: import("playwright-core").Page): PageAdapter => {
+      p.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+      p.setDefaultTimeout(NAV_TIMEOUT_MS);
+      const a = wrapPlaywrightPage(p);
+      a.close = async () => { await p.close().catch(() => {}); };
+      a.waitForNewPage = async (opts) => {
+        const newPage = await context.waitForEvent("page", { timeout: opts?.timeout ?? 30000 });
+        try { await newPage.waitForLoadState("domcontentloaded", { timeout: 5000 }); } catch { /* ignore */ }
+        return makeAdapter(newPage);
+      };
+      return a;
+    };
+
+    const adapter = makeAdapter(page);
+
+    adapter.close = async () => {
+      await page.close().catch(() => {});
+      await context.close().catch(() => {});
+      await browser.close().catch(() => {});
+    };
+
+    return adapter;
+  }
+
+  async close(): Promise<void> {}
+}
+
+// ── Xvfb management (for headed mode in Docker / CI) ────────────────────────
+
+let _xvfbStarted = false;
+
+/**
+ * Start a virtual framebuffer if Xvfb is available and no display is set.
+ * This allows running Chromium in headed mode inside Docker containers,
+ * which is critical for bypassing CF Turnstile — headless mode is detectable.
+ */
+function ensureXvfb(): void {
+  if (_xvfbStarted) return;
+  // If DISPLAY is already set (e.g. developer machine), skip
+  if (process.env.DISPLAY) {
+    _xvfbStarted = true;
+    return;
+  }
+  try {
+    execSync("which Xvfb", { stdio: "ignore" });
+  } catch {
+    logger.debug("Xvfb not found — using headless mode");
+    return;
+  }
+  try {
+    const display = `:${99 + Math.floor(Math.random() * 100)}`;
+    const xvfb = spawn("Xvfb", [display, "-screen", "0", "1920x1080x24", "-ac"], {
+      stdio: "ignore",
+      detached: true,
+    });
+    xvfb.unref();
+    process.env.DISPLAY = display;
+    _xvfbStarted = true;
+    logger.info({ display }, "Xvfb started — headed mode enabled for better CF bypass");
+    // Give Xvfb a moment to initialize
+    execSync("sleep 0.5");
+  } catch (err) {
+    logger.warn({ err }, "Failed to start Xvfb — falling back to headless mode");
+  }
+}
+
+// ── Playwright local (launch) provider ────────────────────────────────────────
+
+class PlaywrightLocalProvider implements BrowserProvider {
+    constructor(private readonly config: BrowserProviderConfig) {}
+
+    async newPage(): Promise<PageAdapter> {
+      // Try to start Xvfb for headed mode — critical for CF Turnstile bypass.
+      // Headed mode avoids headless detection and enables xdotool physical clicks.
+      ensureXvfb();
+      const useHeaded = !!process.env.DISPLAY;
+      logger.info({ headed: useHeaded, display: process.env.DISPLAY }, "Launching local Playwright Chromium");
+
+      const launchArgs = [
+        "--disable-blink-features=AutomationControlled",
+        "--disable-features=AutomationControlled",
+        "--disable-infobars",
+        "--no-first-run",
+        // Improve cross-origin iframe access for Turnstile widgets
+        "--disable-features=IsolateOrigins,site-per-process",
+        "--disable-site-isolation-trials",
+        // Disable automation-related flags that Turnstile/CF can detect
+        "--disable-component-extensions-with-background-pages",
+        "--no-default-browser-check",
+        // Window size for Xvfb headed mode
+        "--window-size=1920,1080",
+        "--window-position=0,0",
+      ];
+      if (this.config.proxyUrl) {
+        launchArgs.push(`--proxy-server=${this.config.proxyUrl}`);
+      }
+      if (this.config.ignoreHTTPS) {
+        launchArgs.push("--ignore-certificate-errors");
+      }
+
+      const browser = await chromium.launch({
+        headless: !useHeaded,
+        args: launchArgs,
+      });
+
+      const vp = resolveViewport(this.config);
+      const ua = pickRandom(UA_POOL);
+      const context = await browser.newContext({
+        viewport: vp,
+        userAgent: ua,
+        screen: vp,
+        ignoreHTTPSErrors: this.config.ignoreHTTPS ?? false,
+      });
+
+      context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+      context.setDefaultTimeout(NAV_TIMEOUT_MS);
+
+      if (this.config.blockAds) {
+        await context.route((url) => AD_BLOCK_RE.test(url.hostname), (route) => route.abort());
+      }
+
+      // Stealth init scripts — still useful for sites that probe specific APIs.
+      // Local Chromium already has better defaults but the extra patches don't hurt.
+      await context.addInitScript(STEALTH_INIT_SCRIPT);
+      const pwPlatform = ua.includes("Macintosh") ? "MacIntel" : ua.includes("Linux") ? "Linux x86_64" : "Win32";
+      await context.addInitScript(([w, h, p]: [number, number, string]) => {
+        Object.defineProperty(screen, "width", { get: () => w });
+        Object.defineProperty(screen, "height", { get: () => h });
+        Object.defineProperty(screen, "availWidth", { get: () => w });
+        Object.defineProperty(screen, "availHeight", { get: () => h - 40 });
+        Object.defineProperty(window, "outerWidth", { get: () => w });
+        Object.defineProperty(window, "outerHeight", { get: () => h });
+        Object.defineProperty(navigator, "platform", { get: () => p });
+      }, [vp.width, vp.height, pwPlatform] as [number, number, string]);
+
+      const page = await context.newPage();
+      page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+      page.setDefaultTimeout(NAV_TIMEOUT_MS);
+
+      const makeAdapter = (p: import("playwright-core").Page): PageAdapter => {
+        p.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+        p.setDefaultTimeout(NAV_TIMEOUT_MS);
+        const a = wrapPlaywrightPage(p);
+        a.close = async () => { await p.close().catch(() => {}); };
+        a.waitForNewPage = async (opts) => {
+          const newPage = await context.waitForEvent("page", { timeout: opts?.timeout ?? 30000 });
+          try { await newPage.waitForLoadState("domcontentloaded", { timeout: 5000 }); } catch { /* ignore */ }
+          return makeAdapter(newPage);
+        };
+        return a;
+      };
+
+      const adapter = makeAdapter(page);
+
+      adapter.close = async () => {
+        await page.close().catch(() => {});
+        await context.close().catch(() => {});
+        await browser.close().catch(() => {});
+      };
+
+      return adapter;
+    }
+
+    async close(): Promise<void> {}
+  }
+
+// ── Factory ───────────────────────────────────────────────────────────────────
+
+/**
+   * Builds the final WebSocket URL by injecting query parameters from the
+   * provider config. Existing params are never overwritten, so values
+   * already present in the user-supplied URL always take precedence.
+   *
+   * Parameter scope:
+   *   timeout   ─ session lifetime (ms). Browserless + compatible services.
+   *   blockAds  ─ Puppeteer path only (browserless service-side feature).
+   *               Playwright path handles ad blocking client-side via context.route().
+   *   launch    ─ Chrome flags JSON (Puppeteer path only).
+   *               Playwright uses newContext() options for proxy/ignoreHTTPS.
+   *
+   * Stealth and ad blocking for Playwright are handled entirely client-side.
+   */
+  function buildWsUrl(config: BrowserProviderConfig, includeChromeFlags: boolean): string {
+    const wsEndpoint = config.wsEndpoint ?? "";
+    try {
+      const url = new URL(wsEndpoint);
+
+      // Session timeout
+      if (!url.searchParams.has("timeout")) {
+        url.searchParams.set("timeout", String(config.sessionTimeoutMs ?? 1_800_000));
+      }
+
+      // Chrome launch flags — ALWAYS include anti-detection flags regardless of
+      // provider (Playwright or Puppeteer). Remote browser services like browserless
+      // use stock Chromium which exposes automation markers that Playwright's bundled
+      // Chromium patches out. These flags are critical for Cloudflare Turnstile,
+      // GeeTest, and other anti-bot systems.
+      const extraArgs: string[] = [];
+
+      if (config.stealth !== false) {
+        extraArgs.push(
+          "--disable-blink-features=AutomationControlled",
+          "--disable-features=AutomationControlled,IsolateOrigins,site-per-process",
+          "--disable-site-isolation-trials",
+          "--disable-infobars",
+          "--no-first-run",
+          "--disable-component-extensions-with-background-pages",
+          "--no-default-browser-check",
+        );
+      }
+
+      // Puppeteer/browserless-specific params
+      if (includeChromeFlags) {
+        // Ad/tracker blocking (browserless service-side feature)
+        if (config.blockAds && !url.searchParams.has("blockAds")) {
+          url.searchParams.set("blockAds", "true");
+        }
+
+        if (config.proxyUrl) extraArgs.push(`--proxy-server=${config.proxyUrl}`);
+        if (config.ignoreHTTPS) extraArgs.push("--ignore-certificate-errors");
+      }
+
+      if (extraArgs.length > 0 && !url.searchParams.has("launch")) {
+        url.searchParams.set("launch", JSON.stringify({ args: extraArgs }));
+      }
+
+      return url.toString();
+    } catch {
+      return wsEndpoint; // not a parseable URL ─ leave unchanged
+    }
+  }
+
+  export function createBrowserProvider(config: BrowserProviderConfig): BrowserProvider {
+  const p = config.provider ?? "playwright";
+
+  if (p === "local") {
+    return new PlaywrightLocalProvider(config);
+  }
+
+  if (p === "seleniumbase") {
+      const cfProxyUrl = process.env.CF_PROXY_URL ?? "http://cf-proxy:7317";
+      return new SeleniumBaseProvider(cfProxyUrl);
+    }
+
+    if (!config.wsEndpoint) {
+      throw new Error(
+        `BROWSER_PROVIDER="${p}" requires a WebSocket endpoint. ` +
+          `Set BROWSERLESS_URL (env) or configure it in the dashboard settings.`,
+      );
+    }
+
+  const fullConfig = config as BrowserProviderConfig & { wsEndpoint: string };
+
+    if (p === "puppeteer") {
+      return new PuppeteerCDPProvider(fullConfig);
+    }
+
+    // Default: Playwright CDP
+    return new PlaywrightCDPProvider(fullConfig);
+  }
+
+export function getBrowserProviderFromEnv(): BrowserProvider {
+  const provider = (process.env.BROWSER_PROVIDER ?? "playwright") as BrowserProviderType;
+  const wsEndpoint = process.env.BROWSERLESS_URL;
+  return createBrowserProvider({ provider, wsEndpoint, stealth: true, blockAds: true });
+}
+
+export { getBrowserProviderFromEnv as getBrowserProvider };
