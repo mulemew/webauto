@@ -655,7 +655,7 @@ class PlaywrightLocalProvider implements BrowserProvider {
       // Headed mode avoids headless detection and enables xdotool physical clicks.
       ensureXvfb();
       const useHeaded = !!process.env.DISPLAY;
-      logger.info({ headed: useHeaded, display: process.env.DISPLAY }, "Launching local Playwright Chromium");
+      logger.info({ headed: useHeaded, display: process.env.DISPLAY }, "Launching local Patchright Chromium");
 
       const launchArgs = [
         "--disable-blink-features=AutomationControlled",
@@ -679,7 +679,7 @@ class PlaywrightLocalProvider implements BrowserProvider {
         launchArgs.push("--ignore-certificate-errors");
       }
 
-      const browser = await chromium.launch({
+      const browser = await patchrightChromium.launch({
         headless: !useHeaded,
         args: launchArgs,
       });
