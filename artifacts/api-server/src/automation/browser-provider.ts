@@ -648,6 +648,8 @@ function ensureXvfb(): void {
   // Chromium itself — no JS injection — so it passes Turnstile invisible natively.
 
 class PlaywrightLocalProvider implements BrowserProvider {
+    /** Tracks all live browsers so close() can force-kill them all. */
+    private readonly _browsers = new Set<import("playwright-core").Browser>();
     constructor(private readonly config: BrowserProviderConfig) {}
 
     async newPage(): Promise<PageAdapter> {
@@ -679,10 +681,24 @@ class PlaywrightLocalProvider implements BrowserProvider {
         launchArgs.push("--ignore-certificate-errors");
       }
 
+      // Cast to playwright-core types — patchright is an API-compatible fork but
+      // ships its own type declarations that TypeScript treats as incompatible.
       const browser = await patchrightChromium.launch({
         headless: !useHeaded,
         args: launchArgs,
-      });
+      }) as unknown as import("playwright-core").Browser;
+      this._browsers.add(browser);
+
+      // Auto-kill guard: honour sessionTimeoutMs so zombie Chromium processes
+      // cannot accumulate if the caller never invokes adapter.close().
+      const SESSION_TIMEOUT_MS = this.config.sessionTimeoutMs ?? 30 * 60 * 1000;
+      const timeoutHandle = setTimeout(() => {
+        logger.warn({ sessionTimeoutMs: SESSION_TIMEOUT_MS }, "Patchright local session timed out — force-closing browser");
+        void browser.close().catch(() => {});
+        this._browsers.delete(browser);
+      }, SESSION_TIMEOUT_MS);
+      // Allow Node.js to exit even if the timer is still pending.
+      if (typeof (timeoutHandle as NodeJS.Timeout).unref === "function") (timeoutHandle as NodeJS.Timeout).unref();
 
       const vp = resolveViewport(this.config);
       const ua = pickRandom(UA_POOL);
@@ -734,6 +750,8 @@ class PlaywrightLocalProvider implements BrowserProvider {
       const adapter = makeAdapter(page);
 
       adapter.close = async () => {
+        clearTimeout(timeoutHandle);
+        this._browsers.delete(browser);
         await page.close().catch(() => {});
         await context.close().catch(() => {});
         await browser.close().catch(() => {});
@@ -742,7 +760,11 @@ class PlaywrightLocalProvider implements BrowserProvider {
       return adapter;
     }
 
-    async close(): Promise<void> {}
+    /** Force-close all open local browsers (e.g. on server shutdown). */
+    async close(): Promise<void> {
+      await Promise.allSettled([...this._browsers].map((b) => b.close()));
+      this._browsers.clear();
+    }
   }
 
 // ── Factory ───────────────────────────────────────────────────────────────────

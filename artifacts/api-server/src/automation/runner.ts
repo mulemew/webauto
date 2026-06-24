@@ -85,8 +85,7 @@ import path from "path";
       // Queue depth guard
       if (config.maxQueueDepth > 0 && waitQueue.length >= config.maxQueueDepth) {
         throw new Error(
-          `Concurrency queue is full (${waitQueue.length}/${config.maxQueueDepth} tasks waiting). " +
-          "Try again later or increase Max Queue Depth in Settings.`,
+          `Concurrency queue is full (${waitQueue.length}/${config.maxQueueDepth} tasks waiting). Try again later or increase Max Queue Depth in Settings.`,
         );
       }
 
@@ -105,8 +104,7 @@ import path from "path";
             if (idx !== -1) waitQueue.splice(idx, 1);
             entry.reject(
               new Error(
-                `Task waited >${config.queueTimeoutSecs}s in queue and was dropped. " +
-                "Increase Queue Timeout or reduce concurrency load.`,
+                `Task waited >${config.queueTimeoutSecs}s in queue and was dropped. Increase Queue Timeout or reduce concurrency load.`,
               ),
             );
           }, config.queueTimeoutSecs * 1000);
