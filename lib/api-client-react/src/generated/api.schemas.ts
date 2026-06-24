@@ -208,6 +208,22 @@ export const TaskStatus = {
   needs_attention: "needs_attention",
 } as const;
 
+export interface TaskBrowserConfig {
+  provider?: 'playwright' | 'puppeteer' | 'local' | 'seleniumbase';
+  /** @nullable */
+  wsEndpoint?: string | null;
+  /** @nullable */
+  proxyUrl?: string | null;
+  /** @nullable */
+  stealth?: boolean | null;
+  /** @nullable */
+  blockAds?: boolean | null;
+  /** @nullable */
+  ignoreHTTPS?: boolean | null;
+  /** @nullable */
+  sessionTimeoutMs?: number | null;
+}
+
 export interface Task {
   id: number;
   name: string;
@@ -227,6 +243,8 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
   enabled: boolean;
+  /** Per-task browser backend override. Null uses global settings. @nullable */
+  browserConfig?: TaskBrowserConfig | null;
 }
 
 export interface CredentialsData {
@@ -254,6 +272,8 @@ export interface CreateTaskBody {
   steps?: WorkflowStep[] | null;
   /** @nullable */
   cronExpression?: string | null;
+  /** Per-task browser backend override. Null uses global settings. @nullable */
+  browserConfig?: TaskBrowserConfig | null;
 }
 
 export interface UpdateTaskBody {
@@ -264,6 +284,8 @@ export interface UpdateTaskBody {
   steps?: WorkflowStep[] | null;
   /** @nullable */
   cronExpression?: string | null;
+  /** Per-task browser backend override. Null uses global settings. @nullable */
+  browserConfig?: TaskBrowserConfig | null;
 }
 
 export interface RunTaskResponse {
