@@ -8,6 +8,7 @@
 
 import puppeteer, { type Page as PuppeteerPage, type Frame as PuppeteerFrame } from "puppeteer";
 import { chromium, type Page as PlaywrightPage, type Frame as PlaywrightFrame } from "playwright-core";
+  import { chromium as patchrightChromium } from "patchright";
 
 // ── Adapter interfaces ────────────────────────────────────────────────────────
 
@@ -304,4 +305,4 @@ export function wrapPlaywrightPage(page: PlaywrightPage): PageAdapter {
   }
 
   // ── Re-export library clients for use in browser-provider ─────────────────────
-export { puppeteer, chromium };
+export { puppeteer, chromium, patchrightChromium };

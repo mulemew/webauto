@@ -1,6 +1,6 @@
 import { logger } from "../lib/logger";
 import { SeleniumBaseProvider } from "./seleniumbase-adapter";
-import { wrapPuppeteerPage, wrapPlaywrightPage, puppeteer, chromium } from "./page-adapter";
+import { wrapPuppeteerPage, wrapPlaywrightPage, puppeteer, chromium, patchrightChromium } from "./page-adapter";
 import type { PageAdapter } from "./page-adapter";
 import { execSync, spawn } from "child_process";
 
@@ -642,7 +642,10 @@ function ensureXvfb(): void {
   }
 }
 
-// ── Playwright local (launch) provider ────────────────────────────────────────
+// ── Patchright local (launch) provider ─────────────────────────────────────────
+  // Uses Patchright (a Playwright fork patched at the Chromium level) instead of
+  // stock playwright-core. Patchright removes all automation fingerprints from
+  // Chromium itself — no JS injection — so it passes Turnstile invisible natively.
 
 class PlaywrightLocalProvider implements BrowserProvider {
     constructor(private readonly config: BrowserProviderConfig) {}

@@ -1,6 +1,6 @@
 # =============================================================
 # AutoOps — single container (API + Web UI + bundled Chromium)
-# Includes Playwright's Chromium for the "local" browser provider.
+# Includes Patchright's patched Chromium for the "local" browser provider.
 # Also works with remote CDP services (browserless, etc.) via the
 # "playwright" or "puppeteer" provider settings.
 # =============================================================
@@ -63,16 +63,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install puppeteer and playwright (with Chromium browser).
+# Install puppeteer, playwright-core, and patchright.
 # puppeteer: skip download — used only for remote CDP connections.
-# playwright: install Chromium for the "local" browser provider.
+# patchright: installs its patched Chromium for the "local" browser provider.
 COPY artifacts/api-server/package.json ./package-src.json
 RUN node -e "\
   const p = JSON.parse(require('fs').readFileSync('./package-src.json', 'utf-8'));\
   const out = { name: 'autoops', version: '1.0.0', type: 'module',\
     dependencies: {\
       puppeteer: p.dependencies.puppeteer,\
-      'playwright-core': p.dependencies['playwright-core']\
+      'playwright-core': p.dependencies['playwright-core'],\
+      'patchright': p.dependencies['patchright']\
     }\
   };\
   require('fs').writeFileSync('./package.json', JSON.stringify(out, null, 2));\
@@ -81,10 +82,10 @@ RUN node -e "\
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 RUN npm install --omit=dev
 
-# Install Playwright's bundled Chromium (used by the "local" provider).
-# This is Playwright's patched Chromium with built-in anti-detection —
-# significantly better at bypassing Cloudflare Turnstile than stock Chrome.
-RUN npx playwright install chromium
+# Install Patchright's patched Chromium (used by the "local" provider).
+# Patchright patches Chromium at the binary level — no JS injection — so it
+# passes Cloudflare Turnstile invisible natively without any extra tricks.
+RUN npx patchright install chromium
 
 # API bundle (pino workers are included by esbuild-plugin-pino)
 COPY --from=api-builder /workspace/artifacts/api-server/dist ./dist
