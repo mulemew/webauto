@@ -33,6 +33,13 @@ import { pool } from "@workspace/db";
   );
   ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "enabled" boolean NOT NULL DEFAULT true;
     ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "next_run_at" timestamptz;
+  ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "login_type" text;
+  ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "triggered_by" text;
+  ALTER TABLE "logs"  ADD COLUMN IF NOT EXISTS "triggered_by" text;
+  ALTER TABLE "logs"  ADD COLUMN IF NOT EXISTS "duration_ms"  integer;
+  ALTER TABLE "logs"  ADD COLUMN IF NOT EXISTS "step_logs"    jsonb;
+  ALTER TABLE "saved_credentials" ADD COLUMN IF NOT EXISTS "updated_at" timestamptz NOT NULL DEFAULT now();
+  ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "browser_config" jsonb;
     CREATE TABLE IF NOT EXISTS "sessions" (
     "token"      text        PRIMARY KEY,
     "expires_at" timestamptz NOT NULL,
