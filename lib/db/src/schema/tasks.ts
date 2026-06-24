@@ -15,11 +15,13 @@ export const tasksTable = pgTable("tasks", {
   // Valid values: "idle" | "running" | "success" | "failed" | "needs_attention"
   status: text("status").notNull().default("idle"),
   lastRunAt: timestamp("last_run_at", { withTimezone: true }),
-    // Used by @after_completion: schedule — set to (finishedAt + delayMinutes) after each run
-    nextRunAt: timestamp("next_run_at", { withTimezone: true }),
+  // Used by @after_completion: schedule — set to (finishedAt + delayMinutes) after each run
+  nextRunAt: timestamp("next_run_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
   enabled: boolean("enabled").notNull().default(true),
+  // Per-task browser backend override. null = use global Settings config.
+  browserConfig: jsonb("browser_config"),
 });
 
 export const insertTaskSchema = createInsertSchema(tasksTable).omit({ id: true, createdAt: true, updatedAt: true });

@@ -168,8 +168,7 @@ import path from "path";
       await acquireSemaphore();
       semaphoreAcquired = true;
 
-      const browserConfig = await loadBrowserConfig();
-      const browserProvider = createBrowserProvider(browserConfig);
+      const globalBrowserConfig = await loadBrowserConfig();
       const captchaConfig = await loadCaptchaConfig();
       const solver = createCaptchaSolverFromConfig(captchaConfig);
       const timeoutConfig = await loadTaskTimeoutConfig();
@@ -177,6 +176,18 @@ import path from "path";
 
       const [task] = await db.select().from(tasksTable).where(eq(tasksTable.id, taskId));
       if (!task) { logger.error({ taskId }, "Task not found"); return; }
+
+      // Merge task-level browserConfig (if set) over the global config.
+      // This allows each task to use a different browser backend — e.g. one task
+      // via seleniumbase CF Proxy, another via Playwright CDP.
+      const taskBrowserOverride = (task.browserConfig ?? null) as Partial<import("./browser-provider").BrowserProviderConfig> | null;
+      const browserConfig = taskBrowserOverride
+        ? { ...globalBrowserConfig, ...taskBrowserOverride }
+        : globalBrowserConfig;
+      if (taskBrowserOverride) {
+        logger.info({ taskId, provider: browserConfig.provider }, "Using task-level browser config override");
+      }
+      const browserProvider = createBrowserProvider(browserConfig);
 
       if (!dryRun) {
         await db.update(tasksTable).set({ status: "running" }).where(eq(tasksTable.id, taskId));

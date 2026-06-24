@@ -188,7 +188,7 @@ router.post("/tasks", async (req, res): Promise<void> => {
     return;
   }
 
-  const { credentials, steps, cronExpression, ...taskFields } = parsed.data;
+  const { credentials, steps, cronExpression, browserConfig, ...taskFields } = parsed.data;
 
   // Convert inline credentials in login steps to saved_credentials entries
   const sanitizedSteps = await promoteInlineCredentials(steps ?? null, req.log);
@@ -199,6 +199,7 @@ router.post("/tasks", async (req, res): Promise<void> => {
       ...taskFields,
       steps: sanitizedSteps,
       cronExpression: cronExpression ?? null,
+      browserConfig: browserConfig ?? null,
       status: "idle",
     })
     .returning();
@@ -432,13 +433,14 @@ router.put("/tasks/:id", async (req, res): Promise<void> => {
     return;
   }
 
-  const { credentials, steps, cronExpression, ...taskFields } = parsed.data;
+  const { credentials, steps, cronExpression, browserConfig, ...taskFields } = parsed.data;
 
   const updateData: Partial<typeof tasksTable.$inferInsert> = { ...taskFields };
   if (steps !== undefined) {
     updateData.steps = await promoteInlineCredentials(steps, req.log);
   }
   if (cronExpression !== undefined) updateData.cronExpression = cronExpression;
+  if (browserConfig !== undefined) updateData.browserConfig = browserConfig ?? null;
 
   const [updated] = await db
     .update(tasksTable)

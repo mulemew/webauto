@@ -20,6 +20,17 @@ const LoginStepSchema = zod.object({
   inlineTotp: zod.string().optional(),
 });
 
+
+const TaskBrowserConfigSchema = zod.object({
+  provider: zod.enum(["playwright", "puppeteer", "local", "seleniumbase"]).optional(),
+  wsEndpoint: zod.string().nullish(),
+  proxyUrl: zod.string().nullish(),
+  stealth: zod.boolean().nullish(),
+  blockAds: zod.boolean().nullish(),
+  ignoreHTTPS: zod.boolean().nullish(),
+  sessionTimeoutMs: zod.number().int().nullish(),
+});
+
 const WorkflowStepSchema = zod.union([
   zod.object({
     type: zod.enum(["navigate"]),
@@ -129,6 +140,7 @@ export const ListTasksResponseItem = zod.object({
   nextRunAt: zod.coerce.date().nullish().describe("Next scheduled run for @after_completion: tasks"),
   createdAt: zod.coerce.date(),
   updatedAt: zod.coerce.date(),
+  browserConfig: zod.union([TaskBrowserConfigSchema, zod.null()]).optional(),
 });
 export const ListTasksResponse = zod.array(ListTasksResponseItem);
 
@@ -148,6 +160,7 @@ export const CreateTaskBody = zod.object({
     .describe("Optional — only needed if the task has a login step"),
   steps: zod.array(WorkflowStepSchema).nullish(),
   cronExpression: zod.string().nullish(),
+  browserConfig: zod.union([TaskBrowserConfigSchema, zod.null()]).optional().describe("Per-task browser backend override. Null uses global settings."),
 });
 
 /**
@@ -175,6 +188,7 @@ export const GetTaskResponse = zod
     nextRunAt: zod.coerce.date().nullish().describe("Next scheduled run for @after_completion: tasks"),
     createdAt: zod.coerce.date(),
     updatedAt: zod.coerce.date(),
+    browserConfig: zod.union([TaskBrowserConfigSchema, zod.null()]).optional(),
   })
   .and(
     zod.object({
@@ -209,6 +223,7 @@ export const UpdateTaskBody = zod.object({
     .optional(),
   steps: zod.array(WorkflowStepSchema).nullish(),
   cronExpression: zod.string().nullish(),
+  browserConfig: zod.union([TaskBrowserConfigSchema, zod.null()]).optional().describe("Per-task browser backend override. Null uses global settings."),
 });
 
 export const UpdateTaskResponse = zod.object({
@@ -228,6 +243,7 @@ export const UpdateTaskResponse = zod.object({
   nextRunAt: zod.coerce.date().nullish().describe("Next scheduled run for @after_completion: tasks"),
   createdAt: zod.coerce.date(),
   updatedAt: zod.coerce.date(),
+  browserConfig: zod.union([TaskBrowserConfigSchema, zod.null()]).optional(),
 });
 
 /**

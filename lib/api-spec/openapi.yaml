@@ -710,6 +710,35 @@ components:
           $ref: "#/components/schemas/ConditionalAction"
       required: [type, conditionType]
 
+    TaskBrowserConfig:
+      type: object
+      description: >
+        Per-task browser backend override. When set, these values are merged over the
+        global browser config (Settings page), letting each task use a different
+        execution backend.
+      properties:
+        provider:
+          type: string
+          enum: [playwright, puppeteer, local, seleniumbase]
+          description: |
+            Browser backend for this task:
+            playwright=Playwright CDP (default), puppeteer=Puppeteer CDP,
+            local=local Chromium launch, seleniumbase=CF Proxy bypass mode
+        wsEndpoint:
+          type: ["string", "null"]
+          description: WebSocket endpoint override for this task
+        proxyUrl:
+          type: ["string", "null"]
+          description: HTTP/SOCKS proxy URL (e.g. "http://user:pass@host:1080")
+        stealth:
+          type: ["boolean", "null"]
+        blockAds:
+          type: ["boolean", "null"]
+        ignoreHTTPS:
+          type: ["boolean", "null"]
+        sessionTimeoutMs:
+          type: ["integer", "null"]
+
     WorkflowStep:
       oneOf:
         - $ref: "#/components/schemas/NavigateStep"
@@ -767,6 +796,11 @@ components:
           type: boolean
           default: true
           description: Whether this task is active (disabled tasks skip cron runs)
+        browserConfig:
+          oneOf:
+            - $ref: "#/components/schemas/TaskBrowserConfig"
+            - type: "null"
+          description: Per-task browser backend override. Null uses global settings.
       required:
         - id
         - name
@@ -811,6 +845,11 @@ components:
             $ref: "#/components/schemas/WorkflowStep"
         cronExpression:
           type: ["string", "null"]
+        browserConfig:
+          oneOf:
+            - $ref: "#/components/schemas/TaskBrowserConfig"
+            - type: "null"
+          description: Per-task browser backend override. Null uses global settings.
       required:
         - name
         - targetUrl
@@ -845,6 +884,11 @@ components:
             $ref: "#/components/schemas/WorkflowStep"
         cronExpression:
           type: ["string", "null"]
+        browserConfig:
+          oneOf:
+            - $ref: "#/components/schemas/TaskBrowserConfig"
+            - type: "null"
+          description: Per-task browser backend override. Null uses global settings.
 
     RunTaskResponse:
       type: object
