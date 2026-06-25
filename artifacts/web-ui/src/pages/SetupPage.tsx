@@ -1,4 +1,5 @@
 import { useState, FormEvent } from "react";
+import { useLocation } from "wouter";
   import { Loader2, ShieldCheck } from "lucide-react";
   import { Button } from "@/components/ui/button";
   import { Input } from "@/components/ui/input";
@@ -7,8 +8,9 @@ import { useState, FormEvent } from "react";
 
   const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-  export default function SetupPage({ onDone }: { onDone: () => void }) {
+  export default function SetupPage() {
     const { t } = useLang();
+    const [, navigate] = useLocation();
     const [password, setPassword] = useState("");
     const [repeat, setRepeat] = useState("");
     const [error, setError] = useState("");
@@ -30,7 +32,7 @@ import { useState, FormEvent } from "react";
           body: JSON.stringify({ password }),
         });
         if (res.ok) {
-          onDone();
+          navigate("/");
         } else {
           const data = await res.json().catch(() => ({})) as { error?: string };
           setError(data.error || t.saveFailed);

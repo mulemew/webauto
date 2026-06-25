@@ -323,7 +323,7 @@ const PROVIDER_OPTIONS: Array<{
 // ── Task Timeout Section ──────────────────────────────────────────────────────
 
 const TIMEOUT_OPTIONS: Array<{ minutes: number; label: string; sublabel: string }> = [
-  { minutes: 0,  label: t.timeoutDisabled, sublabel: "Tasks run until they finish or crash" },
+  { minutes: 0,  label: "disabled", sublabel: "Tasks run until they finish or crash" },
   { minutes: 5,  label: "5 min", sublabel: "Short tasks / quick logins" },
   { minutes: 10, label: "10 min", sublabel: "Recommended for most workflows" },
   { minutes: 30, label: "30 min", sublabel: "Default — long-running workflows" },
@@ -407,7 +407,7 @@ function TaskTimeoutSection() {
               <div className={`flex-shrink-0 h-3 w-3 rounded-full border-2 ${
                 selected ? "border-primary bg-primary" : "border-muted-foreground"
               }`} />
-              <span className="font-mono font-semibold text-sm">{label}</span>
+              <span className="font-mono font-semibold text-sm">{label === "disabled" ? t.timeoutDisabled : label}</span>
             </div>
             <span className="text-xs font-mono opacity-70">{sublabel}</span>
           </button>

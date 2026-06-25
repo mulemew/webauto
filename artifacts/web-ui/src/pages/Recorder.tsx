@@ -62,7 +62,7 @@ function stepLabel(step: WorkflowStep): string {
     case "scroll":     return `Scroll ${(step.y ?? 0) > 0 ? "down" : "up"} ${Math.abs(step.y ?? 0)}px`;
     case "hover":      return `Hover ${step.selector}`;
     case "wait":       return `Wait ${step.ms}ms`;
-    case "screenshot": return t.takeScreenshot;
+    case "screenshot": return "Screenshot";
     case "keypress":   return `Press ${step.key}`;
     case "select":     return `Select "${step.value}" in ${step.selector}`;
     case "waitFor":    return `Wait for ${step.selector}`;
