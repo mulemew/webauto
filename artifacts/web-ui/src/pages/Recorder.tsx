@@ -226,11 +226,11 @@ export default function Recorder() {
 
         <Card className="border-border shadow-sm">
           <CardHeader className="bg-muted/20 border-b border-border pb-4">
-            <CardTitle className="text-base">Start Recording</CardTitle>
+            <CardTitle className="text-base">{t.startRecording}</CardTitle>
           </CardHeader>
           <CardContent className="pt-6 space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="startUrl">Starting URL</Label>
+              <Label htmlFor="startUrl">{t.startingUrl}</Label>
               <Input
                 id="startUrl"
                 type="url"
@@ -257,14 +257,14 @@ export default function Recorder() {
               {starting ? (
                 <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Opening browser…</>
               ) : (
-                <><Play className="mr-2 h-4 w-4" />Start Recording</>
+                <><Play className="mr-2 h-4 w-4" />{t.startRecording}</>
               )}
             </Button>
           </CardContent>
         </Card>
 
         <div className="rounded-md border border-border bg-muted/20 p-4 space-y-2">
-          <p className="text-sm font-medium">How it works</p>
+          <p className="text-sm font-medium">{t.howItWorks}</p>
           <ul className="text-xs text-muted-foreground space-y-1.5 list-none">
             <li className="flex items-start gap-2"><MousePointer2 className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-primary" /><span>Click anywhere on the screenshot to generate a <code className="font-mono bg-muted px-1 rounded">click</code> step</span></li>
             <li className="flex items-start gap-2"><Type className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-primary" /><span>Click a field first, then use the Type toolbar to generate a <code className="font-mono bg-muted px-1 rounded">fill</code> step</span></li>
@@ -321,8 +321,8 @@ export default function Recorder() {
             <>
               <Button variant="outline" size="sm" onClick={copySteps}>
                 {copied
-                  ? <><CheckCheck className="mr-1.5 h-4 w-4" />Copied!</>
-                  : <><Copy className="mr-1.5 h-4 w-4" />Copy JSON</>
+                  ? <><CheckCheck className="mr-1.5 h-4 w-4" />{t.copiedLabel}</>
+                  : <><Copy className="mr-1.5 h-4 w-4" />{t.copyJson}</>
                 }
               </Button>
               <Button size="sm" onClick={useSteps}>
@@ -504,7 +504,7 @@ export default function Recorder() {
 
               {/* Row 2: Quick actions */}
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold w-full sm:w-auto">Quick:</span>
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold w-full sm:w-auto">{t.quickLabel}</span>
                 {[
                   { label: "Enter", icon: <Keyboard className="h-3 w-3" />, action: { type: "keypress", key: "Enter" } },
                   { label: "Tab", icon: <Keyboard className="h-3 w-3" />, action: { type: "keypress", key: "Tab" } },

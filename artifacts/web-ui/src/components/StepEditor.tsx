@@ -1,3 +1,5 @@
+import { useLang } from "@/contexts/lang-context";
+import type { Translations } from "@/i18n/translations";
 import { Plus, Trash2, ChevronUp, ChevronDown, MousePointer, Navigation, Keyboard, Clock, Eye, Camera, ExternalLink, ListFilter, ArrowDown, Hand, Command, LogIn, GitBranch } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -62,20 +64,21 @@ interface StepEditorProps {
   savedCredentials?: SavedCredentialOption[];
 }
 
-const STEP_META: Record<StepType, { label: string; icon: React.ReactNode; description: string }> = {
-  login:           { label: "Login",             icon: <LogIn className="h-3.5 w-3.5" />,        description: "Authenticate via form, GitHub, or Google OAuth" },
-  navigate:        { label: "Navigate",          icon: <Navigation className="h-3.5 w-3.5" />,   description: "Go to a URL" },
-  click:           { label: "Click",             icon: <MousePointer className="h-3.5 w-3.5" />, description: "Click an element" },
-  fill:            { label: "Fill Input",        icon: <Keyboard className="h-3.5 w-3.5" />,     description: "Type into a field" },
-  select:          { label: "Select Option",     icon: <ListFilter className="h-3.5 w-3.5" />,   description: "Choose from a dropdown" },
-  scroll:          { label: "Scroll",            icon: <ArrowDown className="h-3.5 w-3.5" />,    description: "Scroll page or element into view" },
-  hover:           { label: "Hover",             icon: <Hand className="h-3.5 w-3.5" />,          description: "Mouse over an element" },
-  wait:            { label: "Wait",              icon: <Clock className="h-3.5 w-3.5" />,         description: "Pause for N milliseconds" },
-  waitFor:         { label: "Wait For",          icon: <Eye className="h-3.5 w-3.5" />,           description: "Wait until element or text appears" },
-  screenshot:      { label: "Screenshot",        icon: <Camera className="h-3.5 w-3.5" />,        description: "Capture current page" },
-  switchToNewPage: { label: "Switch to New Tab", icon: <ExternalLink className="h-3.5 w-3.5" />,  description: "Switch focus to the newly opened tab" },
-  keypress:        { label: "Key Press",         icon: <Command className="h-3.5 w-3.5" />,        description: "Send a keyboard shortcut or key" },
-  condition:       { label: "Condition",         icon: <GitBranch className="h-3.5 w-3.5" />,     description: "If condition is met, execute an action" },
+function getStepMeta(t: Translations): Record<StepType, { label: string; icon: React.ReactNode; description: string }> {
+  return {
+  login:           { label: t.stepLogin,             icon: <LogIn className="h-3.5 w-3.5" />,        description: t.stepLoginDesc },
+  navigate:        { label: t.stepNavigate,          icon: <Navigation className="h-3.5 w-3.5" />,   description: t.stepNavigateDesc },
+  click:           { label: t.stepClick,             icon: <MousePointer className="h-3.5 w-3.5" />, description: t.stepClickDesc },
+  fill:            { label: t.stepFill,        icon: <Keyboard className="h-3.5 w-3.5" />,     description: t.stepFillDesc },
+  select:          { label: t.stepSelectOpt,     icon: <ListFilter className="h-3.5 w-3.5" />,   description: t.stepSelectOptDesc },
+  scroll:          { label: t.stepScroll,            icon: <ArrowDown className="h-3.5 w-3.5" />,    description: t.stepScrollDesc },
+  hover:           { label: t.stepHover,             icon: <Hand className="h-3.5 w-3.5" />,          description: t.stepHoverDesc },
+  wait:            { label: t.stepWait,              icon: <Clock className="h-3.5 w-3.5" />,         description: t.stepWaitDesc },
+  waitFor:         { label: t.stepWaitFor,          icon: <Eye className="h-3.5 w-3.5" />,           description: t.stepWaitForDesc },
+  screenshot:      { label: t.stepScreenshotType,        icon: <Camera className="h-3.5 w-3.5" />,        description: t.stepScreenshotTypeDesc },
+  switchToNewPage: { label: t.stepSwitchTab, icon: <ExternalLink className="h-3.5 w-3.5" />,  description: t.stepSwitchTabDesc },
+  keypress:        { label: t.stepKeyPress,         icon: <Command className="h-3.5 w-3.5" />,        description: t.stepKeyPressDesc },
+  condition:       { label: t.stepCondition,         icon: <GitBranch className="h-3.5 w-3.5" />,     description: t.stepConditionDesc },
 };
 
 const PRESET_KEYS = [
@@ -130,6 +133,8 @@ function StepCard({
   onMoveUp: () => void;
   onMoveDown: () => void;
 }) {
+  const { t } = useLang();
+  const STEP_META = getStepMeta(t);
   const meta = STEP_META[step.type];
   const set = (patch: Partial<WorkflowStep>) => onChange({ ...step, ...patch });
 
@@ -146,10 +151,10 @@ function StepCard({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {(Object.keys(STEP_META) as StepType[]).map((t) => (
-              <SelectItem key={t} value={t} className="text-xs">
+            {(Object.keys(STEP_META) as StepType[]).map((stepType) => (
+              <SelectItem key={stepType} value={stepType} className="text-xs">
                 <span className="flex items-center gap-2">
-                  {STEP_META[t].icon} {STEP_META[t].label}
+                  {STEP_META[stepType].icon} {STEP_META[stepType].label}
                 </span>
               </SelectItem>
             ))}
@@ -157,13 +162,13 @@ function StepCard({
         </Select>
         <span className="text-xs text-muted-foreground/60 flex-1 hidden sm:block">{meta.description}</span>
         <div className="flex items-center gap-1 ml-auto shrink-0">
-          <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={onMoveUp} disabled={index === 0} title="Move up">
+          <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={onMoveUp} disabled={index === 0} title={t.moveUp}>
             <ChevronUp className="h-3 w-3" />
           </Button>
-          <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={onMoveDown} disabled={index === total - 1} title="Move down">
+          <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={onMoveDown} disabled={index === total - 1} title={t.moveDown}>
             <ChevronDown className="h-3 w-3" />
           </Button>
-          <Button type="button" variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:text-destructive hover:bg-destructive/10" onClick={onDelete} title="Remove step">
+          <Button type="button" variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:text-destructive hover:bg-destructive/10" onClick={onDelete} title={t.removeStep}>
             <Trash2 className="h-3 w-3" />
           </Button>
         </div>
@@ -173,7 +178,7 @@ function StepCard({
       {step.type === "login" && (
           <div className="p-3 space-y-3">
             <div className="space-y-2">
-              <Label className="text-xs">Login Method</Label>
+              <Label className="text-xs">{t.loginMethod}</Label>
               <RadioGroup
                 value={step.loginMethod ?? "form"}
                 onValueChange={(v) => set({ loginMethod: v as "form" | "github" | "google" })}
@@ -182,13 +187,13 @@ function StepCard({
                 {(["form", "github", "google"] as const).map((m) => (
                   <div key={m} className="flex items-center gap-1.5">
                     <RadioGroupItem value={m} id={`login-method-${index}-${m}`} />
-                    <Label htmlFor={`login-method-${index}-${m}`} className="text-xs cursor-pointer capitalize">{m === "form" ? "Standard Form" : m === "github" ? "GitHub OAuth" : "Google OAuth"}</Label>
+                    <Label htmlFor={`login-method-${index}-${m}`} className="text-xs cursor-pointer capitalize">{m === "form" ? t.standardForm : m === "github" ? "GitHub OAuth" : "Google OAuth"}</Label>
                   </div>
                 ))}
               </RadioGroup>
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Login Page URL</Label>
+              <Label className="text-xs">{t.loginPageUrl}</Label>
               <Input
                 className="font-mono text-xs h-8"
                 placeholder="https://example.com/login"
@@ -198,7 +203,7 @@ function StepCard({
             </div>
             {/* Credential selection */}
             <div className="space-y-2 pt-1 border-t border-border">
-              <Label className="text-xs font-medium">Credentials</Label>
+              <Label className="text-xs font-medium">{t.credentials}</Label>
               {savedCredentials.length > 0 ? (
                 <div className="space-y-2">
                   <RadioGroup
@@ -208,11 +213,11 @@ function StepCard({
                   >
                     <div className="flex items-center gap-1.5">
                       <RadioGroupItem value="saved" id={`cred-src-${index}-saved`} />
-                      <Label htmlFor={`cred-src-${index}-saved`} className="text-xs cursor-pointer">Use saved credential</Label>
+                      <Label htmlFor={`cred-src-${index}-saved`} className="text-xs cursor-pointer">{t.useSavedCredential}</Label>
                     </div>
                     <div className="flex items-center gap-1.5">
                       <RadioGroupItem value="inline" id={`cred-src-${index}-inline`} />
-                      <Label htmlFor={`cred-src-${index}-inline`} className="text-xs cursor-pointer">Enter inline</Label>
+                      <Label htmlFor={`cred-src-${index}-inline`} className="text-xs cursor-pointer">{t.enterInline}</Label>
                     </div>
                   </RadioGroup>
                   {(step.credentialSource ?? "saved") === "saved" ? (
@@ -221,7 +226,7 @@ function StepCard({
                       onValueChange={(v) => set({ credentialId: parseInt(v, 10) })}
                     >
                       <SelectTrigger className="h-8 text-xs font-mono">
-                        <SelectValue placeholder="Select a saved credential…" />
+                        <SelectValue placeholder={t.selectCredential} />
                       </SelectTrigger>
                       <SelectContent>
                         {savedCredentials.map((c) => (
@@ -245,7 +250,7 @@ function StepCard({
                 </div>
               ) : (
                 <div className="space-y-2">
-                  <p className="text-xs text-muted-foreground">No saved credentials yet. Enter inline or add one in <span className="font-medium text-foreground">Credentials</span>.</p>
+                  <p className="text-xs text-muted-foreground">{t.noSavedCredentials} <span className="font-medium text-foreground">{t.credentials}</span>.</p>
                   <Input className="font-mono text-xs h-8" placeholder="Username / Email" autoComplete="off" data-lpignore="true" data-1p-ignore="true"
                     value={step.inlineUsername ?? ""} onChange={(e) => set({ inlineUsername: e.target.value })} />
                   <Input type="password" className="font-mono text-xs h-8" placeholder="Password" autoComplete="new-password" data-lpignore="true" data-1p-ignore="true"
@@ -257,7 +262,7 @@ function StepCard({
             </div>
             {/* Success selector */}
             <div className="space-y-1 pt-1 border-t border-border">
-              <Label className="text-xs font-medium">Success Selector <span className="font-normal text-muted-foreground">(optional)</span></Label>
+              <Label className="text-xs font-medium">{t.successSelector} <span className="font-normal text-muted-foreground">(optional)</span></Label>
               <Input
                 className="font-mono text-xs h-8"
                 placeholder=".user-avatar, #logout-btn, [data-user]"
@@ -271,7 +276,7 @@ function StepCard({
             </div>
             {/* Success text */}
             <div className="space-y-1 pt-1 border-t border-border">
-              <Label className="text-xs font-medium">Success Text <span className="font-normal text-muted-foreground">(optional)</span></Label>
+              <Label className="text-xs font-medium">{t.successText} <span className="font-normal text-muted-foreground">(optional)</span></Label>
               <Input
                 className="font-mono text-xs h-8"
                 placeholder="Welcome, Dashboard, 登录成功"
@@ -288,7 +293,7 @@ function StepCard({
       {step.type === "condition" && (
         <div className="p-3 space-y-3">
           <div className="space-y-2">
-            <Label className="text-xs font-medium">If condition</Label>
+            <Label className="text-xs font-medium">{t.ifCondition}</Label>
             <Select
               value={step.conditionType ?? "text_contains"}
               onValueChange={(v) => set({ conditionType: v as ConditionType })}
@@ -297,11 +302,11 @@ function StepCard({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="text_contains" className="text-xs">Page contains text</SelectItem>
-                <SelectItem value="text_not_contains" className="text-xs">Page does NOT contain text</SelectItem>
-                <SelectItem value="element_visible" className="text-xs">Element is visible</SelectItem>
-                <SelectItem value="element_not_visible" className="text-xs">Element is NOT visible</SelectItem>
-                <SelectItem value="url_contains" className="text-xs">URL contains</SelectItem>
+                <SelectItem value="text_contains" className="text-xs">{t.textContains}</SelectItem>
+                <SelectItem value="text_not_contains" className="text-xs">{t.textNotContains}</SelectItem>
+                <SelectItem value="element_visible" className="text-xs">{t.elementVisible}</SelectItem>
+                <SelectItem value="element_not_visible" className="text-xs">{t.elementNotVisible}</SelectItem>
+                <SelectItem value="url_contains" className="text-xs">{t.urlContains}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -336,7 +341,7 @@ function StepCard({
             </div>
           )}
           <div className="border-t border-border pt-3 space-y-2">
-            <Label className="text-xs font-medium">Then execute</Label>
+            <Label className="text-xs font-medium">{t.thenExecute}</Label>
             <Select
               value={step.thenAction?.type ?? "click"}
               onValueChange={(v) => {
@@ -354,13 +359,13 @@ function StepCard({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="click" className="text-xs">Click</SelectItem>
-                <SelectItem value="fill" className="text-xs">Fill Input</SelectItem>
-                <SelectItem value="navigate" className="text-xs">Navigate</SelectItem>
-                <SelectItem value="wait" className="text-xs">Wait</SelectItem>
-                <SelectItem value="keypress" className="text-xs">Key Press</SelectItem>
-                <SelectItem value="screenshot" className="text-xs">Screenshot</SelectItem>
-                <SelectItem value="scroll" className="text-xs">Scroll</SelectItem>
+                <SelectItem value="click" className="text-xs">{t.stepClick}</SelectItem>
+                <SelectItem value="fill" className="text-xs">{t.stepFill}</SelectItem>
+                <SelectItem value="navigate" className="text-xs">{t.stepNavigate}</SelectItem>
+                <SelectItem value="wait" className="text-xs">{t.stepWait}</SelectItem>
+                <SelectItem value="keypress" className="text-xs">{t.stepKeyPress}</SelectItem>
+                <SelectItem value="screenshot" className="text-xs">{t.stepScreenshotType}</SelectItem>
+                <SelectItem value="scroll" className="text-xs">{t.stepScroll}</SelectItem>
               </SelectContent>
             </Select>
             {step.thenAction?.type === "click" && (

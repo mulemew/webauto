@@ -232,6 +232,105 @@ export interface Translations {
     // not-found
     pageNotFound: string;
     pageNotFoundHint: string;
+      // TaskDetail
+      returnToDashboard: string;
+      stopThisTask: string;
+      keepRunning: string;
+      areYouSure: string;
+      captchaDetected: string;
+      loginStrategy: string;
+      manualOnly: string;
+      lastExecution: string;
+      stopRequested: string;
+      stopRequestedDesc: string;
+      couldNotStop: string;
+      failedToReachServer: string;
+      alreadyRunning: string;
+      alreadyRunningDesc: string;
+      retryMission: string;
+      postcheckScreenshot: string;
+      // Settings
+      maxConcurrentSessions: string;
+      advancedOptions: string;
+      testUrl: string;
+      platformConfig: string;
+      intervalFastest: string;
+      intervalBalanced: string;
+      intervalSlower: string;
+      platform: string;
+      // Recorder
+      startRecording: string;
+      startingUrl: string;
+      howItWorks: string;
+      copiedLabel: string;
+      copyJson: string;
+      quickLabel: string;
+      // LogDetail
+      logNotFound: string;
+      timestamp: string;
+      result: string;
+      executionScreenshot: string;
+      stepScreenshot: string;
+      finalScreenshot: string;
+      dryRun: string;
+      executionAborted: string;
+      completedWithoutErrors: string;
+      // Status
+      schedulerError: string;
+      apiServerError: string;
+      dbQueryFailed: string;
+      // StepEditor - step types
+      stepLogin: string;
+      stepLoginDesc: string;
+      stepNavigate: string;
+      stepNavigateDesc: string;
+      stepClick: string;
+      stepClickDesc: string;
+      stepFill: string;
+      stepFillDesc: string;
+      stepSelectOpt: string;
+      stepSelectOptDesc: string;
+      stepScroll: string;
+      stepScrollDesc: string;
+      stepHover: string;
+      stepHoverDesc: string;
+      stepWait: string;
+      stepWaitDesc: string;
+      stepWaitFor: string;
+      stepWaitForDesc: string;
+      stepScreenshotType: string;
+      stepScreenshotTypeDesc: string;
+      stepSwitchTab: string;
+      stepSwitchTabDesc: string;
+      stepKeyPress: string;
+      stepKeyPressDesc: string;
+      stepCondition: string;
+      stepConditionDesc: string;
+      // StepEditor - UI labels
+      loginMethod: string;
+      standardForm: string;
+      loginPageUrl: string;
+      useSavedCredential: string;
+      enterInline: string;
+      selectCredential: string;
+      noSavedCredentials: string;
+      successSelector: string;
+      successText: string;
+      ifCondition: string;
+      textContains: string;
+      textNotContains: string;
+      elementVisible: string;
+      elementNotVisible: string;
+      urlContains: string;
+      conditionValue: string;
+      conditionSelector: string;
+      thenExecute: string;
+      moveUp: string;
+      moveDown: string;
+      removeStep: string;
+      importJson: string;
+      clearAll: string;
+      noStepsAdded: string;
   }
 
   export const zh: Translations = {
@@ -451,6 +550,99 @@ export interface Translations {
     failedToStart: "启动浏览器会话失败",
     pageNotFound: "404 页面不存在",
     pageNotFoundHint: "该页面不存在或已被移除。",
+  
+      returnToDashboard: "返回控制台",
+      stopThisTask: "停止此任务？",
+      keepRunning: "继续运行",
+      areYouSure: "确认操作？",
+      captchaDetected: "检测到验证码 — 需要手动处理",
+      loginStrategy: "登录策略",
+      manualOnly: "仅手动",
+      lastExecution: "上次执行",
+      stopRequested: "停止请求已发送",
+      stopRequestedDesc: "任务将在当前步骤完成后停止。",
+      couldNotStop: "无法停止",
+      failedToReachServer: "无法连接到服务器",
+      alreadyRunning: "已在运行中",
+      alreadyRunningDesc: "此任务已在进行中。",
+      retryMission: "重试任务",
+      postcheckScreenshot: "事后截图",
+      maxConcurrentSessions: "最大并发会话数",
+      advancedOptions: "高级选项",
+      testUrl: "测试 URL",
+      platformConfig: "平台配置与偏好设置",
+      intervalFastest: "1秒 — 最快，服务器负载较高",
+      intervalBalanced: "2秒 — 均衡（默认）",
+      intervalSlower: "5秒 — 较慢，减少网络使用",
+      platform: "平台",
+      startRecording: "开始录制",
+      startingUrl: "起始 URL",
+      howItWorks: "使用方法",
+      copiedLabel: "已复制！",
+      copyJson: "复制 JSON",
+      quickLabel: "快捷：",
+      logNotFound: "日志未找到",
+      timestamp: "时间",
+      result: "结果",
+      executionScreenshot: "执行截图",
+      stepScreenshot: "步骤截图",
+      finalScreenshot: "最终截图",
+      dryRun: "预演",
+      executionAborted: "执行已中止",
+      completedWithoutErrors: "无错误完成",
+      schedulerError: "无法连接到调度器",
+      apiServerError: "无法连接到 API 服务器",
+      dbQueryFailed: "数据库查询失败",
+      stepLogin: "登录",
+      stepLoginDesc: "通过表单、GitHub 或 Google OAuth 认证",
+      stepNavigate: "导航",
+      stepNavigateDesc: "跳转到 URL",
+      stepClick: "点击",
+      stepClickDesc: "点击元素",
+      stepFill: "填写输入",
+      stepFillDesc: "在输入框中输入文字",
+      stepSelectOpt: "选择选项",
+      stepSelectOptDesc: "从下拉框选择",
+      stepScroll: "滚动",
+      stepScrollDesc: "滚动页面或元素到视图",
+      stepHover: "悬停",
+      stepHoverDesc: "鼠标悬停到元素上",
+      stepWait: "等待",
+      stepWaitDesc: "暂停 N 毫秒",
+      stepWaitFor: "等待出现",
+      stepWaitForDesc: "等待元素或文字出现",
+      stepScreenshotType: "截图",
+      stepScreenshotTypeDesc: "截取当前页面",
+      stepSwitchTab: "切换新标签页",
+      stepSwitchTabDesc: "切换焦点到新打开的标签页",
+      stepKeyPress: "按键",
+      stepKeyPressDesc: "发送键盘快捷键或按键",
+      stepCondition: "条件",
+      stepConditionDesc: "条件成立时执行操作",
+      loginMethod: "登录方式",
+      standardForm: "标准表单",
+      loginPageUrl: "登录页 URL",
+      useSavedCredential: "使用已保存凭证",
+      enterInline: "手动输入",
+      selectCredential: "选择已保存的凭证…",
+      noSavedCredentials: "暂无已保存凭证，请手动输入或前往",
+      successSelector: "成功选择器",
+      successText: "成功文本",
+      ifCondition: "条件类型",
+      textContains: "页面包含文字",
+      textNotContains: "页面不包含文字",
+      elementVisible: "元素可见",
+      elementNotVisible: "元素不可见",
+      urlContains: "URL 包含",
+      conditionValue: "匹配值",
+      conditionSelector: "元素选择器（可选）",
+      thenExecute: "满足条件时执行",
+      moveUp: "上移",
+      moveDown: "下移",
+      removeStep: "删除步骤",
+      importJson: "导入 JSON",
+      clearAll: "清空全部",
+      noStepsAdded: "尚未添加步骤",
   };
 
   export const en: Translations = {
@@ -669,5 +861,98 @@ export interface Translations {
     failedToStart: "Failed to start browser session",
     pageNotFound: "404 Page Not Found",
     pageNotFoundHint: "Did you forget to add the page to the router?",
+  
+      returnToDashboard: "Return to Dashboard",
+      stopThisTask: "Stop this task?",
+      keepRunning: "Keep running",
+      areYouSure: "Are you absolutely sure?",
+      captchaDetected: "Captcha Detected — Manual Action Required",
+      loginStrategy: "Login Strategy",
+      manualOnly: "Manual only",
+      lastExecution: "Last Execution",
+      stopRequested: "Stop requested",
+      stopRequestedDesc: "The task will stop after the current step completes.",
+      couldNotStop: "Could not stop",
+      failedToReachServer: "Failed to reach server",
+      alreadyRunning: "Already running",
+      alreadyRunningDesc: "This task is already in progress.",
+      retryMission: "Retry Mission",
+      postcheckScreenshot: "Postcheck screenshot",
+      maxConcurrentSessions: "Max concurrent sessions",
+      advancedOptions: "Advanced Options",
+      testUrl: "Test URL",
+      platformConfig: "Platform configuration and preferences",
+      intervalFastest: "1 second — fastest, higher server load",
+      intervalBalanced: "2 seconds — balanced (default)",
+      intervalSlower: "5 seconds — slower, reduced network usage",
+      platform: "Platform",
+      startRecording: "Start Recording",
+      startingUrl: "Starting URL",
+      howItWorks: "How it works",
+      copiedLabel: "Copied!",
+      copyJson: "Copy JSON",
+      quickLabel: "Quick:",
+      logNotFound: "Log not found",
+      timestamp: "Timestamp",
+      result: "Result",
+      executionScreenshot: "Execution Screenshot",
+      stepScreenshot: "Step Screenshot",
+      finalScreenshot: "Final Screenshot",
+      dryRun: "Dry Run",
+      executionAborted: "Execution aborted",
+      completedWithoutErrors: "Completed without errors",
+      schedulerError: "Could not reach the scheduler",
+      apiServerError: "Could not reach the API server",
+      dbQueryFailed: "Database query failed",
+      stepLogin: "Login",
+      stepLoginDesc: "Authenticate via form, GitHub, or Google OAuth",
+      stepNavigate: "Navigate",
+      stepNavigateDesc: "Go to a URL",
+      stepClick: "Click",
+      stepClickDesc: "Click an element",
+      stepFill: "Fill Input",
+      stepFillDesc: "Type into a field",
+      stepSelectOpt: "Select Option",
+      stepSelectOptDesc: "Choose from a dropdown",
+      stepScroll: "Scroll",
+      stepScrollDesc: "Scroll page or element into view",
+      stepHover: "Hover",
+      stepHoverDesc: "Mouse over an element",
+      stepWait: "Wait",
+      stepWaitDesc: "Pause for N milliseconds",
+      stepWaitFor: "Wait For",
+      stepWaitForDesc: "Wait until element or text appears",
+      stepScreenshotType: "Screenshot",
+      stepScreenshotTypeDesc: "Capture current page",
+      stepSwitchTab: "Switch to New Tab",
+      stepSwitchTabDesc: "Switch focus to the newly opened tab",
+      stepKeyPress: "Key Press",
+      stepKeyPressDesc: "Send a keyboard shortcut or key",
+      stepCondition: "Condition",
+      stepConditionDesc: "If condition is met, execute an action",
+      loginMethod: "Login Method",
+      standardForm: "Standard Form",
+      loginPageUrl: "Login Page URL",
+      useSavedCredential: "Use saved credential",
+      enterInline: "Enter inline",
+      selectCredential: "Select a saved credential…",
+      noSavedCredentials: "No saved credentials yet. Enter inline or add one in",
+      successSelector: "Success Selector",
+      successText: "Success Text",
+      ifCondition: "If condition",
+      textContains: "Page contains text",
+      textNotContains: "Page does NOT contain text",
+      elementVisible: "Element is visible",
+      elementNotVisible: "Element is NOT visible",
+      urlContains: "URL contains",
+      conditionValue: "Match value",
+      conditionSelector: "Element selector (optional)",
+      thenExecute: "Then execute",
+      moveUp: "Move up",
+      moveDown: "Move down",
+      removeStep: "Remove step",
+      importJson: "Import JSON",
+      clearAll: "Clear all",
+      noStepsAdded: "No steps added yet",
   };
   

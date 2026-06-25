@@ -193,7 +193,7 @@ function AboutSection() {
         },
         {
           icon: <Server className="h-4 w-4 text-muted-foreground" />,
-          label: "Platform",
+          label: t.platform,
           value: <span className="font-mono text-sm">{info.platform}</span>,
         },
         {
@@ -635,7 +635,7 @@ function CaptchaSection() {
       )}
 
       <Button onClick={handleSave} disabled={saving}>
-        {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving…</> : "Save"}
+        {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />{t.saving}</> : "Save"}
       </Button>
     </div>
   );
@@ -950,7 +950,7 @@ function BrowserProviderSection() {
 
       {/* Advanced browser options */}
       <div className="space-y-4 rounded-md border border-border bg-muted/10 p-4">
-        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Advanced Options</p>
+        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{t.advancedOptions}</p>
 
         {/* Session timeout */}
         <div className="space-y-2">
@@ -1108,7 +1108,7 @@ function BrowserProviderSection() {
 
             {/* Test URL */}
       <div className="space-y-2">
-        <Label htmlFor="testUrl">Test URL</Label>
+        <Label htmlFor="testUrl">{t.testUrl}</Label>
         <Input
           id="testUrl"
           type="text"
@@ -1279,7 +1279,7 @@ export default function Settings() {
       <div className="space-y-8 animate-in fade-in duration-500 max-w-2xl">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground">{t.settings}</h1>
-          <p className="text-muted-foreground mt-1 font-mono text-sm">Platform configuration and preferences</p>
+          <p className="text-muted-foreground mt-1 font-mono text-sm">{t.platformConfig}</p>
         </div>
 
         {/* ── Concurrency ── */}
@@ -1290,7 +1290,7 @@ export default function Settings() {
               </CardTitle>
               <CardDescription className="text-xs mt-1">
                 Control how many browser automation tasks run simultaneously. Set{" "}
-                <code className="font-mono">Max concurrent sessions</code> to match the{" "}
+                <code className="font-mono">{t.maxConcurrentSessions}</code> to match the{" "}
                 <code className="font-mono">MAX_CONCURRENT_SESSIONS</code> value in your
                 local browserless Docker image so the platform queue and the browser backend
                 stay in sync.

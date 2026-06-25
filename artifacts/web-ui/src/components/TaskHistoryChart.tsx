@@ -1,3 +1,4 @@
+import { useLang } from "@/contexts/lang-context";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 
   interface RunHistoryEntry {
@@ -11,6 +12,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 
   }
 
   export default function TaskHistoryChart({ runHistory }: TaskHistoryChartProps) {
+    const { t } = useLang();
     return (
       <ResponsiveContainer width="100%" height={140}>
         <BarChart data={runHistory} barSize={8} barCategoryGap="30%">
@@ -33,12 +35,12 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 
             }}
             labelFormatter={(l: string) => `Date: ${l}`}
           />
-          <Bar dataKey="success" name="Success" stackId="a" radius={[0, 0, 0, 0]}>
+          <Bar dataKey="success" name={t.statusSuccess} stackId="a" radius={[0, 0, 0, 0]}>
             {runHistory.map((_entry, index) => (
               <Cell key={index} fill="hsl(142, 76%, 36%)" />
             ))}
           </Bar>
-          <Bar dataKey="failed" name="Failed" stackId="a" radius={[2, 2, 0, 0]}>
+          <Bar dataKey="failed" name={t.statusFailed} stackId="a" radius={[2, 2, 0, 0]}>
             {runHistory.map((_entry, index) => (
               <Cell key={index} fill="hsl(0, 72%, 51%)" />
             ))}

@@ -252,13 +252,13 @@ export default function TaskDetail() {
       try {
         const res = await fetch(`/api/tasks/${taskId}/stop`, { method: "POST" });
         if (res.ok) {
-          toast({ title: "Stop requested", description: "The task will stop after the current step completes.", variant: "success" });
+          toast({ title: t.stopRequested, description: t.stopRequestedDesc, variant: "success" });
         } else {
           const err = await res.json().catch(() => ({ error: "Unknown error" })) as { error?: string };
-          toast({ title: "Could not stop", description: err.error ?? "Unknown error", variant: "destructive" });
+          toast({ title: t.couldNotStop, description: err.error ?? "Unknown error", variant: "destructive" });
         }
       } catch {
-        toast({ title: t.networkError, description: "Failed to reach server", variant: "destructive" });
+        toast({ title: t.networkError, description: t.failedToReachServer, variant: "destructive" });
       } finally {
         setTimeout(() => setIsStopping(false), 3000);
       }
@@ -296,7 +296,7 @@ export default function TaskDetail() {
         },
         onError: () => {
           queryClient.invalidateQueries({ queryKey: getGetTaskQueryKey(taskId) });
-          toast({ title: "Failed to update task", variant: "destructive" });
+          toast({ title: t.failedToUpdate, variant: "destructive" });
         },
       });
     };
@@ -310,7 +310,7 @@ export default function TaskDetail() {
         queryClient.invalidateQueries({ queryKey: getListTaskLogsQueryKey(taskId) });
       },
       onError: (err) => {
-        toast({ title: "Failed to trigger task", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
+        toast({ title: t.failedToTrigger, description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
       }
     });
   };
@@ -320,15 +320,15 @@ export default function TaskDetail() {
     try {
       const res = await fetch(`/api/tasks/${taskId}/dry-run`, { method: "POST" });
       if (res.status === 409) {
-        toast({ title: "Already running", description: "This task is already in progress.", variant: "destructive" });
+        toast({ title: t.alreadyRunning, description: t.alreadyRunningDesc, variant: "destructive" });
         return;
       }
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string };
-        toast({ title: "Failed to start dry run", description: body.error ?? "Unknown error", variant: "destructive" });
+        toast({ title: t.failedToTrigger, description: body.error ?? "Unknown error", variant: "destructive" });
         return;
       }
-      toast({ title: "Test run started", description: "Running in the background — logs will appear below when complete.", variant: "success" });
+      toast({ title: t.taskTriggered, description: t.taskTriggeredDesc, variant: "success" });
       // Poll logs every 3s for up to 90s waiting for the dry run to finish
       let attempts = 0;
       const poll = setInterval(() => {
@@ -349,7 +349,7 @@ export default function TaskDetail() {
         }
       }, 3000);
     } catch {
-      toast({ title: t.networkError, description: "Could not reach the server.", variant: "destructive" });
+      toast({ title: t.networkError, description: t.failedToReachServer, variant: "destructive" });
       setIsDryRunning(false);
     }
   };
@@ -396,7 +396,7 @@ export default function TaskDetail() {
   if (!stableTask) {
     return (
       <div className="text-center py-20">
-        <h2 className="text-xl font-bold">Task not found</h2>
+        <h2 className="text-xl font-bold">{t.taskNotFound}</h2>
         <Link href="/">
           <Button variant="link" className="mt-4">Return to Dashboard</Button>
         </Link>
@@ -470,7 +470,7 @@ export default function TaskDetail() {
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>Keep running</AlertDialogCancel>
+                  <AlertDialogCancel>{t.keepRunning}</AlertDialogCancel>
                   <AlertDialogAction
                     onClick={() => void handleStop()}
                     className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
@@ -614,10 +614,10 @@ export default function TaskDetail() {
                 </div>
 
                 <div className="space-y-1">
-                  <dt className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Schedule</dt>
+                  <dt className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.schedule}</dt>
                   <dd className="text-sm font-mono flex items-center gap-2">
                     <Calendar className="h-3 w-3 text-muted-foreground" />
-                    {task.cronExpression ? task.cronExpression : <span className="text-muted-foreground italic">Manual only</span>}
+                    {task.cronExpression ? task.cronExpression : <span className="text-muted-foreground italic">{t.manualOnly}</span>}
                   </dd>
                 </div>
 
@@ -969,7 +969,7 @@ export default function TaskDetail() {
                           <Link href={"/logs?taskId=" + taskId}>
                             <div className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground cursor-pointer py-1">
                               <Terminal className="h-3 w-3" />
-                              Show all {logs.length} records in Log Explorer
+                              {t.runHistory}
                             </div>
                           </Link>
                         </div>
@@ -989,7 +989,7 @@ export default function TaskDetail() {
           <Card className="border-border shadow-sm">
             <CardHeader className="bg-muted/20 border-b border-border pb-4">
               <CardTitle className="text-base flex items-center gap-2">
-                <Shield className="h-4 w-4 text-primary" /> Credentials Vault
+                <Shield className="h-4 w-4 text-primary" /> {t.credentials}
               </CardTitle>
             </CardHeader>
             <CardContent className="pt-6">
@@ -1001,7 +1001,7 @@ export default function TaskDetail() {
                         <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Login {((task as any).loginCredentials.length > 1) ? `#${idx + 1}` : ""} ({cred.loginMethod})</span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <span className="text-xs text-muted-foreground">Identity</span>
+                        <span className="text-xs text-muted-foreground">{t.username}</span>
                         <span className="text-sm font-mono font-semibold">{cred.username}</span>
                       </div>
                       <div className="flex items-center justify-between">
@@ -1020,7 +1020,7 @@ export default function TaskDetail() {
               ) : task.credentials?.username ? (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between p-3 border border-border rounded-md bg-card">
-                    <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Identity</span>
+                    <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider">{t.username}</span>
                     <span className="text-sm font-mono font-semibold">{task.credentials.username}</span>
                   </div>
                   <div className="flex items-center justify-between p-3 border border-border rounded-md bg-card">
@@ -1057,11 +1057,11 @@ export default function TaskDetail() {
                   <div className="flex items-center justify-center gap-4 mt-1">
                     <div className="flex items-center gap-1.5">
                       <div className="h-2 w-2 rounded-sm" style={{ background: "hsl(142, 76%, 36%)" }} />
-                      <span className="text-xs text-muted-foreground font-mono">Success</span>
+                      <span className="text-xs text-muted-foreground font-mono">{t.statusSuccess}</span>
                     </div>
                     <div className="flex items-center gap-1.5">
                       <div className="h-2 w-2 rounded-sm" style={{ background: "hsl(0, 72%, 51%)" }} />
-                      <span className="text-xs text-muted-foreground font-mono">Failed</span>
+                      <span className="text-xs text-muted-foreground font-mono">{t.statusFailed}</span>
                     </div>
                   </div>
                 </CardContent>

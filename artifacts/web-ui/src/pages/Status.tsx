@@ -16,7 +16,7 @@ import { useEffect, useState } from "react";
     const [services, setServices] = useState<ServiceStatus[]>([
       { name: t.taskScheduler, status: "loading" },
       { name: t.browserService, status: "loading" },
-      { name: "Database", status: "loading" },
+      { name: t.database, status: "loading" },
     ]);
 
     useEffect(() => {
@@ -35,7 +35,7 @@ import { useEffect, useState } from "react";
               message: data.browserError,
             },
             {
-              name: "Database",
+              name: t.database,
               status: data.db === "ok" ? "ok" : "error",
               message: data.dbError,
             },
@@ -43,9 +43,9 @@ import { useEffect, useState } from "react";
         })
         .catch(() => {
           setServices([
-            { name: t.taskScheduler, status: "error", message: "Could not reach the scheduler" },
-            { name: t.browserService, status: "error", message: "Could not reach the API server" },
-            { name: "Database", status: "error", message: "Database query failed" },
+            { name: t.taskScheduler, status: "error", message: t.schedulerError },
+            { name: t.browserService, status: "error", message: t.apiServerError },
+            { name: t.database, status: "error", message: t.dbQueryFailed },
           ]);
         });
     }, [t]);
@@ -56,7 +56,7 @@ import { useEffect, useState } from "react";
     const icons: Record<string, React.ReactNode> = {
       [t.taskScheduler]: <Cpu className="h-5 w-5" />,
       [t.browserService]: <Server className="h-5 w-5" />,
-      Database: <Database className="h-5 w-5" />,
+      [t.database]: <Database className="h-5 w-5" />,
     };
 
     return (

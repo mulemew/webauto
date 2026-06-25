@@ -119,9 +119,9 @@ export default function LogDetail() {
   if (!log) {
     return (
       <div className="text-center py-20">
-        <h2 className="text-xl font-bold">Log not found</h2>
+        <h2 className="text-xl font-bold">{t.logNotFound}</h2>
         <Link href={`/tasks/${taskId}`}>
-          <Button variant="link" className="mt-4">Return to Task</Button>
+          <Button variant="link" className="mt-4">{t.backToTask}</Button>
         </Link>
       </div>
     );
@@ -167,7 +167,7 @@ export default function LogDetail() {
               <Calendar className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">Timestamp</p>
+              <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">{t.timestamp}</p>
               <p className="text-sm font-mono font-medium">{format(new Date(log.runAt), "MMM d, yyyy HH:mm:ss")}</p>
             </div>
           </CardContent>
@@ -179,7 +179,7 @@ export default function LogDetail() {
               <Clock className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">Duration</p>
+              <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">{t.duration}</p>
               <p className="text-sm font-mono font-medium">{log.durationMs ? `${log.durationMs}ms` : "Unknown"}</p>
             </div>
           </CardContent>
@@ -191,8 +191,8 @@ export default function LogDetail() {
               {log.success ? <CheckCircle2 className="h-5 w-5" /> : <XCircle className="h-5 w-5" />}
             </div>
             <div>
-              <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">Result</p>
-              <p className="text-sm font-mono font-medium">{log.success ? "Completed without errors" : "Execution aborted"}</p>
+              <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">{t.result}</p>
+              <p className="text-sm font-mono font-medium">{log.success ? t.completedWithoutErrors : t.executionAborted}</p>
             </div>
           </CardContent>
         </Card>
@@ -215,7 +215,7 @@ export default function LogDetail() {
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="max-w-5xl w-full p-1 bg-zinc-950 border-zinc-800">
-                  <DialogTitle className="sr-only">Execution Screenshot</DialogTitle>
+                  <DialogTitle className="sr-only">{t.executionScreenshot}</DialogTitle>
                   <img src={`${BASE}/api/tasks/${taskId}/logs/${logId}/screenshot`} alt={t.executionLog} className="w-full h-auto object-contain max-h-[85vh]" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", '<p class="text-sm text-muted-foreground font-mono text-center py-8">截图已过期</p>'); }} />
                 </DialogContent>
               </Dialog>
@@ -303,7 +303,7 @@ export default function LogDetail() {
                                 </button>
                               </DialogTrigger>
                               <DialogContent className="max-w-5xl bg-zinc-950 border-zinc-800 p-1">
-                                <DialogTitle className="sr-only">Step Screenshot</DialogTitle>
+                                <DialogTitle className="sr-only">{t.stepScreenshot}</DialogTitle>
                                 <img src={shotSrc} alt={"Step " + (step.stepIndex + 1) + " screenshot"} className="w-full h-auto object-contain max-h-[85vh]" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", '<p class="text-sm text-muted-foreground font-mono text-center py-8">截图已过期</p>'); }} />
                               </DialogContent>
                             </Dialog>
@@ -326,7 +326,7 @@ export default function LogDetail() {
                             </button>
                           </DialogTrigger>
                           <DialogContent className="max-w-5xl bg-zinc-950 border-zinc-800 p-1">
-                            <DialogTitle className="sr-only">Final Screenshot</DialogTitle>
+                            <DialogTitle className="sr-only">{t.finalScreenshot}</DialogTitle>
                             <img src={`${BASE}/api/tasks/${taskId}/logs/${logId}/screenshot`} alt="Final screenshot" className="w-full h-auto object-contain max-h-[85vh]" />
                           </DialogContent>
                         </Dialog>
