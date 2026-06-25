@@ -13,6 +13,7 @@ import { formatDistanceToNow, format } from "date-fns";
 import { usePollingInterval } from "@/hooks/use-polling-interval";
   import { Switch } from "@/components/ui/switch";
 import { usePollPaused } from "@/contexts/poll-paused-context";
+import { useLang } from "@/contexts/lang-context";
 import { useSearch, useLocation } from "wouter";
 import { StatusBadge, StatusIcon } from "@/components/StatusBadge";
 
@@ -159,8 +160,9 @@ function NextRunBadge({ nextRunAt }: { nextRunAt: string | null }) {
   interface LastRun { taskId: number; success: boolean; runAt: string; durationMs: number | null }
 
   function LastRunBadge({ lastRun }: { lastRun: LastRun | undefined }) {
+    const { t: tLR } = useLang();
     if (!lastRun) {
-      return <span className="text-xs font-mono text-muted-foreground/50 italic">never run</span>;
+      return <span className="text-xs font-mono text-muted-foreground/50 italic">{tLR.neverRun}</span>;
     }
     const ago = formatDistanceToNow(new Date(lastRun.runAt), { addSuffix: true });
     const dur = lastRun.durationMs != null
@@ -188,6 +190,7 @@ function NextRunBadge({ nextRunAt }: { nextRunAt: string | null }) {
 type FilterValue = typeof VALID_FILTERS[number];
 
 export default function Home() {
+  const { t } = useLang();
   const [pollingInterval] = usePollingInterval();
   const { paused } = usePollPaused();
   const [, setLocation] = useLocation();
@@ -361,11 +364,11 @@ export default function Home() {
         // Keep pendingEnabled set during refetch so the switch doesn't flash back
         await queryClient.invalidateQueries({ queryKey: getListTasksQueryKey() });
         setPendingEnabled(prev => { const m = new Map(prev); m.delete(id); return m; });
-        toast({ title: enabled ? "Task enabled" : "Task disabled", description: enabled ? "The task will run on schedule." : "The task has been paused.", variant: enabled ? "success" : "default" });
+        toast({ title: enabled ? t.taskEnabled : t.taskDisabled, description: enabled ? t.taskEnabledDesc : t.taskDisabledDesc, variant: enabled ? "success" : "default" });
       },
       onError: () => {
         setPendingEnabled(prev => { const m = new Map(prev); m.delete(id); return m; });
-        toast({ title: "Failed to update task", variant: "destructive" });
+        toast({ title: t.failedToUpdate, variant: "destructive" });
       },
     });
   };
@@ -374,11 +377,11 @@ export default function Home() {
       fetch(`${BASE}/api/tasks/${id}/stop`, { method: "POST" })
         .then((r) => r.ok ? r.json() : Promise.reject(r))
         .then(() => {
-          toast({ title: "Cancel requested", description: "The task will stop shortly.", variant: "success" });
+          toast({ title: t.cancelRequested, description: t.cancelRequestedDesc, variant: "success" });
           queryClient.invalidateQueries({ queryKey: getListTasksQueryKey() });
           queryClient.invalidateQueries({ queryKey: getGetTasksSummaryQueryKey() });
         })
-        .catch(() => toast({ title: "Failed to cancel task", variant: "destructive" }));
+        .catch(() => toast({ title: t.failedToCancel, variant: "destructive" }));
     };
 
     const handleRun = (id: number) => {
@@ -386,12 +389,12 @@ export default function Home() {
     setFastPollUntil(Date.now() + 30_000);
     runTask.mutate({ id }, {
       onSuccess: () => {
-        toast({ title: "Task triggered", description: "The automation job has been queued.", variant: "success" });
+        toast({ title: t.taskTriggered, description: t.taskTriggeredDesc, variant: "success" });
         queryClient.invalidateQueries({ queryKey: getListTasksQueryKey() });
         queryClient.invalidateQueries({ queryKey: getGetTasksSummaryQueryKey() });
       },
       onError: (err) => {
-        toast({ title: "Failed to trigger task", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
+        toast({ title: t.failedToTrigger, description: err instanceof Error ? err.message : t.failedToTrigger, variant: "destructive" });
       }
     });
   };
@@ -406,33 +409,33 @@ export default function Home() {
     <div className="space-y-8 animate-in fade-in duration-500">
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">Dashboard</h1>
-          <p className="text-muted-foreground mt-1 font-mono text-sm">System overview and automation jobs</p>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">{t.dashboard}</h1>
+          <p className="text-muted-foreground mt-1 font-mono text-sm">{t.dashboardSubtitle}</p>
         </div>
         <Link href="/tasks/new">
           <Button className="shadow-sm font-semibold tracking-wide">
-            <Plus className="mr-2 h-4 w-4" /> New Mission
+            <Plus className="mr-2 h-4 w-4" /> {t.newMission}
           </Button>
         </Link>
       </div>
 
       {/* Summary Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
-        <StatCard title="Total Jobs" value={summary?.total} icon={<Activity className="h-4 w-4 text-primary" />} isLoading={isLoadingSummary} active={activeFilter === null} activeRing="ring-primary/60" onClick={() => setActiveFilter(null)} />
-        <StatCard title="Running Now" value={summary?.running} icon={<Loader2 className="h-4 w-4 text-blue-500 animate-spin" />} isLoading={isLoadingSummary} active={activeFilter === "running"} activeRing="ring-blue-500/60" onClick={() => toggleFilter("running")} />
-        <StatCard title="In Queue" value={summary?.queued} icon={<Timer className="h-4 w-4 text-purple-500" />} isLoading={isLoadingSummary} active={activeFilter === "queued"} activeRing="ring-purple-500/60" onClick={() => toggleFilter("queued")} />
-        <StatCard title="Success (24h)" value={summary?.successLast24h} icon={<CheckCircle2 className="h-4 w-4 text-green-500" />} isLoading={isLoadingSummary} active={activeFilter === "success"} activeRing="ring-green-500/60" onClick={() => toggleFilter("success")} />
-        <StatCard title="Failed (24h)" value={summary?.failedLast24h} icon={<XCircle className="h-4 w-4 text-destructive" />} isLoading={isLoadingSummary} active={activeFilter === "failed"} activeRing="ring-destructive/60" onClick={() => toggleFilter("failed")} />
-        <StatCard title="Needs Attention" value={summary?.needsAttention} icon={<AlertTriangle className="h-4 w-4 text-amber-500" />} isLoading={isLoadingSummary} highlight={!!summary?.needsAttention} active={activeFilter === "needs_attention"} activeRing="ring-amber-500/60" onClick={() => toggleFilter("needs_attention")} />
+        <StatCard title={t.totalJobs} value={summary?.total} icon={<Activity className="h-4 w-4 text-primary" />} isLoading={isLoadingSummary} active={activeFilter === null} activeRing="ring-primary/60" onClick={() => setActiveFilter(null)} />
+        <StatCard title={t.runningNow} value={summary?.running} icon={<Loader2 className="h-4 w-4 text-blue-500 animate-spin" />} isLoading={isLoadingSummary} active={activeFilter === "running"} activeRing="ring-blue-500/60" onClick={() => toggleFilter("running")} />
+        <StatCard title={t.inQueue} value={summary?.queued} icon={<Timer className="h-4 w-4 text-purple-500" />} isLoading={isLoadingSummary} active={activeFilter === "queued"} activeRing="ring-purple-500/60" onClick={() => toggleFilter("queued")} />
+        <StatCard title={t.successLast24h} value={summary?.successLast24h} icon={<CheckCircle2 className="h-4 w-4 text-green-500" />} isLoading={isLoadingSummary} active={activeFilter === "success"} activeRing="ring-green-500/60" onClick={() => toggleFilter("success")} />
+        <StatCard title={t.failedLast24h} value={summary?.failedLast24h} icon={<XCircle className="h-4 w-4 text-destructive" />} isLoading={isLoadingSummary} active={activeFilter === "failed"} activeRing="ring-destructive/60" onClick={() => toggleFilter("failed")} />
+        <StatCard title={t.needsAttention} value={summary?.needsAttention} icon={<AlertTriangle className="h-4 w-4 text-amber-500" />} isLoading={isLoadingSummary} highlight={!!summary?.needsAttention} active={activeFilter === "needs_attention"} activeRing="ring-amber-500/60" onClick={() => toggleFilter("needs_attention")} />
       </div>
 
       {/* 7-Day History Chart */}
       <Card className="border-border shadow-sm">
         <CardHeader className="bg-muted/20 border-b border-border pb-4 flex flex-row items-center justify-between">
           <CardTitle className="text-base flex items-center gap-2">
-            <BarChart2 className="h-4 w-4 text-primary" /> 7-Day Run History
+            <BarChart2 className="h-4 w-4 text-primary" /> {t.sevenDayHistory}
           </CardTitle>
-          <span className="text-xs font-mono text-muted-foreground">success vs failure per day</span>
+          <span className="text-xs font-mono text-muted-foreground">{t.successVsFailure}</span>
         </CardHeader>
         <CardContent className="pt-4 pb-2">
           {isLoadingHistory ? (
@@ -447,7 +450,7 @@ export default function Home() {
       <div>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold tracking-tight flex items-center gap-2">
-            <TerminalIcon /> Active Configurations
+            <TerminalIcon /> {t.activeConfigurations}
           </h2>
           {activeFilter && (
             <div className={`flex items-center gap-2 text-sm font-mono ${
@@ -466,7 +469,7 @@ export default function Home() {
                 Showing {displayedTasks.length} {activeFilter === "needs_attention" ? "blocked" : activeFilter === "queued" ? "queued" : activeFilter} task{displayedTasks.length !== 1 ? "s" : ""}
               </span>
               <Button variant="ghost" size="sm" className="h-7 px-2 gap-1 text-xs" onClick={() => setActiveFilter(null)}>
-                <X className="h-3 w-3" /> Reset
+                <X className="h-3 w-3" /> {t.reset}
               </Button>
             </div>
           )}
@@ -597,12 +600,12 @@ export default function Home() {
               No {activeFilter === "needs_attention" ? "blocked" : activeFilter} tasks
             </h3>
             <p className="text-sm text-muted-foreground max-w-sm mt-1 mb-6">
-              {activeFilter === "needs_attention" && "All tasks are running smoothly — nothing needs your attention right now."}
-              {activeFilter === "running" && "No tasks are currently running."}
-              {activeFilter === "success" && "No tasks have succeeded recently."}
-              {activeFilter === "failed" && "No tasks have failed recently."}
+              {activeFilter === "needs_attention" && t.filterEmptyNeedsAttention}
+              {activeFilter === "running" && t.filterEmptyRunning}
+              {activeFilter === "success" && t.filterEmptySuccess}
+              {activeFilter === "failed" && t.filterEmptyFailed}
             </p>
-            <Button variant="outline" onClick={() => setActiveFilter(null)}><X className="h-4 w-4 mr-2" /> Show all tasks</Button>
+            <Button variant="outline" onClick={() => setActiveFilter(null)}><X className="h-4 w-4 mr-2" /> {t.showAllTasks}</Button>
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center py-16 text-center border border-dashed border-border rounded-md bg-muted/20">
@@ -635,7 +638,7 @@ function StatCard({ title, value, icon, isLoading, highlight, active, activeRing
         ) : (
           <div className={`text-2xl font-bold tracking-tight font-mono ${highlight ? "text-amber-600 dark:text-amber-400" : ""}`}>{value || 0}</div>
         )}
-        {onClick && <p className="text-[10px] text-muted-foreground mt-1 font-mono">{active ? "click to reset" : "click to filter"}</p>}
+        {onClick && <p className="text-[10px] text-muted-foreground mt-1 font-mono">{active ? t.clickToReset : t.clickToFilter}</p>}
       </CardContent>
     </Card>
   );

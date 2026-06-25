@@ -22,7 +22,21 @@ export interface Translations {
     failedLast24h: string;
     needsAttention: string;
     totalJobs: string;
+    inQueue: string;
     sevenDayHistory: string;
+    dashboardSubtitle: string;
+    successVsFailure: string;
+    clickToFilter: string;
+    clickToReset: string;
+    failedToUpdate: string;
+    filterEmptyNeedsAttention: string;
+    filterEmptyRunning: string;
+    filterEmptySuccess: string;
+    filterEmptyFailed: string;
+    showAllTasks: string;
+    reset: string;
+    showing: string;
+    blockedTasks: string;
     // Task actions
     run: string;
     retry: string;
@@ -242,6 +256,21 @@ export interface Translations {
     needsAttention: "需处理",
     totalJobs: "任务总数",
     sevenDayHistory: "7日运行记录",
+    inQueue: "排队中",
+    dashboardSubtitle: "系统概览与自动化任务",
+    successVsFailure: "每日成功/失败统计",
+    clickToFilter: "点击筛选",
+    clickToReset: "点击重置",
+    failedToUpdate: "更新任务失败",
+    filterEmptyNeedsAttention: "所有任务运行正常，暂无需处理的任务。",
+    filterEmptyRunning: "当前没有正在运行的任务。",
+    filterEmptySuccess: "最近没有成功完成的任务。",
+    filterEmptyFailed: "最近没有失败的任务。",
+    showAllTasks: "显示所有任务",
+    reset: "重置",
+    showing: "正在显示",
+    blockedTasks: "被阻塞",
+
     run: "运行",
     retry: "重试",
     cancel: "取消",
@@ -446,6 +475,20 @@ export interface Translations {
     needsAttention: "Needs Attention",
     totalJobs: "Total Jobs",
     sevenDayHistory: "7-Day Run History",
+    inQueue: "In Queue",
+    dashboardSubtitle: "System overview and automation jobs",
+    successVsFailure: "success vs failure per day",
+    clickToFilter: "click to filter",
+    clickToReset: "click to reset",
+    failedToUpdate: "Failed to update task",
+    filterEmptyNeedsAttention: "All tasks are running smoothly — nothing needs your attention right now.",
+    filterEmptyRunning: "No tasks are currently running.",
+    filterEmptySuccess: "No tasks have succeeded recently.",
+    filterEmptyFailed: "No tasks have failed recently.",
+    showAllTasks: "Show all tasks",
+    reset: "Reset",
+    showing: "Showing",
+    blockedTasks: "blocked",
     run: "Run",
     retry: "Retry",
     cancel: "Cancel",

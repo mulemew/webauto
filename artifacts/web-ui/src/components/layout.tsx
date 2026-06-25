@@ -123,7 +123,7 @@ import { useLang } from "@/contexts/lang-context";
               {/* System online indicator */}
               <div className="flex items-center gap-2">
                 <span className="flex h-2 w-2 rounded-full bg-green-500 animate-pulse"></span>
-                <span className="text-xs font-medium text-muted-foreground tracking-widest uppercase">System Online</span>
+                <span className="text-xs font-medium text-muted-foreground tracking-widest uppercase">{t.systemOnline}</span>
               </div>
 
               {/* Browser status indicator */}
@@ -140,7 +140,7 @@ import { useLang } from "@/contexts/lang-context";
                             ? "text-red-500"
                             : "text-muted-foreground/40"
                     }`}>
-                      Browser
+                      {t.browser}
                     </span>
                   </div>
                 </TooltipTrigger>
