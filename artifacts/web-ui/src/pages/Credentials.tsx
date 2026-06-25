@@ -1,17 +1,15 @@
 import { useState, useEffect } from "react";
-  import { KeyRound, Plus, Trash2, Pencil, Eye, EyeOff, ShieldCheck } from "lucide-react";
+  import { KeyRound, Plus, Trash2, Pencil, Eye, EyeOff, ShieldCheck, Loader2 } from "lucide-react";
   import { Button } from "@/components/ui/button";
   import { Input } from "@/components/ui/input";
-  import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+  import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
   import { useToast } from "@/hooks/use-toast";
-  import {
-    Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
-  } from "@/components/ui/dialog";
-  import {
-    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-  } from "@/components/ui/alert-dialog";
+  import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+  import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
   import { Label } from "@/components/ui/label";
+  import { useLang } from "@/contexts/lang-context";
+
+  const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
   interface SavedCredential {
     id: number;
@@ -31,6 +29,7 @@ import { useState, useEffect } from "react";
   const EMPTY_FORM: CredentialForm = { name: "", username: "", password: "", totpSecret: "" };
 
   export default function Credentials() {
+    const { t } = useLang();
     const { toast } = useToast();
     const [credentials, setCredentials] = useState<SavedCredential[]>([]);
     const [loading, setLoading] = useState(true);
@@ -41,16 +40,16 @@ import { useState, useEffect } from "react";
     const [showPassword, setShowPassword] = useState(false);
     const [showTotp, setShowTotp] = useState(false);
     const [deleteId, setDeleteId] = useState<number | null>(null);
-      const [revealId, setRevealId] = useState<number | null>(null);
-      const [revealData, setRevealData] = useState<{ password: string; totpSecret: string | null } | null>(null);
-      const [revealing, setRevealing] = useState(false);
+    const [revealId, setRevealId] = useState<number | null>(null);
+    const [revealData, setRevealData] = useState<{ password: string; totpSecret: string | null } | null>(null);
+    const [revealing, setRevealing] = useState(false);
 
     const load = () => {
       setLoading(true);
-      fetch("/api/saved-credentials")
+      fetch(`${BASE}/api/saved-credentials`)
         .then((r) => r.json())
         .then((data) => setCredentials(data))
-        .catch(() => toast({ title: "Failed to load credentials", variant: "destructive" }))
+        .catch(() => toast({ title: t.failedToLoad, variant: "destructive" }))
         .finally(() => setLoading(false));
     };
 
@@ -74,21 +73,20 @@ import { useState, useEffect } from "react";
 
     const handleSubmit = async () => {
       if (!form.name.trim() || !form.username.trim()) {
-        toast({ title: "Name and username are required", variant: "destructive" });
+        toast({ title: t.failedToSaveCred, description: `${t.credentialName} ${t.username}`, variant: "destructive" });
         return;
       }
       if (!editingId && !form.password) {
-        toast({ title: "Password is required", variant: "destructive" });
+        toast({ title: t.failedToSaveCred, description: t.password, variant: "destructive" });
         return;
       }
       setSubmitting(true);
       try {
-        const url = editingId ? `/api/saved-credentials/${editingId}` : "/api/saved-credentials";
+        const url = editingId ? `${BASE}/api/saved-credentials/${editingId}` : `${BASE}/api/saved-credentials`;
         const method = editingId ? "PUT" : "POST";
         const body: Record<string, string | null | undefined> = {
           name: form.name,
           username: form.username,
-          // During edit, omit totpSecret if blank so server preserves existing value
           totpSecret: editingId && !form.totpSecret ? undefined : (form.totpSecret || null),
         };
         if (form.password) body.password = form.password;
@@ -98,11 +96,11 @@ import { useState, useEffect } from "react";
           body: JSON.stringify(body),
         });
         if (!res.ok) throw new Error(await res.text());
-        toast({ title: editingId ? "Credential updated" : "Credential saved", variant: "success" });
+        toast({ title: editingId ? t.credentialUpdated : t.credentialSaved, variant: "success" });
         setDialogOpen(false);
         load();
       } catch (err) {
-        toast({ title: "Failed to save", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
+        toast({ title: t.failedToSaveCred, description: err instanceof Error ? err.message : t.networkError, variant: "destructive" });
       } finally {
         setSubmitting(false);
       }
@@ -111,43 +109,43 @@ import { useState, useEffect } from "react";
     const handleDelete = async () => {
       if (!deleteId) return;
       try {
-        await fetch(`/api/saved-credentials/${deleteId}`, { method: "DELETE" });
-        toast({ title: "Credential deleted", variant: "success" });
+        await fetch(`${BASE}/api/saved-credentials/${deleteId}`, { method: "DELETE" });
+        toast({ title: t.credentialDeleted, variant: "success" });
         setDeleteId(null);
         load();
       } catch {
-        toast({ title: "Failed to delete", variant: "destructive" });
+        toast({ title: t.failedToDeleteCred, variant: "destructive" });
       }
     };
 
     const handleReveal = async (id: number) => {
-        if (revealId === id) { setRevealId(null); setRevealData(null); return; }
-        setRevealing(true);
-        setRevealId(id);
-        setRevealData(null);
-        try {
-          const r = await fetch(`/api/saved-credentials/${id}/reveal`);
-          if (!r.ok) throw new Error("Failed");
-          setRevealData(await r.json());
-        } catch {
-          toast({ title: "Failed to reveal", variant: "destructive" });
-          setRevealId(null);
-        } finally {
-          setRevealing(false);
-        }
-      };
+      if (revealId === id) { setRevealId(null); setRevealData(null); return; }
+      setRevealing(true);
+      setRevealId(id);
+      setRevealData(null);
+      try {
+        const r = await fetch(`${BASE}/api/saved-credentials/${id}/reveal`);
+        if (!r.ok) throw new Error("Failed");
+        setRevealData(await r.json());
+      } catch {
+        toast({ title: t.failedToLoad, variant: "destructive" });
+        setRevealId(null);
+      } finally {
+        setRevealing(false);
+      }
+    };
 
-      return (
+    return (
       <div className="max-w-2xl mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Credentials Vault</h1>
+            <h1 className="text-2xl font-bold tracking-tight">{t.credentials}</h1>
             <p className="text-sm text-muted-foreground font-mono">
-              Saved credentials are encrypted at rest with AES-256-GCM and reusable across tasks
+              AES-256-GCM 加密存储，可跨任务复用
             </p>
           </div>
           <Button size="sm" className="gap-2" onClick={openCreate}>
-            <Plus className="h-4 w-4" /> Add Credential
+            <Plus className="h-4 w-4" /> {t.addCredential}
           </Button>
         </div>
 
@@ -163,10 +161,9 @@ import { useState, useEffect } from "react";
               <div className="rounded-full bg-muted/30 p-3">
                 <KeyRound className="h-6 w-6 text-muted-foreground" />
               </div>
-              <p className="text-sm font-medium">No saved credentials yet</p>
-              <p className="text-xs text-muted-foreground">Add credentials here and select them in Login steps — no re-entering the same passwords.</p>
+              <p className="text-sm font-medium">{t.noCredentials}</p>
               <Button size="sm" variant="outline" onClick={openCreate} className="gap-2 mt-2">
-                <Plus className="h-4 w-4" /> Add your first credential
+                <Plus className="h-4 w-4" /> {t.addCredential}
               </Button>
             </CardContent>
           </Card>
@@ -180,88 +177,71 @@ import { useState, useEffect } from "react";
                     <CardTitle className="text-sm font-semibold">{c.name}</CardTitle>
                   </div>
                   <div className="flex items-center gap-1">
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(c)} title="Edit">
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(c)}>
                       <Pencil className="h-3.5 w-3.5" />
                     </Button>
                     <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
-                      onClick={() => setDeleteId(c.id)} title="Delete">
+                      onClick={() => setDeleteId(c.id)}>
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                   </div>
                 </CardHeader>
                 <CardContent className="py-3 px-4">
-                  <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                  <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
                     <span className="font-mono">{c.username}</span>
                     <span className="text-border">·</span>
                     {revealId === c.id && revealData ? (
-                        <span className="font-mono text-foreground select-all">{revealData.password}</span>
-                      ) : (
-                        <span>Password: ••••••••</span>
-                      )}
-                      <Button variant="ghost" size="sm" className="h-5 px-1.5 text-xs gap-1"
-                        onClick={() => handleReveal(c.id)} disabled={revealing && revealId === c.id}>
-                        {revealId === c.id ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                        {revealId === c.id ? "Hide" : "Reveal"}
-                      </Button>
-                      <span className="ml-auto text-muted-foreground/50 font-mono">
-                        Updated {new Date(c.updatedAt).toLocaleDateString()}
-                      </span>
-                    </div>
-                    {revealId === c.id && revealData?.totpSecret && (
-                      <div className="text-xs text-muted-foreground font-mono mt-1">
-                        TOTP: <span className="text-foreground select-all">{revealData.totpSecret}</span>
-                      </div>
+                      <span className="font-mono text-foreground select-all">{revealData.password}</span>
+                    ) : (
+                      <span>{t.password}: ••••••••</span>
                     )}
-                  </CardContent>
+                    <Button variant="ghost" size="sm" className="h-5 px-1.5 text-xs gap-1"
+                      onClick={() => handleReveal(c.id)} disabled={revealing && revealId === c.id}>
+                      {revealing && revealId === c.id
+                        ? <Loader2 className="h-3 w-3 animate-spin" />
+                        : revealId === c.id ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                      {revealId === c.id ? "隐藏" : "显示"}
+                    </Button>
+                    <span className="ml-auto text-muted-foreground/50 font-mono">
+                      {new Date(c.updatedAt).toLocaleDateString("zh-CN")}
+                    </span>
+                  </div>
+                  {revealId === c.id && revealData?.totpSecret && (
+                    <div className="text-xs text-muted-foreground font-mono mt-1">
+                      TOTP: <span className="text-foreground select-all">{revealData.totpSecret}</span>
+                    </div>
+                  )}
+                </CardContent>
               </Card>
             ))}
           </div>
         )}
 
-        {/* Create / Edit Dialog */}
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogContent className="max-w-md bg-background border-border">
             <DialogHeader>
-              <DialogTitle>{editingId ? "Edit Credential" : "Add Credential"}</DialogTitle>
+              <DialogTitle>{editingId ? t.editCredential : t.addCredential}</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-2">
               <div className="space-y-1.5">
-                <Label className="text-xs">Display Name</Label>
-                <Input
-                  className="font-mono text-sm"
-                  placeholder="e.g. GitHub Bot"
-                  autoComplete="off"
-                  value={form.name}
-                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                />
+                <Label className="text-xs">{t.credentialName}</Label>
+                <Input className="font-mono text-sm" placeholder="e.g. GitHub Bot" autoComplete="off"
+                  value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Username / Email</Label>
-                <Input
-                  className="font-mono text-sm"
-                  placeholder="bot@company.com"
-                  autoComplete="off"
-                  data-lpignore="true"
-                  data-1p-ignore="true"
-                  value={form.username}
-                  onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
-                />
+                <Label className="text-xs">{t.username}</Label>
+                <Input className="font-mono text-sm" placeholder="bot@company.com" autoComplete="off"
+                  data-lpignore="true" data-1p-ignore="true"
+                  value={form.username} onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))} />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs">
-                  Password {editingId && <span className="text-muted-foreground font-normal">(leave blank to keep unchanged)</span>}
+                  {t.password} {editingId && <span className="text-muted-foreground font-normal">（留空保持不变）</span>}
                 </Label>
                 <div className="relative">
-                  <Input
-                    type={showPassword ? "text" : "password"}
-                    className="font-mono text-sm pr-10"
-                    placeholder="••••••••"
-                    autoComplete="new-password"
-                    data-lpignore="true"
-                    data-1p-ignore="true"
-                    value={form.password}
-                    onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-                  />
+                  <Input type={showPassword ? "text" : "password"} className="font-mono text-sm pr-10"
+                    placeholder="••••••••" autoComplete="new-password" data-lpignore="true" data-1p-ignore="true"
+                    value={form.password} onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} />
                   <button type="button" className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                     onClick={() => setShowPassword((v) => !v)}>
                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -269,49 +249,39 @@ import { useState, useEffect } from "react";
                 </div>
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">TOTP Secret (2FA) <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                <Label className="text-xs">{t.totp}</Label>
                 <div className="relative">
-                  <Input
-                    type={showTotp ? "text" : "password"}
-                    className="font-mono text-sm pr-10"
-                    placeholder={editingId ? "Leave blank to keep existing 2FA" : "JBSWY3DPEHPK3PXP"}
-                    autoComplete="off"
-                    data-lpignore="true"
-                    data-1p-ignore="true"
-                    value={form.totpSecret}
-                    onChange={(e) => setForm((f) => ({ ...f, totpSecret: e.target.value }))}
-                  />
+                  <Input type={showTotp ? "text" : "password"} className="font-mono text-sm pr-10"
+                    placeholder={editingId ? "留空保持现有 2FA" : t.totpPlaceholder}
+                    autoComplete="off" data-lpignore="true" data-1p-ignore="true"
+                    value={form.totpSecret} onChange={(e) => setForm((f) => ({ ...f, totpSecret: e.target.value }))} />
                   <button type="button" className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                     onClick={() => setShowTotp((v) => !v)}>
                     {showTotp ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
-                <p className="text-xs text-muted-foreground font-mono">Used for GitHub / Google 2FA auto-fill</p>
+                <p className="text-xs text-muted-foreground font-mono">用于 GitHub / Google 双因素认证自动填写</p>
               </div>
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
+              <Button variant="outline" onClick={() => setDialogOpen(false)}>{t.cancel}</Button>
               <Button onClick={handleSubmit} disabled={submitting}>
-                {submitting ? "Saving…" : editingId ? "Update" : "Save"}
+                {submitting ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />{t.saving}</> : t.saveCredential}
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
 
-        {/* Delete Confirm */}
         <AlertDialog open={deleteId !== null} onOpenChange={(o) => !o && setDeleteId(null)}>
           <AlertDialogContent className="bg-background border-border">
             <AlertDialogHeader>
-              <AlertDialogTitle>Delete this credential?</AlertDialogTitle>
-              <AlertDialogDescription>
-                Any Login steps that reference this credential will need to be reconfigured.
-                This action cannot be undone.
-              </AlertDialogDescription>
+              <AlertDialogTitle>{t.confirmDeleteCred}</AlertDialogTitle>
+              <AlertDialogDescription>{t.confirmDeleteCredDesc}</AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogCancel>{t.cancel}</AlertDialogCancel>
               <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                Delete
+                {t.deleteCredential}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

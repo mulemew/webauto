@@ -1,18 +1,20 @@
 import { Badge } from "@/components/ui/badge";
   import { CheckCircle2, XCircle, Clock, Loader2, AlertTriangle, Timer } from "lucide-react";
+  import { useLang } from "@/contexts/lang-context";
 
   export function StatusBadge({ status }: { status: string }) {
+    const { t } = useLang();
     switch (status) {
       case "success":
-        return <Badge variant="outline" className="bg-green-500/10 text-green-600 border-green-500/20 font-mono text-xs">SUCCESS</Badge>;
+        return <Badge variant="outline" className="bg-green-500/10 text-green-600 border-green-500/20 font-mono text-xs">{t.statusSuccess}</Badge>;
       case "failed":
-        return <Badge variant="outline" className="bg-destructive/10 text-destructive border-destructive/20 font-mono text-xs">FAILED</Badge>;
+        return <Badge variant="outline" className="bg-destructive/10 text-destructive border-destructive/20 font-mono text-xs">{t.statusFailed}</Badge>;
       case "running":
-        return <Badge variant="outline" className="bg-blue-500/10 text-blue-600 border-blue-500/20 font-mono text-xs animate-pulse">RUNNING</Badge>;
+        return <Badge variant="outline" className="bg-blue-500/10 text-blue-600 border-blue-500/20 font-mono text-xs animate-pulse">{t.statusRunning}</Badge>;
       case "queued":
-        return <Badge variant="outline" className="bg-purple-500/10 text-purple-600 border-purple-500/20 font-mono text-xs">QUEUED</Badge>;
+        return <Badge variant="outline" className="bg-purple-500/10 text-purple-600 border-purple-500/20 font-mono text-xs">{t.statusQueued}</Badge>;
       case "needs_attention":
-        return <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/30 font-mono text-xs">NEEDS ATTENTION</Badge>;
+        return <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/30 font-mono text-xs">{t.statusNeedsAttention}</Badge>;
       default:
         return <Badge variant="outline" className="bg-muted text-muted-foreground border-border font-mono text-xs">{status.toUpperCase()}</Badge>;
     }

@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { StepEditor, type WorkflowStep, type SavedCredentialOption, type ConditionType, type ThenActionType, type ConditionalAction } from "@/components/StepEditor";
 
 import { useCreateTask, useUpdateTask, useGetTask, getGetTaskQueryKey, getListTasksQueryKey, getGetTasksSummaryQueryKey } from "@workspace/api-client-react";
+import { useLang } from "@/contexts/lang-context";
 import type { WorkflowStep as ApiWorkflowStep } from "@workspace/api-client-react";
 
 const thenActionSchema = z.object({
@@ -56,8 +57,8 @@ const stepSchema = z.object({
 });
 
 const formSchema = z.object({
-  name: z.string().min(1, "Task name is required"),
-  targetUrl: z.string().url("Must be a valid URL").min(1, "Target URL is required"),
+  name: z.string().min(1, "任务名称不能为空"),
+  targetUrl: z.string().url("请输入有效的 URL").min(1, "目标 URL 不能为空"),
   cronExpression: z.string().optional(),
   steps: z.array(stepSchema).default([]),
 });
@@ -92,10 +93,11 @@ const PROVIDER_LABELS: Record<BrowserProvider, string> = {
   playwright: "Playwright (默认)",
   puppeteer: "Puppeteer",
   local: "Local Chrome",
-  seleniumbase: "SeleniumBase (CF绕过)",
+  seleniumbase: "SeleniumBase (CF Bypass)",
 };
 
 export default function TaskForm() {
+  const { t } = useLang();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -242,13 +244,13 @@ export default function TaskForm() {
         }
       }, {
         onSuccess: () => {
-          toast({ title: "Task updated", description: "The automation job has been updated.", variant: "success" });
+          toast({ title: t.taskUpdated, description: "The automation job has been updated.", variant: "success" });
           queryClient.invalidateQueries({ queryKey: getListTasksQueryKey() });
           queryClient.invalidateQueries({ queryKey: getGetTaskQueryKey(taskId) });
           setLocation(`/tasks/${taskId}`);
         },
         onError: (err) => {
-          toast({ title: "Failed to update task", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
+          toast({ title: t.failedToSave, description: err instanceof Error ? err.message : t.networkError, variant: "destructive" });
         }
       });
     } else {
@@ -262,13 +264,13 @@ export default function TaskForm() {
         }
       }, {
         onSuccess: (newTask) => {
-          toast({ title: "Task created", description: "The automation job has been configured.", variant: "success" });
+          toast({ title: t.taskCreated, description: "The automation job has been configured.", variant: "success" });
           queryClient.invalidateQueries({ queryKey: getListTasksQueryKey() });
           queryClient.invalidateQueries({ queryKey: getGetTasksSummaryQueryKey() });
           setLocation(`/tasks/${newTask.id}`);
         },
         onError: (err) => {
-          toast({ title: "Failed to create task", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
+          toast({ title: t.failedToSave, description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
         }
       });
     }
@@ -346,7 +348,7 @@ export default function TaskForm() {
                           onClick={() => setScheduleType(mode)}
                           className={`px-3 py-1 text-xs rounded font-medium transition-colors ${scheduleType === mode ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
                         >
-                          {mode === "none" ? "No schedule" : mode === "cron" ? "Cron expression" : mode === "random" ? "Random interval" : "After completion"}
+                          {mode === "none" ? t.noSchedule : mode === "cron" ? t.cronExpression : mode === "random" ? "Random interval" : t.afterCompletion}
                         </button>
                       ))}
                     </div>

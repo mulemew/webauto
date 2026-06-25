@@ -45,6 +45,179 @@ export interface Translations {
     loading: string;
     noTasks: string;
     nextIn: string;
+    // StatusBadge
+    statusSuccess: string;
+    statusFailed: string;
+    statusRunning: string;
+    statusQueued: string;
+    statusNeedsAttention: string;
+    // TaskForm
+    newTask: string;
+    editTask: string;
+    taskName: string;
+    taskNamePlaceholder: string;
+    targetUrl: string;
+    targetUrlPlaceholder: string;
+    schedule: string;
+    noSchedule: string;
+    cronExpression: string;
+    randomSchedule: string;
+    afterCompletion: string;
+    browserConfig: string;
+    enableBrowserConfig: string;
+    provider: string;
+    wsEndpoint: string;
+    proxy: string;
+    stealthMode: string;
+    blockAds: string;
+    ignoreHTTPS: string;
+    sessionTimeout: string;
+    workflowSteps: string;
+    addStep: string;
+    saveTask: string;
+    saving: string;
+    taskCreated: string;
+    taskUpdated: string;
+    failedToSave: string;
+    failedToLoad: string;
+    stepsImported: string;
+    randomWindow: string;
+    timesPerCycle: string;
+    afterCompletionDesc: string;
+    // TaskDetail
+    editTask2: string;
+    deleteTask: string;
+    confirmDelete: string;
+    confirmDeleteDesc: string;
+    confirmDeleteBtn: string;
+    taskNotFound: string;
+    taskDeleted: string;
+    failedToDelete: string;
+    enabled: string;
+    disabled: string;
+    lastRun: string;
+    nextRun: string;
+    runHistory: string;
+    noLogs: string;
+    viewLog: string;
+    taskConfig: string;
+    browserProvider: string;
+    runTaskNow: string;
+    taskCancelled: string;
+    failedToCancel: string;
+    updatedAgo: string;
+    runningStream: string;
+    // LogDetail
+    backToTask: string;
+    executionLog: string;
+    startedAt: string;
+    duration: string;
+    steps: string;
+    noLogData: string;
+    // LogsExplorer
+    allTasks: string;
+    filterByTask: string;
+    filterByStatus: string;
+    allStatuses: string;
+    noLogsFound: string;
+    task: string;
+    date: string;
+    status: string;
+    // Credentials
+    addCredential: string;
+    editCredential: string;
+    credentialName: string;
+    username: string;
+    password: string;
+    totp: string;
+    totpPlaceholder: string;
+    saveCredential: string;
+    deleteCredential: string;
+    confirmDeleteCred: string;
+    confirmDeleteCredDesc: string;
+    credentialSaved: string;
+    credentialUpdated: string;
+    credentialDeleted: string;
+    failedToSaveCred: string;
+    failedToDeleteCred: string;
+    noCredentials: string;
+    // Settings
+    retentionSettings: string;
+    logRetentionDays: string;
+    logRetentionDesc: string;
+    maxScreenshotStorage: string;
+    maxScreenshotDesc: string;
+    runCleanupNow: string;
+    retentionSaved: string;
+    cleanupComplete: string;
+    cleanupCompleteDesc: string;
+    cleanupFailed: string;
+    saveFailed: string;
+    networkError: string;
+    pollingInterval: string;
+    pollingIntervalDesc: string;
+    changePassword: string;
+    currentPassword: string;
+    newPassword: string;
+    repeatPassword: string;
+    passwordChanged: string;
+    passwordChangeFailed: string;
+    wrongPassword: string;
+    passwordMismatch: string;
+    taskTimeout: string;
+    taskTimeoutDesc: string;
+    timeoutDisabled: string;
+    timeoutCustom: string;
+    timeoutMinutes: string;
+    captchaSettings: string;
+    captchaProvider: string;
+    noCaptcha: string;
+    captchaSaved: string;
+    aboutSystem: string;
+    version: string;
+    uptime: string;
+    database: string;
+    dbConnected: string;
+    dbError: string;
+    systemInfoFailed: string;
+    browserSettings: string;
+    testConnection: string;
+    connectionOk: string;
+    connectionFailed: string;
+    browserSettingsSaved: string;
+    // Status page
+    allSystemsOk: string;
+    systemsDegraded: string;
+    taskScheduler: string;
+    browserService: string;
+    // Login / Setup
+    signIn: string;
+    enterPassword: string;
+    invalidPassword: string;
+    setupTitle: string;
+    setupDesc: string;
+    repeatPasswordPlaceholder: string;
+    setPassword: string;
+    settingUp: string;
+    // Recorder
+    stepRecorderTitle: string;
+    startSession: string;
+    stopSession: string;
+    takeScreenshot: string;
+    copySteps: string;
+    loadToForm: string;
+    clearSteps: string;
+    enterUrl: string;
+    startingBrowser: string;
+    sessionActive: string;
+    noStepsYet: string;
+    stepsCopied: string;
+    stepsLoaded: string;
+    screenshotTaken: string;
+    failedToStart: string;
+    // not-found
+    pageNotFound: string;
+    pageNotFoundHint: string;
   }
 
   export const zh: Translations = {
@@ -87,6 +260,168 @@ export interface Translations {
     loading: "加载中…",
     noTasks: "暂无任务，点击「新建任务」开始",
     nextIn: "距下次",
+    statusSuccess: "成功",
+    statusFailed: "失败",
+    statusRunning: "运行中",
+    statusQueued: "排队中",
+    statusNeedsAttention: "需处理",
+    newTask: "新建任务",
+    editTask: "编辑任务",
+    taskName: "任务名称",
+    taskNamePlaceholder: "输入任务名称",
+    targetUrl: "目标 URL",
+    targetUrlPlaceholder: "https://example.com",
+    schedule: "调度计划",
+    noSchedule: "不自动调度",
+    cronExpression: "Cron 表达式",
+    randomSchedule: "随机调度",
+    afterCompletion: "完成后再次运行",
+    browserConfig: "浏览器配置",
+    enableBrowserConfig: "启用自定义浏览器配置",
+    provider: "驱动",
+    wsEndpoint: "WebSocket 地址",
+    proxy: "代理地址",
+    stealthMode: "隐身模式",
+    blockAds: "屏蔽广告",
+    ignoreHTTPS: "忽略 HTTPS 错误",
+    sessionTimeout: "会话超时（毫秒）",
+    workflowSteps: "工作流步骤",
+    addStep: "添加步骤",
+    saveTask: "保存任务",
+    saving: "保存中…",
+    taskCreated: "任务已创建",
+    taskUpdated: "任务已更新",
+    failedToSave: "保存失败",
+    failedToLoad: "加载失败",
+    stepsImported: "已导入步骤",
+    randomWindow: "时间窗口",
+    timesPerCycle: "每个周期内执行次数",
+    afterCompletionDesc: "分钟后",
+    editTask2: "编辑",
+    deleteTask: "删除任务",
+    confirmDelete: "确认删除",
+    confirmDeleteDesc: "此操作不可撤销，任务及其所有历史日志将被永久删除。",
+    confirmDeleteBtn: "确认删除",
+    taskNotFound: "任务未找到",
+    taskDeleted: "任务已删除",
+    failedToDelete: "删除失败",
+    enabled: "已启用",
+    disabled: "已禁用",
+    lastRun: "上次运行",
+    nextRun: "下次运行",
+    runHistory: "运行历史",
+    noLogs: "暂无运行记录",
+    viewLog: "查看日志",
+    taskConfig: "任务配置",
+    browserProvider: "浏览器驱动",
+    runTaskNow: "立即运行",
+    taskCancelled: "任务已取消",
+    failedToCancel: "取消失败",
+    updatedAgo: "刷新于",
+    runningStream: "实时日志",
+    backToTask: "返回任务",
+    executionLog: "执行日志",
+    startedAt: "开始时间",
+    duration: "耗时",
+    steps: "步骤",
+    noLogData: "暂无日志数据",
+    allTasks: "所有任务",
+    filterByTask: "按任务筛选",
+    filterByStatus: "按状态筛选",
+    allStatuses: "所有状态",
+    noLogsFound: "未找到日志",
+    task: "任务",
+    date: "时间",
+    status: "状态",
+    addCredential: "添加凭证",
+    editCredential: "编辑凭证",
+    credentialName: "凭证名称",
+    username: "用户名",
+    password: "密码",
+    totp: "TOTP 密钥（可选）",
+    totpPlaceholder: "Base32 密钥",
+    saveCredential: "保存凭证",
+    deleteCredential: "删除凭证",
+    confirmDeleteCred: "确认删除凭证",
+    confirmDeleteCredDesc: "此操作不可撤销，凭证将被永久删除。",
+    credentialSaved: "凭证已保存",
+    credentialUpdated: "凭证已更新",
+    credentialDeleted: "凭证已删除",
+    failedToSaveCred: "保存凭证失败",
+    failedToDeleteCred: "删除凭证失败",
+    noCredentials: "暂无凭证，点击「添加凭证」开始",
+    retentionSettings: "日志与截图保留策略",
+    logRetentionDays: "日志保留天数",
+    logRetentionDesc: "超过此天数的日志将在每天 03:30 自动删除。设为 0 表示永久保留。",
+    maxScreenshotStorage: "截图最大存储空间（MB）",
+    maxScreenshotDesc: "磁盘用量超过此值时，最旧的截图将被自动删除。设为 0 表示不限制。",
+    runCleanupNow: "立即清理",
+    retentionSaved: "保留策略已保存",
+    cleanupComplete: "清理完成",
+    cleanupCompleteDesc: "旧日志和截图已清除。",
+    cleanupFailed: "清理失败",
+    saveFailed: "保存失败",
+    networkError: "网络错误",
+    pollingInterval: "数据刷新间隔",
+    pollingIntervalDesc: "控制页面自动刷新的频率（对当前设备生效）。",
+    changePassword: "修改密码",
+    currentPassword: "当前密码",
+    newPassword: "新密码",
+    repeatPassword: "确认新密码",
+    passwordChanged: "密码已修改",
+    passwordChangeFailed: "密码修改失败",
+    wrongPassword: "当前密码错误",
+    passwordMismatch: "两次输入的密码不一致",
+    taskTimeout: "任务超时设置",
+    taskTimeoutDesc: "任务运行超过此时长后将被自动终止。",
+    timeoutDisabled: "不限制",
+    timeoutCustom: "自定义",
+    timeoutMinutes: "分钟",
+    captchaSettings: "验证码破解设置",
+    captchaProvider: "验证码服务商",
+    noCaptcha: "不使用",
+    captchaSaved: "验证码设置已保存",
+    aboutSystem: "系统信息",
+    version: "版本",
+    uptime: "运行时长",
+    database: "数据库",
+    dbConnected: "已连接",
+    dbError: "连接失败",
+    systemInfoFailed: "无法加载系统信息",
+    browserSettings: "浏览器连接设置",
+    testConnection: "测试连接",
+    connectionOk: "连接成功",
+    connectionFailed: "连接失败",
+    browserSettingsSaved: "浏览器设置已保存",
+    allSystemsOk: "所有服务运行正常",
+    systemsDegraded: "部分服务异常",
+    taskScheduler: "任务调度器",
+    browserService: "浏览器服务",
+    signIn: "登录",
+    enterPassword: "输入密码",
+    invalidPassword: "密码错误",
+    setupTitle: "初始化设置",
+    setupDesc: "设置管理员密码以完成初始化",
+    repeatPasswordPlaceholder: "再次输入密码",
+    setPassword: "设置密码",
+    settingUp: "初始化中…",
+    stepRecorderTitle: "操作录制",
+    startSession: "启动浏览器",
+    stopSession: "停止会话",
+    takeScreenshot: "截图",
+    copySteps: "复制步骤",
+    loadToForm: "导入到任务",
+    clearSteps: "清空步骤",
+    enterUrl: "输入目标 URL",
+    startingBrowser: "正在启动浏览器…",
+    sessionActive: "会话运行中",
+    noStepsYet: "暂无录制步骤",
+    stepsCopied: "步骤已复制到剪贴板",
+    stepsLoaded: "步骤已导入任务表单",
+    screenshotTaken: "截图已保存",
+    failedToStart: "启动浏览器会话失败",
+    pageNotFound: "404 页面不存在",
+    pageNotFoundHint: "该页面不存在或已被移除。",
   };
 
   export const en: Translations = {
@@ -129,5 +464,167 @@ export interface Translations {
     loading: "Loading…",
     noTasks: "No tasks yet — click New Mission to get started",
     nextIn: "in",
+    statusSuccess: "SUCCESS",
+    statusFailed: "FAILED",
+    statusRunning: "RUNNING",
+    statusQueued: "QUEUED",
+    statusNeedsAttention: "NEEDS ATTENTION",
+    newTask: "New Task",
+    editTask: "Edit Task",
+    taskName: "Task Name",
+    taskNamePlaceholder: "Enter task name",
+    targetUrl: "Target URL",
+    targetUrlPlaceholder: "https://example.com",
+    schedule: "Schedule",
+    noSchedule: "No schedule",
+    cronExpression: "Cron expression",
+    randomSchedule: "Random schedule",
+    afterCompletion: "Run again after completion",
+    browserConfig: "Browser Config",
+    enableBrowserConfig: "Enable custom browser config",
+    provider: "Provider",
+    wsEndpoint: "WebSocket endpoint",
+    proxy: "Proxy URL",
+    stealthMode: "Stealth mode",
+    blockAds: "Block ads",
+    ignoreHTTPS: "Ignore HTTPS errors",
+    sessionTimeout: "Session timeout (ms)",
+    workflowSteps: "Workflow Steps",
+    addStep: "Add Step",
+    saveTask: "Save Task",
+    saving: "Saving…",
+    taskCreated: "Task created",
+    taskUpdated: "Task updated",
+    failedToSave: "Failed to save",
+    failedToLoad: "Failed to load",
+    stepsImported: "steps imported",
+    randomWindow: "Time window",
+    timesPerCycle: "Times per cycle",
+    afterCompletionDesc: "minutes after completion",
+    editTask2: "Edit",
+    deleteTask: "Delete Task",
+    confirmDelete: "Confirm Delete",
+    confirmDeleteDesc: "This action cannot be undone. The task and all its logs will be permanently deleted.",
+    confirmDeleteBtn: "Delete",
+    taskNotFound: "Task not found",
+    taskDeleted: "Task deleted",
+    failedToDelete: "Failed to delete",
+    enabled: "Enabled",
+    disabled: "Disabled",
+    lastRun: "Last run",
+    nextRun: "Next run",
+    runHistory: "Run History",
+    noLogs: "No run history yet",
+    viewLog: "View log",
+    taskConfig: "Task Config",
+    browserProvider: "Browser provider",
+    runTaskNow: "Run now",
+    taskCancelled: "Task cancelled",
+    failedToCancel: "Failed to cancel",
+    updatedAgo: "Updated",
+    runningStream: "Live log",
+    backToTask: "Back to task",
+    executionLog: "Execution Log",
+    startedAt: "Started at",
+    duration: "Duration",
+    steps: "Steps",
+    noLogData: "No log data",
+    allTasks: "All tasks",
+    filterByTask: "Filter by task",
+    filterByStatus: "Filter by status",
+    allStatuses: "All statuses",
+    noLogsFound: "No logs found",
+    task: "Task",
+    date: "Date",
+    status: "Status",
+    addCredential: "Add Credential",
+    editCredential: "Edit Credential",
+    credentialName: "Name",
+    username: "Username",
+    password: "Password",
+    totp: "TOTP secret (optional)",
+    totpPlaceholder: "Base32 secret",
+    saveCredential: "Save",
+    deleteCredential: "Delete",
+    confirmDeleteCred: "Delete credential",
+    confirmDeleteCredDesc: "This action cannot be undone.",
+    credentialSaved: "Credential saved",
+    credentialUpdated: "Credential updated",
+    credentialDeleted: "Credential deleted",
+    failedToSaveCred: "Failed to save credential",
+    failedToDeleteCred: "Failed to delete credential",
+    noCredentials: "No credentials yet — click Add Credential to get started",
+    retentionSettings: "Log & Screenshot Retention",
+    logRetentionDays: "Log retention (days)",
+    logRetentionDesc: "Logs older than this are deleted each night at 03:30. Set 0 to keep forever.",
+    maxScreenshotStorage: "Max screenshot storage (MB)",
+    maxScreenshotDesc: "Oldest screenshots are removed when disk usage exceeds this. Set 0 for no limit.",
+    runCleanupNow: "Run cleanup now",
+    retentionSaved: "Retention settings saved",
+    cleanupComplete: "Cleanup complete",
+    cleanupCompleteDesc: "Old logs and screenshots have been removed.",
+    cleanupFailed: "Cleanup failed",
+    saveFailed: "Save failed",
+    networkError: "Network error",
+    pollingInterval: "Polling interval",
+    pollingIntervalDesc: "Controls how often the page auto-refreshes data (applies to this device only).",
+    changePassword: "Change Password",
+    currentPassword: "Current password",
+    newPassword: "New password",
+    repeatPassword: "Repeat new password",
+    passwordChanged: "Password changed",
+    passwordChangeFailed: "Failed to change password",
+    wrongPassword: "Current password is incorrect",
+    passwordMismatch: "Passwords do not match",
+    taskTimeout: "Task Timeout",
+    taskTimeoutDesc: "Tasks running longer than this will be automatically terminated.",
+    timeoutDisabled: "Disabled",
+    timeoutCustom: "Custom",
+    timeoutMinutes: "minutes",
+    captchaSettings: "Captcha Settings",
+    captchaProvider: "Provider",
+    noCaptcha: "None",
+    captchaSaved: "Captcha settings saved",
+    aboutSystem: "About",
+    version: "Version",
+    uptime: "Uptime",
+    database: "Database",
+    dbConnected: "connected",
+    dbError: "error",
+    systemInfoFailed: "Unable to load system information.",
+    browserSettings: "Browser Connection",
+    testConnection: "Test connection",
+    connectionOk: "Connection successful",
+    connectionFailed: "Connection failed",
+    browserSettingsSaved: "Browser settings saved",
+    allSystemsOk: "All systems operational",
+    systemsDegraded: "One or more services are degraded",
+    taskScheduler: "Task Scheduler",
+    browserService: "Browser Service",
+    signIn: "Sign in",
+    enterPassword: "Enter password",
+    invalidPassword: "Invalid password",
+    setupTitle: "Initial Setup",
+    setupDesc: "Set an admin password to get started",
+    repeatPasswordPlaceholder: "Repeat password",
+    setPassword: "Set Password",
+    settingUp: "Setting up…",
+    stepRecorderTitle: "Step Recorder",
+    startSession: "Start browser",
+    stopSession: "Stop session",
+    takeScreenshot: "Screenshot",
+    copySteps: "Copy steps",
+    loadToForm: "Load to task form",
+    clearSteps: "Clear steps",
+    enterUrl: "Enter target URL",
+    startingBrowser: "Starting browser…",
+    sessionActive: "Session active",
+    noStepsYet: "No steps recorded yet",
+    stepsCopied: "Steps copied to clipboard",
+    stepsLoaded: "Steps loaded into task form",
+    screenshotTaken: "Screenshot saved",
+    failedToStart: "Failed to start browser session",
+    pageNotFound: "404 Page Not Found",
+    pageNotFoundHint: "Did you forget to add the page to the router?",
   };
   

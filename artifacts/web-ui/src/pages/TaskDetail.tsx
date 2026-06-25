@@ -5,6 +5,7 @@ import { formatDistanceToNow, format } from "date-fns";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 
 import { useGetTask, useDeleteTask, useRunTask, useListTaskLogs, useToggleTaskEnabled, getGetTaskQueryKey, getListTasksQueryKey, getListTaskLogsQueryKey } from "@workspace/api-client-react";
+import { useLang } from "@/contexts/lang-context";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
@@ -68,6 +69,7 @@ function LogScreenshotCell({ taskId, logId }: { taskId: number; logId: number })
 }
 
 export default function TaskDetail() {
+  const { t } = useLang();
   const [match, params] = useRoute("/tasks/:id");
   const taskId = match && params?.id ? parseInt(params.id, 10) : 0;
   const [, setLocation] = useLocation();
@@ -94,7 +96,7 @@ export default function TaskDetail() {
 
   const isRunning = !paused && (rawTask?.status === "running" || isJustTriggered);
 
-  // Keep last-known task in a ref so we never briefly show "Task not found"
+  // Keep last-known task in a ref so we never briefly show t.taskNotFound
   // during background refetches triggered by stop/done events.
   const taskCacheRef = useRef<typeof rawTask>(undefined);
   if (rawTask !== undefined) taskCacheRef.current = rawTask;
@@ -256,7 +258,7 @@ export default function TaskDetail() {
           toast({ title: "Could not stop", description: err.error ?? "Unknown error", variant: "destructive" });
         }
       } catch {
-        toast({ title: "Network error", description: "Failed to reach server", variant: "destructive" });
+        toast({ title: t.networkError, description: "Failed to reach server", variant: "destructive" });
       } finally {
         setTimeout(() => setIsStopping(false), 3000);
       }
@@ -265,12 +267,12 @@ export default function TaskDetail() {
   const handleDelete = () => {
     deleteTask.mutate({ id: taskId }, {
       onSuccess: () => {
-        toast({ title: "Task deleted", description: "The automation job has been permanently removed.", variant: "success" });
+        toast({ title: t.taskDeleted, description: "The automation job has been permanently removed.", variant: "success" });
         queryClient.invalidateQueries({ queryKey: getListTasksQueryKey() });
         setLocation("/");
       },
       onError: (err) => {
-        toast({ title: "Failed to delete", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
+        toast({ title: t.failedToDelete, description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
       }
     });
   };
@@ -302,7 +304,7 @@ export default function TaskDetail() {
     const handleRun = () => {
       runTask.mutate({ id: taskId }, {
       onSuccess: () => {
-        toast({ title: "Task triggered", description: "The automation job has been queued.", variant: "success" });
+        toast({ title: t.taskTriggered, description: t.taskTriggeredDesc, variant: "success" });
         setIsJustTriggered(true);
         queryClient.invalidateQueries({ queryKey: getGetTaskQueryKey(taskId) });
         queryClient.invalidateQueries({ queryKey: getListTaskLogsQueryKey(taskId) });
@@ -347,7 +349,7 @@ export default function TaskDetail() {
         }
       }, 3000);
     } catch {
-      toast({ title: "Network error", description: "Could not reach the server.", variant: "destructive" });
+      toast({ title: t.networkError, description: "Could not reach the server.", variant: "destructive" });
       setIsDryRunning(false);
     }
   };
@@ -426,7 +428,7 @@ export default function TaskDetail() {
             <p className="text-sm text-muted-foreground font-mono mt-1">
               ID: {task.id} &bull; Created {formatDistanceToNow(new Date(task.createdAt))} ago
               {updatedAgo && (
-                <span className="ml-2 text-xs text-muted-foreground/60">· Updated {updatedAgo}</span>
+                <span className="ml-2 text-xs text-muted-foreground/60">· t.updatedAgo {updatedAgo}</span>
               )}
             </p>
           </div>

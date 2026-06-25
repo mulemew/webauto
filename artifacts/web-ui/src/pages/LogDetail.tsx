@@ -13,6 +13,7 @@ import { useTimeSince } from "@/hooks/use-time-since";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 import { usePollingInterval } from "@/hooks/use-polling-interval";
+import { useLang } from "@/contexts/lang-context";
 import { usePollPaused } from "@/contexts/poll-paused-context";
 
 // ── Per-step log viewer ───────────────────────────────────────────────────────
@@ -76,6 +77,7 @@ function MessageViewer({ message }: { message: string }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function LogDetail() {
+  const { t } = useLang();
   const [match, params] = useRoute("/tasks/:id/logs/:logId");
   const taskId = match && params?.id ? parseInt(params.id, 10) : 0;
   const logId = match && params?.logId ? parseInt(params.logId, 10) : 0;
@@ -214,7 +216,7 @@ export default function LogDetail() {
                 </DialogTrigger>
                 <DialogContent className="max-w-5xl w-full p-1 bg-zinc-950 border-zinc-800">
                   <DialogTitle className="sr-only">Execution Screenshot</DialogTitle>
-                  <img src={`${BASE}/api/tasks/${taskId}/logs/${logId}/screenshot`} alt="Execution screenshot" className="w-full h-auto object-contain max-h-[85vh]" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", '<p class="text-sm text-muted-foreground font-mono text-center py-8">截图已过期</p>'); }} />
+                  <img src={`${BASE}/api/tasks/${taskId}/logs/${logId}/screenshot`} alt={t.executionLog} className="w-full h-auto object-contain max-h-[85vh]" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", '<p class="text-sm text-muted-foreground font-mono text-center py-8">截图已过期</p>'); }} />
                 </DialogContent>
               </Dialog>
               );

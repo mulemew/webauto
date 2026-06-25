@@ -10,6 +10,9 @@ import { useState } from "react";
   import { Skeleton } from "@/components/ui/skeleton";
   import { useQuery } from "@tanstack/react-query";
   import { useListTasks } from "@workspace/api-client-react";
+  import { useLang } from "@/contexts/lang-context";
+
+  const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
   interface LogEntry {
     id: number;
@@ -40,6 +43,7 @@ import { useState } from "react";
   }
 
   export default function LogsExplorer() {
+    const { t } = useLang();
     const search = useSearch();
     const initialTaskId = new URLSearchParams(search).get("taskId") ?? "all";
     const [taskFilter, setTaskFilter] = useState<string>(initialTaskId);
@@ -60,7 +64,7 @@ import { useState } from "react";
 
     const { data, isLoading } = useQuery<LogsResponse>({
       queryKey: ["logs-explorer", taskFilter, statusFilter, triggeredByFilter, page],
-      queryFn: () => fetch(`/api/tasks/logs?${params.toString()}`).then(r => r.json()) as Promise<LogsResponse>,
+      queryFn: () => fetch(`${BASE}/api/tasks/logs?${params.toString()}`).then(r => r.json()) as Promise<LogsResponse>,
       staleTime: 30_000,
       refetchInterval: 30_000,
     });
@@ -76,8 +80,8 @@ import { useState } from "react";
         <div className="flex items-center gap-3">
           <Search className="h-5 w-5 text-muted-foreground" />
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">Logs Explorer</h1>
-            <p className="text-sm text-muted-foreground">Browse and filter execution logs across all tasks</p>
+            <h1 className="text-xl font-semibold tracking-tight">{t.logsExplorer}</h1>
+            <p className="text-sm text-muted-foreground">{t.filterByTask}</p>
           </div>
         </div>
 
@@ -91,29 +95,29 @@ import { useState } from "react";
           <CardContent>
             <div className="flex flex-wrap gap-3">
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-muted-foreground font-medium">Task</label>
+                <label className="text-xs text-muted-foreground font-medium">{t.task}</label>
                 <Select value={taskFilter} onValueChange={(v) => { setTaskFilter(v); resetPage(); }}>
                   <SelectTrigger className="w-48 h-8 text-sm">
-                    <SelectValue placeholder="All tasks" />
+                    <SelectValue placeholder={t.allTasks} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All tasks</SelectItem>
-                    {tasks.map((t) => (
-                      <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
+                    <SelectItem value="all">{t.allTasks}</SelectItem>
+                    {tasks.map((task) => (
+                      <SelectItem key={task.id} value={String(task.id)}>{task.name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-muted-foreground font-medium">Status</label>
+                <label className="text-xs text-muted-foreground font-medium">{t.status}</label>
                 <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); resetPage(); }}>
                   <SelectTrigger className="w-36 h-8 text-sm">
-                    <SelectValue placeholder="All" />
+                    <SelectValue placeholder={t.allStatuses} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All</SelectItem>
-                    <SelectItem value="success">Success</SelectItem>
-                    <SelectItem value="failed">Failed</SelectItem>
+                    <SelectItem value="all">{t.allStatuses}</SelectItem>
+                    <SelectItem value="success">{t.statusSuccess}</SelectItem>
+                    <SelectItem value="failed">{t.statusFailed}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -121,10 +125,10 @@ import { useState } from "react";
                 <label className="text-xs text-muted-foreground font-medium">Trigger</label>
                 <Select value={triggeredByFilter} onValueChange={(v) => { setTriggeredByFilter(v); resetPage(); }}>
                   <SelectTrigger className="w-36 h-8 text-sm">
-                    <SelectValue placeholder="All" />
+                    <SelectValue placeholder={t.allStatuses} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="all">{t.allStatuses}</SelectItem>
                     <SelectItem value="manual">Manual</SelectItem>
                     <SelectItem value="cron">Scheduled</SelectItem>
                     <SelectItem value="dry_run">Dry Run</SelectItem>
@@ -139,13 +143,13 @@ import { useState } from "react";
         <Card className="border-border">
           <CardHeader className="pb-3 flex flex-row items-center justify-between">
             <CardTitle className="text-sm">
-              {isLoading ? "Loading…" : `${total.toLocaleString()} result${total !== 1 ? "s" : ""}`}
+              {isLoading ? t.loading : `${total.toLocaleString()} 条结果`}
             </CardTitle>
             <div className="flex items-center gap-2">
               <Button variant="ghost" size="icon" className="h-7 w-7" disabled={page === 0} onClick={() => setPage(p => Math.max(0, p - 1))}>
                 <ChevronLeft className="h-4 w-4" />
               </Button>
-              <span className="text-xs text-muted-foreground">Page {page + 1} / {totalPages}</span>
+              <span className="text-xs text-muted-foreground">{page + 1} / {totalPages}</span>
               <Button variant="ghost" size="icon" className="h-7 w-7" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>
                 <ChevronRight className="h-4 w-4" />
               </Button>
@@ -159,7 +163,7 @@ import { useState } from "react";
             ) : logs.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
                 <AlertTriangle className="h-8 w-8 opacity-40" />
-                <p className="text-sm">No logs found for the selected filters</p>
+                <p className="text-sm">{t.noLogsFound}</p>
               </div>
             ) : (
               <div className="divide-y divide-border">
@@ -179,7 +183,7 @@ import { useState } from "react";
                         <p className="text-xs text-muted-foreground truncate mt-0.5">{log.message.split("\n")[0]}</p>
                       </div>
                       <div className="shrink-0 text-right">
-                        <p className="text-xs text-muted-foreground">{format(new Date(log.runAt), "MMM d, HH:mm")}</p>
+                        <p className="text-xs text-muted-foreground">{format(new Date(log.runAt), "MM-dd HH:mm")}</p>
                         {log.durationMs != null && (
                           <p className="text-xs text-muted-foreground flex items-center gap-1 justify-end">
                             <Clock className="h-3 w-3" />{(log.durationMs / 1000).toFixed(1)}s

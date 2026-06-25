@@ -19,6 +19,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { usePollingInterval, POLLING_OPTIONS, type PollingIntervalMs } from "@/hooks/use-polling-interval";
+import { useLang } from "@/contexts/lang-context";
 import { useToast } from "@/hooks/use-toast";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -32,6 +33,7 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
   }
 
   function RetentionSection() {
+    const { t } = useLang();
     const [config, setConfig] = useState<RetentionConfig | null>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -68,12 +70,12 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
           }),
         });
         if (res.ok) {
-          toast({ title: "Retention settings saved", variant: "success" });
+          toast({ title: t.retentionSaved, variant: "success" });
         } else {
-          toast({ title: "Save failed", variant: "destructive" });
+          toast({ title: t.saveFailed, variant: "destructive" });
         }
       } catch {
-        toast({ title: "Network error", variant: "destructive" });
+        toast({ title: t.networkError, variant: "destructive" });
       } finally {
         setSaving(false);
       }
@@ -87,9 +89,9 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
           credentials: "same-origin",
         });
         if (res.ok) {
-          toast({ title: "Cleanup complete", description: "Old logs and screenshots have been removed.", variant: "success" });
+          toast({ title: t.cleanupComplete, description: t.cleanupCompleteDesc, variant: "success" });
         } else {
-          toast({ title: "Cleanup failed", variant: "destructive" });
+          toast({ title: t.cleanupFailed, variant: "destructive" });
         }
       } catch {
         toast({ title: "Network error", variant: "destructive" });
@@ -101,12 +103,12 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
     return (
       <div className="space-y-4">
         {loading ? (
-          <div className="flex items-center gap-2 text-muted-foreground text-sm"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
+          <div className="flex items-center gap-2 text-muted-foreground text-sm"><Loader2 className="h-4 w-4 animate-spin" /> {t.loading}</div>
         ) : (
           <form onSubmit={handleSave} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="logDays">Log retention (days)</Label>
+                <Label htmlFor="logDays">{t.logRetentionDays}</Label>
                 <Input
                   id="logDays"
                   type="number"
@@ -115,10 +117,10 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
                   onChange={(e) => setLogDays(e.target.value)}
                   placeholder="7"
                 />
-                <p className="text-xs text-muted-foreground">Logs older than this are deleted each night at 03:30. Set 0 to keep forever.</p>
+                <p className="text-xs text-muted-foreground">{t.logRetentionDesc}</p>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="maxMb">Max screenshot storage (MB)</Label>
+                <Label htmlFor="maxMb">{t.maxScreenshotStorage}</Label>
                 <Input
                   id="maxMb"
                   type="number"
@@ -127,15 +129,15 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
                   onChange={(e) => setMaxMb(e.target.value)}
                   placeholder="1024"
                 />
-                <p className="text-xs text-muted-foreground">Oldest screenshots are removed when disk usage exceeds this. Set 0 for no limit.</p>
+                <p className="text-xs text-muted-foreground">{t.maxScreenshotDesc}</p>
               </div>
             </div>
             <div className="flex gap-2 flex-wrap">
               <Button type="submit" disabled={saving} size="sm">
-                {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving…</> : "Save"}
+                {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />{t.saving}</> : t.saveTask}
               </Button>
               <Button type="button" variant="outline" size="sm" disabled={cleaning} onClick={handleCleanupNow}>
-                {cleaning ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Running…</> : "Run cleanup now"}
+                {cleaning ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />{t.loading}</> : t.runCleanupNow}
               </Button>
             </div>
           </form>
@@ -166,6 +168,7 @@ function formatUptime(seconds: number): string {
 }
 
 function AboutSection() {
+  const { t } = useLang();
   const [info, setInfo] = useState<SystemInfo | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -180,7 +183,7 @@ function AboutSection() {
     ? [
         {
           icon: <Info className="h-4 w-4 text-muted-foreground" />,
-          label: "Version",
+          label: t.version,
           value: <span className="font-mono text-sm">{info.version}</span>,
         },
         {
@@ -195,19 +198,19 @@ function AboutSection() {
         },
         {
           icon: <RefreshCw className="h-4 w-4 text-muted-foreground" />,
-          label: "Uptime",
+          label: t.uptime,
           value: <span className="font-mono text-sm">{formatUptime(info.uptimeSeconds)}</span>,
         },
         {
           icon: <Database className="h-4 w-4 text-muted-foreground" />,
-          label: "Database",
+          label: t.database,
           value: info.dbStatus === "connected" ? (
             <span className="flex items-center gap-1.5 text-green-600 dark:text-green-400 font-mono text-sm">
-              <Wifi className="h-3 w-3" /> connected
+              <Wifi className="h-3 w-3" /> {t.dbConnected}
             </span>
           ) : (
             <span className="flex items-center gap-1.5 text-destructive font-mono text-sm">
-              <WifiOff className="h-3 w-3" /> error
+              <WifiOff className="h-3 w-3" /> {t.dbError}
             </span>
           ),
         },
@@ -228,7 +231,7 @@ function AboutSection() {
   }
 
   if (!info) {
-    return <p className="text-sm text-muted-foreground">Unable to load system information.</p>;
+    return <p className="text-sm text-muted-foreground">{t.systemInfoFailed}</p>;
   }
 
   return (
@@ -320,14 +323,15 @@ const PROVIDER_OPTIONS: Array<{
 // ── Task Timeout Section ──────────────────────────────────────────────────────
 
 const TIMEOUT_OPTIONS: Array<{ minutes: number; label: string; sublabel: string }> = [
-  { minutes: 0,  label: "Disabled", sublabel: "Tasks run until they finish or crash" },
-  { minutes: 5,  label: "5 min",    sublabel: "Short tasks / quick logins" },
-  { minutes: 10, label: "10 min",   sublabel: "Recommended for most workflows" },
-  { minutes: 30, label: "30 min",   sublabel: "Default — long-running workflows" },
-  { minutes: 60, label: "60 min",   sublabel: "Very slow sites or complex pipelines" },
+  { minutes: 0,  label: t.timeoutDisabled, sublabel: "Tasks run until they finish or crash" },
+  { minutes: 5,  label: "5 min", sublabel: "Short tasks / quick logins" },
+  { minutes: 10, label: "10 min", sublabel: "Recommended for most workflows" },
+  { minutes: 30, label: "30 min", sublabel: "Default — long-running workflows" },
+  { minutes: 60, label: "60 min", sublabel: "Very slow sites or complex pipelines" },
 ];
 
 function TaskTimeoutSection() {
+  const { t } = useLang();
   const { toast } = useToast();
   const [timeoutMinutes, setTimeoutMinutes] = useState<number>(30);
   const [custom, setCustom] = useState("");
@@ -351,7 +355,7 @@ function TaskTimeoutSection() {
   const handleSave = async () => {
     const value = isCustomSelected ? Number(custom) : timeoutMinutes;
     if (!Number.isFinite(value) || value < 0) {
-      toast({ title: "Invalid value", description: "Enter a positive number of minutes, or 0 to disable.", variant: "destructive" });
+      toast({ title: t.saveFailed, description: "Enter a positive number of minutes, or 0 to disable.", variant: "destructive" });
       return;
     }
     setSaving(true);
@@ -364,11 +368,11 @@ function TaskTimeoutSection() {
       });
       const data = await res.json() as { ok?: boolean; error?: string };
       if (!res.ok || !data.ok) {
-        toast({ title: "Save failed", description: data.error, variant: "destructive" });
+        toast({ title: t.saveFailed, description: data.error, variant: "destructive" });
         return;
       }
       setTimeoutMinutes(Math.floor(value));
-      toast({ title: "Task timeout saved", variant: "success" });
+      toast({ title: t.taskTimeout + " " + t.retentionSaved.split("已")[1], variant: "success" });
     } catch {
       toast({ title: "Network error", variant: "destructive" });
     } finally {
@@ -421,7 +425,7 @@ function TaskTimeoutSection() {
         <div className={`flex-shrink-0 h-3 w-3 rounded-full border-2 ${
           isCustomSelected ? "border-primary bg-primary" : "border-muted-foreground"
         }`} />
-        <span className="font-mono font-semibold text-sm shrink-0">Custom</span>
+        <span className="font-mono font-semibold text-sm shrink-0">{t.timeoutCustom}</span>
         <Input
           type="number"
           min={1}
@@ -435,11 +439,11 @@ function TaskTimeoutSection() {
           className="h-7 w-24 font-mono text-sm px-2"
           onClick={(e) => e.stopPropagation()}
         />
-        <span className="text-xs text-muted-foreground">minutes</span>
+        <span className="text-xs text-muted-foreground">{t.timeoutMinutes}</span>
       </div>
 
       <Button onClick={handleSave} disabled={saving} className="mt-1">
-        {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving…</> : "Save"}
+        {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />{t.saving}</> : t.saveTask}
       </Button>
     </div>
   );
@@ -498,6 +502,7 @@ const CAPTCHA_PROVIDER_OPTIONS: Array<{
 ];
 
 function CaptchaSection() {
+  const { t } = useLang();
   const { toast } = useToast();
   const [config, setConfig] = useState<CaptchaConfig>({
     provider: "none",
@@ -527,10 +532,10 @@ function CaptchaSection() {
       });
       const data = await res.json() as { ok?: boolean; error?: string };
       if (!res.ok || !data.ok) {
-        toast({ title: "Save failed", description: data.error, variant: "destructive" });
+        toast({ title: t.saveFailed, description: data.error, variant: "destructive" });
         return;
       }
-      toast({ title: "Captcha settings saved", variant: "success" });
+      toast({ title: t.captchaSaved, variant: "success" });
     } catch {
       toast({ title: "Network error", variant: "destructive" });
     } finally {
@@ -556,7 +561,7 @@ function CaptchaSection() {
     <div className="space-y-5">
       {/* Provider selection */}
       <div className="space-y-2">
-        <Label>Provider</Label>
+        <Label>{t.captchaProvider}</Label>
         <div className="space-y-2">
           {/* None option */}
           <button
@@ -572,8 +577,8 @@ function CaptchaSection() {
               config.provider === "none" ? "border-primary bg-primary" : "border-muted-foreground"
             }`} />
             <div>
-              <p className="font-mono font-semibold text-sm">Disabled</p>
-              <p className="text-xs mt-0.5 opacity-70">No captcha solving. Tasks that hit a captcha will pause and require manual intervention.</p>
+              <p className="font-mono font-semibold text-sm">{t.noCaptcha}</p>
+              <p className="text-xs mt-0.5 opacity-70">无验证码破解服务。遇到验证码时任务将暂停，需人工处理。</p>
             </div>
           </button>
 
@@ -647,6 +652,7 @@ interface ConcurrencyState {
 }
 
 function ConcurrencySection() {
+  const { t } = useLang();
   const { toast } = useToast();
   const [config, setConfig] = useState<ConcurrencyState>({ maxConcurrent: 3, maxQueueDepth: 10, queueTimeoutSecs: 300, running: 0, queued: 0 });
   const [loading, setLoading] = useState(true);
@@ -678,9 +684,9 @@ function ConcurrencySection() {
         body: JSON.stringify({ maxConcurrent: config.maxConcurrent, maxQueueDepth: config.maxQueueDepth, queueTimeoutSecs: config.queueTimeoutSecs }),
       });
       const data = await res.json() as { ok?: boolean; error?: string };
-      if (!res.ok || !data.ok) { toast({ title: 'Save failed', description: data.error, variant: 'destructive' }); return; }
-      isDirty.current = false; toast({ title: 'Concurrency settings saved', variant: 'success' });
-    } catch { toast({ title: 'Network error', variant: 'destructive' }); }
+      if (!res.ok || !data.ok) { toast({ title: t.saveFailed, description: data.error, variant: 'destructive' }); return; }
+      isDirty.current = false; toast({ title: t.retentionSaved, variant: 'success' });
+    } catch { toast({ title: t.networkError, variant: 'destructive' }); }
     finally { setSaving(false); }
   };
 
@@ -691,12 +697,12 @@ function ConcurrencySection() {
       {/* Live status badge */}
       <div className='flex items-center gap-3 flex-wrap'>
         <div className='flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm'>
-          <span className='text-muted-foreground text-xs'>Running</span>
+          <span className='text-muted-foreground text-xs'>{t.runningStream}</span>
           <span className={`font-mono font-bold text-base ${config.running > 0 ? 'text-primary' : 'text-foreground'}`}>{config.running}</span>
           <span className='text-muted-foreground text-xs'>/ {config.maxConcurrent}</span>
         </div>
         <div className='flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm'>
-          <span className='text-muted-foreground text-xs'>Queued</span>
+          <span className='text-muted-foreground text-xs'>{t.statusQueued}</span>
           <span className={`font-mono font-bold text-base ${config.queued > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'}`}>{config.queued}</span>
           {config.maxQueueDepth > 0 && <span className='text-muted-foreground text-xs'>/ {config.maxQueueDepth}</span>}
         </div>
@@ -705,7 +711,7 @@ function ConcurrencySection() {
 
       {/* Max concurrent */}
       <div className='space-y-2'>
-        <Label htmlFor='maxConcurrent'>Max concurrent sessions</Label>
+        <Label htmlFor='maxConcurrent'>最大并发会话数</Label>
         <div className='flex items-center gap-3'>
           <Input id='maxConcurrent' type='number' min={1} max={50}
             value={config.maxConcurrent}
@@ -722,7 +728,7 @@ function ConcurrencySection() {
 
       {/* Max queue depth */}
       <div className='space-y-2'>
-        <Label htmlFor='maxQueueDepth'>Max queue depth</Label>
+        <Label htmlFor='maxQueueDepth'>最大队列深度</Label>
         <div className='flex items-center gap-3'>
           <Input id='maxQueueDepth' type='number' min={0} max={200}
             value={config.maxQueueDepth}
@@ -738,7 +744,7 @@ function ConcurrencySection() {
 
       {/* Queue timeout */}
       <div className='space-y-2'>
-        <Label htmlFor='queueTimeout'>Queue wait timeout</Label>
+        <Label htmlFor='queueTimeout'>队列等待超时</Label>
         <div className='flex items-center gap-3'>
           <Input id='queueTimeout' type='number' min={0}
             value={config.queueTimeoutSecs}
@@ -753,7 +759,7 @@ function ConcurrencySection() {
       </div>
 
       <Button onClick={handleSave} disabled={saving}>
-        {saving ? <><Loader2 className='mr-2 h-4 w-4 animate-spin' />Saving…</> : 'Save'}
+        {saving ? <><Loader2 className='mr-2 h-4 w-4 animate-spin' />{t.saving}</> : t.saveTask}
       </Button>
     </div>
   );
@@ -762,6 +768,7 @@ function ConcurrencySection() {
 // ── Browser Connection Section ────────────────────────────────────────────────
 
 function BrowserProviderSection() {
+  const { t } = useLang();
   const { toast } = useToast();
   const [config, setConfig] = useState<BrowserConfig>({
       provider: "playwright",
@@ -806,7 +813,7 @@ function BrowserProviderSection() {
 
   const handleSave = async () => {
     if (config.provider !== "seleniumbase" && config.provider !== "local" && !config.wsEndpoint.trim()) {
-      toast({ title: "WebSocket URL required", variant: "destructive" });
+      toast({ title: t.wsEndpoint, variant: "destructive" });
       return;
     }
     setSaving(true);
@@ -819,10 +826,10 @@ function BrowserProviderSection() {
       });
       const data = await res.json() as { ok?: boolean; error?: string };
       if (!res.ok || !data.ok) {
-        toast({ title: "Save failed", description: data.error, variant: "destructive" });
+        toast({ title: t.saveFailed, description: data.error, variant: "destructive" });
         return;
       }
-      toast({ title: "Browser connection saved", variant: "success" });
+      toast({ title: t.browserSettingsSaved, variant: "success" });
       setTestResult(null);
     } catch {
       toast({ title: "Network error", variant: "destructive" });
@@ -833,7 +840,7 @@ function BrowserProviderSection() {
 
   const handleTest = async () => {
     if (!config.wsEndpoint.trim()) {
-      toast({ title: "WebSocket URL required before testing", variant: "destructive" });
+      toast({ title: t.wsEndpoint, variant: "destructive" });
       return;
     }
     if (!testUrl.trim()) {
@@ -852,7 +859,7 @@ function BrowserProviderSection() {
       const data = await res.json() as TestResult;
       setTestResult(data);
     } catch {
-      setTestResult({ ok: false, message: "Network error — could not reach the API server" });
+      setTestResult({ ok: false, message: t.networkError });
     } finally {
       setTesting(false);
     }
@@ -1122,13 +1129,13 @@ function BrowserProviderSection() {
       {/* Actions */}
       <div className="flex gap-3 flex-wrap">
         <Button onClick={handleSave} disabled={saving || testing}>
-          {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving…</> : "Save"}
+          {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />{t.saving}</> : t.saveTask}
         </Button>
         <Button variant="outline" onClick={handleTest} disabled={saving || testing}>
           {testing ? (
-            <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Testing connection…</>
+            <><Loader2 className="mr-2 h-4 w-4 animate-spin" />{t.loading}</>
           ) : (
-            <><Wifi className="mr-2 h-4 w-4" />Test connection</>
+            <><Wifi className="mr-2 h-4 w-4" />{t.testConnection}</>
           )}
         </Button>
       </div>
@@ -1148,7 +1155,7 @@ function BrowserProviderSection() {
             )}
             <div className="min-w-0 flex-1">
               <p className={`text-sm font-medium ${testResult.ok ? "text-green-800 dark:text-green-200" : "text-destructive"}`}>
-                {testResult.ok ? "Connection successful" : "Connection failed"}
+                {testResult.ok ? t.connectionOk : t.connectionFailed}
               </p>
               <p className={`text-xs mt-0.5 font-mono break-all ${testResult.ok ? "text-green-700 dark:text-green-300" : "text-destructive/80"}`}>
                 {testResult.message}
@@ -1181,6 +1188,7 @@ function BrowserProviderSection() {
 // ── Main Settings Page ────────────────────────────────────────────────────────
 
 export default function Settings() {
+  const { t } = useLang();
   const [pollingInterval, setPollingInterval] = usePollingInterval();
   const { toast } = useToast();
 
@@ -1195,8 +1203,8 @@ export default function Settings() {
   const handleSelect = (ms: PollingIntervalMs) => {
     setPollingInterval(ms);
     toast({
-      title: "Setting saved",
-      description: `Live polling interval set to ${ms / 1000}s.`,
+      title: t.pollingInterval,
+      description: `${ms / 1000}s`,
       variant: "success",
     });
   };
@@ -1207,11 +1215,11 @@ export default function Settings() {
     setPasswordSuccess(false);
 
     if (newPassword !== confirmPassword) {
-      setPasswordError("New passwords do not match");
+      setPasswordError(t.passwordMismatch);
       return;
     }
     if (newPassword.length < 8) {
-      setPasswordError("New password must be at least 8 characters");
+      setPasswordError(t.passwordMismatch);
       return;
     }
 
@@ -1230,7 +1238,7 @@ export default function Settings() {
       });
       const data = await res.json() as { error?: string };
       if (!res.ok) {
-        setPasswordError(data.error ?? "Failed to change password");
+        setPasswordError(data.error ?? t.passwordChangeFailed);
         return;
       }
       setPasswordSuccess(true);
@@ -1238,7 +1246,7 @@ export default function Settings() {
       setNewPassword("");
       setConfirmPassword("");
     } catch {
-      setPasswordError("Network error. Please try again.");
+      setPasswordError(t.networkError);
     } finally {
       setPasswordLoading(false);
     }
@@ -1251,7 +1259,7 @@ export default function Settings() {
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-amber-500" />
-              Sign out of all sessions?
+              {t.changePassword}
             </AlertDialogTitle>
             <AlertDialogDescription className="space-y-2">
               <span className="block">
@@ -1260,9 +1268,9 @@ export default function Settings() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t.cancel}</AlertDialogCancel>
             <AlertDialogAction onClick={submitPasswordChange}>
-              Yes, change password
+              {t.passwordChanged}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1270,7 +1278,7 @@ export default function Settings() {
 
       <div className="space-y-8 animate-in fade-in duration-500 max-w-2xl">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">Settings</h1>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">{t.settings}</h1>
           <p className="text-muted-foreground mt-1 font-mono text-sm">Platform configuration and preferences</p>
         </div>
 
@@ -1278,7 +1286,7 @@ export default function Settings() {
           <Card className="border-border shadow-sm">
             <CardHeader className="bg-muted/20 border-b border-border pb-4">
               <CardTitle className="text-base flex items-center gap-2">
-                <Cpu className="h-4 w-4 text-primary" /> Concurrency
+                <Cpu className="h-4 w-4 text-primary" /> 并发控制
               </CardTitle>
               <CardDescription className="text-xs mt-1">
                 Control how many browser automation tasks run simultaneously. Set{" "}
@@ -1297,7 +1305,7 @@ export default function Settings() {
         <Card className="border-border shadow-sm">
           <CardHeader className="bg-muted/20 border-b border-border pb-4">
             <CardTitle className="text-base flex items-center gap-2">
-              <Globe className="h-4 w-4 text-primary" /> Browser Connection
+              <Globe className="h-4 w-4 text-primary" /> {t.browserSettings}
             </CardTitle>
             <CardDescription className="text-xs mt-1">
               Configure the headless browser backend. Both providers connect via CDP
@@ -1316,7 +1324,7 @@ export default function Settings() {
         <Card className="border-border shadow-sm">
           <CardHeader className="bg-muted/20 border-b border-border pb-4">
             <CardTitle className="text-base flex items-center gap-2">
-              <Timer className="h-4 w-4 text-primary" /> Task Timeout
+              <Timer className="h-4 w-4 text-primary" /> {t.taskTimeout}
             </CardTitle>
             <CardDescription className="text-xs mt-1">
               Maximum time a task may run before it is automatically killed and marked as failed.
@@ -1333,7 +1341,7 @@ export default function Settings() {
         <Card className="border-border shadow-sm">
           <CardHeader className="bg-muted/20 border-b border-border pb-4">
             <CardTitle className="text-base flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-primary" /> Captcha Solving
+              <ShieldCheck className="h-4 w-4 text-primary" /> {t.captchaSettings}
             </CardTitle>
             <CardDescription className="text-xs mt-1">
               Configure a captcha solving service. When a task encounters a captcha, the solver
@@ -1487,7 +1495,7 @@ export default function Settings() {
         <Card className="border-border shadow-sm">
           <CardHeader className="bg-muted/20 border-b border-border pb-4">
             <CardTitle className="text-base flex items-center gap-2">
-              <Info className="h-4 w-4 text-primary" /> About
+              <Info className="h-4 w-4 text-primary" /> {t.aboutSystem}
             </CardTitle>
             <CardDescription className="text-xs mt-1">
               Runtime environment details for this AutoOps instance.

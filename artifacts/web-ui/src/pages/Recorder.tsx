@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from "react";
 import { useLocation } from "wouter";
+import { useLang } from "@/contexts/lang-context";
 import {
   MousePointer2, Type, Navigation, Keyboard, ArrowDown, ArrowUp,
   Clock, Camera, Undo2, StopCircle, Play, Copy, CheckCheck,
@@ -61,7 +62,7 @@ function stepLabel(step: WorkflowStep): string {
     case "scroll":     return `Scroll ${(step.y ?? 0) > 0 ? "down" : "up"} ${Math.abs(step.y ?? 0)}px`;
     case "hover":      return `Hover ${step.selector}`;
     case "wait":       return `Wait ${step.ms}ms`;
-    case "screenshot": return "Take screenshot";
+    case "screenshot": return t.takeScreenshot;
     case "keypress":   return `Press ${step.key}`;
     case "select":     return `Select "${step.value}" in ${step.selector}`;
     case "waitFor":    return `Wait for ${step.selector}`;
@@ -82,6 +83,7 @@ function stepBadgeVariant(step: WorkflowStep): "default" | "secondary" | "outlin
 // ── Recorder page ─────────────────────────────────────────────────────────────
 
 export default function Recorder() {
+  const { t } = useLang();
   const { toast } = useToast();
   const [, navigate] = useLocation();
 
@@ -110,7 +112,7 @@ export default function Recorder() {
 
   const startSession = async () => {
     if (!startUrl.trim() || startUrl === "https://") {
-      setStartError("Please enter a valid URL");
+      setStartError("请输入有效的 URL");
       return;
     }
     setStartError(null);
@@ -124,7 +126,7 @@ export default function Recorder() {
       });
       const data = await res.json() as SessionState & { error?: string };
       if (!res.ok || data.error) {
-        setStartError(data.error ?? "Failed to start browser session");
+        setStartError(data.error ?? t.failedToStart);
         return;
       }
       setSession(data);
@@ -153,7 +155,7 @@ export default function Recorder() {
         setSession((s) => s ? { ...s, ...data } : s);
       }
     } catch {
-      setActionError("Network error");
+      setActionError(t.networkError);
     } finally {
       setBusy(false);
     }
@@ -198,7 +200,7 @@ export default function Recorder() {
     await navigator.clipboard.writeText(json).catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-    toast({ title: "Steps copied to clipboard", variant: "success" });
+    toast({ title: t.stepsCopied, variant: "success" });
   };
 
   // ── Use steps in task form ──────────────────────────────────────────────────
@@ -207,7 +209,7 @@ export default function Recorder() {
     if (!session?.steps.length) return;
     sessionStorage.setItem("recorder_steps", JSON.stringify(session.steps));
     navigate("/tasks/new");
-    toast({ title: "Steps loaded into task form", variant: "success" });
+    toast({ title: t.stepsLoaded, variant: "success" });
   };
 
   // ── Render: Start form ──────────────────────────────────────────────────────
