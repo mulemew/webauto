@@ -80,6 +80,7 @@ function getStepMeta(t: Translations): Record<StepType, { label: string; icon: R
   keypress:        { label: t.stepKeyPress,         icon: <Command className="h-3.5 w-3.5" />,        description: t.stepKeyPressDesc },
   condition:       { label: t.stepCondition,         icon: <GitBranch className="h-3.5 w-3.5" />,     description: t.stepConditionDesc },
 };
+}
 
 const PRESET_KEYS = [
   { label: "Enter", key: "Enter" },
