@@ -108,4 +108,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 # provider can launch Chromium in headed mode. Headed mode is critical for
 # bypassing Cloudflare Turnstile — headless is detectable. Also enables
 # xdotool for OS-level mouse clicks that CF cannot distinguish from human input.
-CMD ["sh", "-c", "Xvfb :99 -screen 0 1920x1080x24 -ac &>/dev/null & export DISPLAY=:99 && sleep 0.5 && fluxbox &>/dev/null & sleep 0.5 && exec node --enable-source-maps dist/index.mjs"]
+CMD ["sh", "-c", "rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null; Xvfb :99 -screen 0 1920x1080x24 -ac &>/dev/null & export DISPLAY=:99 && sleep 0.5 && fluxbox &>/dev/null & sleep 0.5 && exec node --enable-source-maps dist/index.mjs"]
