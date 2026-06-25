@@ -7,7 +7,7 @@ import { useState, FormEvent } from "react";
 
   const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-  export default function LoginPage({ onLogin }: { onLogin: () => void }) {
+  export default function LoginPage({ onLogin }: { onLogin: (password: string) => Promise<void> }) {
     const { t } = useLang();
     const [password, setPassword] = useState("");
     const [error, setError] = useState("");
@@ -25,7 +25,7 @@ import { useState, FormEvent } from "react";
           body: JSON.stringify({ password }),
         });
         if (res.ok) {
-          onLogin();
+          onLogin(password);
         } else {
           setError(t.invalidPassword);
         }
