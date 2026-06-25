@@ -623,6 +623,7 @@ export default function Home() {
 }
 
 function StatCard({ title, value, icon, isLoading, highlight, active, activeRing, onClick }: { title: string, value?: number, icon: React.ReactNode, isLoading: boolean, highlight?: boolean, active?: boolean, activeRing?: string, onClick?: () => void }) {
+  const { t } = useLang();
   return (
     <Card
       className={`shadow-sm transition-all duration-150 ${highlight ? "border-amber-500/40 bg-amber-500/5" : "border-border"} ${onClick ? "cursor-pointer select-none" : ""} ${active ? `ring-2 ${activeRing ?? "ring-amber-500/60"}` : ""}`}
