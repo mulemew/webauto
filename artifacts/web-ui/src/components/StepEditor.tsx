@@ -661,6 +661,8 @@ function StepCard({
 }
 
 export function StepEditor({ steps, onChange, taskTargetUrl = "", savedCredentials = [] }: StepEditorProps) {
+  const { t } = useLang();
+  const STEP_META = getStepMeta(t);
   const add = (type: StepType = "navigate") => onChange([...steps, defaultStep(type, taskTargetUrl)]);
   const update = (index: number, step: WorkflowStep) => { const next = [...steps]; next[index] = step; onChange(next); };
   const remove = (index: number) => onChange(steps.filter((_, i) => i !== index));
