@@ -673,6 +673,15 @@ class PlaywrightLocalProvider implements BrowserProvider {
         // Window size for Xvfb headed mode
         "--window-size=1920,1080",
         "--window-position=0,0",
+          // ── GPU / rendering — critical for CF Turnstile canvas timing ─────
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--use-gl=egl",
+          "--use-angle=swiftshader",
+          "--enable-webgl",
+          "--ignore-gpu-blocklist",
+          "--enable-gpu-rasterization",
+          "--enable-zero-copy",
       ];
       if (this.config.proxyUrl) {
         launchArgs.push(`--proxy-server=${this.config.proxyUrl}`);
