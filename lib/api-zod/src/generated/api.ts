@@ -7,105 +7,8 @@
  */
 import * as zod from "zod";
 
-const LoginStepSchema = zod.object({
-  type: zod.enum(["login"]),
-  loginMethod: zod
-    .enum(["form", "github", "google"])
-    .describe("form=standard username/password form, github=GitHub OAuth, google=Google OAuth"),
-  loginUrl: zod.string().describe("URL of the login page to navigate to"),
-  credentialSource: zod.enum(["saved", "inline"]).optional().describe("Whether to use a saved credential or inline values"),
-  credentialId: zod.number().int().optional().describe("ID of a saved credential from the vault"),
-  inlineUsername: zod.string().optional(),
-  inlinePassword: zod.string().optional(),
-  inlineTotp: zod.string().optional(),
-});
-
-
-const TaskBrowserConfigSchema = zod.object({
-  provider: zod.enum(["playwright", "puppeteer", "local", "seleniumbase"]).optional(),
-  wsEndpoint: zod.string().nullish(),
-  proxyUrl: zod.string().nullish(),
-  stealth: zod.boolean().nullish(),
-  blockAds: zod.boolean().nullish(),
-  ignoreHTTPS: zod.boolean().nullish(),
-  sessionTimeoutMs: zod.number().int().nullish(),
-});
-
-const WorkflowStepSchema = zod.union([
-  zod.object({
-    type: zod.enum(["navigate"]),
-    url: zod.string(),
-  }),
-  zod.object({
-    type: zod.enum(["click"]),
-    selector: zod.string(),
-    selectorType: zod
-      .enum(["text", "css", "xpath"])
-      .describe("text=match by visible text\/aria-label, css=CSS selector, xpath=XPath expression"),
-  }),
-  zod.object({
-    type: zod.enum(["fill"]),
-    selector: zod.string().describe("CSS selector for the input field"),
-    value: zod.string(),
-  }),
-  zod.object({
-    type: zod.enum(["wait"]),
-    ms: zod.number().describe("Milliseconds to wait"),
-  }),
-  zod.object({
-    type: zod.enum(["waitFor"]),
-    selector: zod.string().describe("CSS selector or text string to wait for"),
-    selectorType: zod.enum(["css", "text"]).optional().describe("css=CSS selector (default); text=wait for text content to appear on the page"),
-    timeout: zod.number().optional().describe("Max wait time in ms (default 30000)"),
-  }),
-  zod.object({
-    type: zod.enum(["screenshot"]),
-  }),
-  zod.object({
-    type: zod.enum(["select"]),
-    selector: zod.string().describe("CSS selector for the <select> element"),
-    value: zod.string().describe("The option value to select"),
-  }),
-  zod.object({
-    type: zod.enum(["hover"]),
-    selector: zod.string(),
-    selectorType: zod.enum(["css", "xpath"]),
-  }),
-  zod.object({
-    type: zod.enum(["scroll"]),
-    selector: zod.string().optional().describe("CSS selector to scroll to (optional)"),
-    x: zod.number().optional(),
-    y: zod.number().optional(),
-  }),
-  zod.object({
-    type: zod.enum(["keypress"]),
-    key: zod.string().describe("Key name (e.g. Enter, Escape, Tab, ArrowDown)"),
-  }),
-  zod.object({
-    type: zod.enum(["switchToNewPage"]),
-    timeout: zod.number().optional().describe("Max ms to wait for a new page/tab to open (default 30000)"),
-  }),
-  zod.object({
-    type: zod.enum(["condition"]),
-    conditionType: zod.enum(["text_contains", "text_not_contains", "element_visible", "element_not_visible", "url_contains"]),
-    conditionValue: zod.string().optional().describe("Value to check against (e.g. text to look for, URL substring)"),
-    conditionSelector: zod.string().optional().describe("CSS selector for element-based conditions"),
-    thenAction: zod.object({
-      type: zod.enum(["click", "fill", "navigate", "wait", "keypress", "screenshot", "scroll"]),
-      selector: zod.string().optional(),
-      selectorType: zod.enum(["text", "css", "xpath"]).optional(),
-      url: zod.string().optional(),
-      value: zod.string().optional(),
-      ms: zod.number().optional(),
-      key: zod.string().optional(),
-      x: zod.number().optional(),
-      y: zod.number().optional(),
-    }).optional().describe("Action to execute when the condition is true"),
-  }),
-  LoginStepSchema,
-]);
-
 /**
+ * Returns server health status
  * @summary Health check
  */
 export const HealthCheckResponse = zod.object({
@@ -113,6 +16,7 @@ export const HealthCheckResponse = zod.object({
 });
 
 /**
+ * Probes the configured remote browser (Browserless/CDP) WebSocket endpoint
  * @summary Browser service health check
  */
 export const BrowserHealthCheckResponse = zod.object({
@@ -121,26 +25,250 @@ export const BrowserHealthCheckResponse = zod.object({
 });
 
 /**
+ * Checks database connectivity
+ * @summary Database health check
+ */
+export const DbHealthCheckResponse = zod.object({
+  status: zod.string(),
+});
+
+/**
+ * Returns status of the cron scheduler
+ * @summary Scheduler health check
+ */
+export const SchedulerHealthCheckResponse = zod.object({
+  status: zod.string(),
+});
+
+/**
  * @summary List all tasks
  */
+export const listTasksResponseEnabledDefault = true;
+
 export const ListTasksResponseItem = zod.object({
   id: zod.number(),
   name: zod.string(),
   targetUrl: zod.string(),
-  loginType: zod.string().nullish(),
-  steps: zod.array(WorkflowStepSchema).nullish(),
+  loginType: zod
+    .string()
+    .nullish()
+    .describe("Deprecated — use a login step in the steps array instead"),
+  steps: zod
+    .array(
+      zod.union([
+        zod.object({
+          type: zod.enum(["navigate"]),
+          url: zod.string(),
+        }),
+        zod.object({
+          type: zod.enum(["click"]),
+          selector: zod.string(),
+          selectorType: zod
+            .enum(["text", "css", "xpath"])
+            .describe(
+              "text=match by visible text\/aria-label, css=CSS selector, xpath=XPath expression",
+            ),
+        }),
+        zod.object({
+          type: zod.enum(["fill"]),
+          selector: zod.string().describe("CSS selector for the input field"),
+          value: zod.string(),
+        }),
+        zod.object({
+          type: zod.enum(["wait"]),
+          ms: zod.number().describe("Milliseconds to wait"),
+        }),
+        zod.object({
+          type: zod.enum(["waitFor"]),
+          selector: zod
+            .string()
+            .describe(
+              "CSS selector or text string to wait for (depends on selectorType)",
+            ),
+          selectorType: zod
+            .enum(["css", "text"])
+            .optional()
+            .describe(
+              "css = CSS selector (default); text = wait for text content to appear on the page",
+            ),
+          timeout: zod
+            .number()
+            .optional()
+            .describe("Max wait time in ms (default 30000)"),
+        }),
+        zod.object({
+          type: zod.enum(["screenshot"]),
+        }),
+        zod.object({
+          type: zod.enum(["dismissPopups"]),
+        }),
+        zod.object({
+          type: zod.enum(["select"]),
+          selector: zod
+            .string()
+            .describe("CSS selector for the <select> element"),
+          value: zod.string().describe("The option value to select"),
+        }),
+        zod.object({
+          type: zod.enum(["hover"]),
+          selector: zod.string(),
+          selectorType: zod.enum(["css", "xpath"]),
+        }),
+        zod.object({
+          type: zod.enum(["scroll"]),
+          selector: zod
+            .string()
+            .optional()
+            .describe(
+              "CSS selector to scroll to (optional — scrolls page if omitted)",
+            ),
+          x: zod.number().optional(),
+          y: zod.number().optional(),
+        }),
+        zod.object({
+          type: zod.enum(["keypress"]),
+          key: zod
+            .string()
+            .describe("Key name (e.g. Enter, Escape, Tab, ArrowDown)"),
+        }),
+        zod.object({
+          type: zod.enum(["switchToNewPage"]),
+          timeout: zod
+            .number()
+            .optional()
+            .describe(
+              "Max ms to wait for a new page\/tab to open (default 30000)",
+            ),
+        }),
+        zod
+          .object({
+            type: zod.enum(["condition"]),
+            conditionType: zod.enum([
+              "text_contains",
+              "text_not_contains",
+              "element_visible",
+              "element_not_visible",
+              "url_contains",
+            ]),
+            conditionValue: zod
+              .string()
+              .optional()
+              .describe(
+                "Value to check against (e.g. text to look for, URL substring)",
+              ),
+            conditionSelector: zod
+              .string()
+              .optional()
+              .describe("CSS selector for element-based conditions"),
+            thenAction: zod
+              .object({
+                type: zod.enum([
+                  "click",
+                  "fill",
+                  "navigate",
+                  "wait",
+                  "keypress",
+                  "screenshot",
+                  "scroll",
+                ]),
+                selector: zod.string().optional(),
+                selectorType: zod.enum(["text", "css", "xpath"]).optional(),
+                url: zod.string().optional(),
+                value: zod.string().optional(),
+                ms: zod.number().optional(),
+                key: zod.string().optional(),
+                x: zod.number().optional(),
+                y: zod.number().optional(),
+              })
+              .optional()
+              .describe("Action to execute when the condition is true"),
+          })
+          .describe("Conditionally execute an action based on page state"),
+        zod
+          .object({
+            type: zod.enum(["login"]),
+            loginMethod: zod
+              .enum(["form", "github", "google"])
+              .describe(
+                "form=standard username\/password form, github=GitHub OAuth, google=Google OAuth",
+              ),
+            loginUrl: zod
+              .string()
+              .describe("URL of the login page to navigate to"),
+            successSelector: zod
+              .string()
+              .optional()
+              .describe(
+                "Optional CSS selector for an element that only appears after a successful login (e.g. an avatar, a logout button). When provided, its presence is treated as a definitive success signal and overrides the default form-visibility heuristic.\n",
+              ),
+            cookieMode: zod
+              .boolean()
+              .optional()
+              .describe("When true, persist th\n"),
+            sessionKey: zod.string().optional(),
+            successText: zod.string().optional(),
+          })
+          .describe(
+            "Authenticate via form login, GitHub OAuth, or Google OAuth using the task's stored credentials. All subsequent steps share the same browser session, so post-login steps run as the authenticated user.\n",
+          ),
+      ]),
+    )
+    .nullish(),
   cronExpression: zod.string().nullish(),
-  enabled: zod.boolean(),
   status: zod
-    .enum(["idle", "running", "queued", "success", "failed", "needs_attention"])
+    .enum(["idle", "running", "success", "failed", "needs_attention"])
     .describe(
       "idle=not yet run, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution",
     ),
   lastRunAt: zod.coerce.date().nullish(),
-  nextRunAt: zod.coerce.date().nullish().describe("Next scheduled run for @after_completion: tasks"),
+  nextRunAt: zod.coerce
+    .date()
+    .nullish()
+    .describe(
+      "Next scheduled run for @after_completion: tasks (auto-set after each run finishes)",
+    ),
   createdAt: zod.coerce.date(),
   updatedAt: zod.coerce.date(),
-  browserConfig: zod.union([TaskBrowserConfigSchema, zod.null()]).optional(),
+  enabled: zod
+    .boolean()
+    .default(listTasksResponseEnabledDefault)
+    .describe("Whether this task is active (disabled tasks skip cron runs)"),
+  browserConfig: zod
+    .union([
+      zod
+        .object({
+          provider: zod
+            .enum(["playwright", "puppeteer", "local", "seleniumbase"])
+            .optional()
+            .describe(
+              "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nlocal=local Chromium launch, seleniumbase=CF Proxy bypass mode\n",
+            ),
+          wsEndpoint: zod
+            .string()
+            .nullish()
+            .describe("WebSocket endpoint override for this task"),
+          proxyUrl: zod
+            .string()
+            .nullish()
+            .describe(
+              'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
+            ),
+          proxyType: zod
+            .enum(["http", "socks5", "warp", "vless", "vm"])
+            .nullish(),
+          headed: zod.boolean().nullish(),
+          stealth: zod.boolean().nullish(),
+          blockAds: zod.boolean().nullish(),
+          ignoreHTTPS: zod.boolean().nullish(),
+          sessionTimeoutMs: zod.number().nullish(),
+        })
+        .describe(
+          "Per-task browser backend override. When set, these values are merged over the global browser config (Settings page), letting each task use a different execution backend.\n",
+        ),
+      zod.null(),
+    ])
+    .optional()
+    .describe("Per-task browser backend override. Null uses global settings."),
 });
 export const ListTasksResponse = zod.array(ListTasksResponseItem);
 
@@ -158,9 +286,204 @@ export const CreateTaskBody = zod.object({
     })
     .optional()
     .describe("Optional — only needed if the task has a login step"),
-  steps: zod.array(WorkflowStepSchema).nullish(),
+  steps: zod
+    .array(
+      zod.union([
+        zod.object({
+          type: zod.enum(["navigate"]),
+          url: zod.string(),
+        }),
+        zod.object({
+          type: zod.enum(["click"]),
+          selector: zod.string(),
+          selectorType: zod
+            .enum(["text", "css", "xpath"])
+            .describe(
+              "text=match by visible text\/aria-label, css=CSS selector, xpath=XPath expression",
+            ),
+        }),
+        zod.object({
+          type: zod.enum(["fill"]),
+          selector: zod.string().describe("CSS selector for the input field"),
+          value: zod.string(),
+        }),
+        zod.object({
+          type: zod.enum(["wait"]),
+          ms: zod.number().describe("Milliseconds to wait"),
+        }),
+        zod.object({
+          type: zod.enum(["waitFor"]),
+          selector: zod
+            .string()
+            .describe(
+              "CSS selector or text string to wait for (depends on selectorType)",
+            ),
+          selectorType: zod
+            .enum(["css", "text"])
+            .optional()
+            .describe(
+              "css = CSS selector (default); text = wait for text content to appear on the page",
+            ),
+          timeout: zod
+            .number()
+            .optional()
+            .describe("Max wait time in ms (default 30000)"),
+        }),
+        zod.object({
+          type: zod.enum(["screenshot"]),
+        }),
+        zod.object({
+          type: zod.enum(["dismissPopups"]),
+        }),
+        zod.object({
+          type: zod.enum(["select"]),
+          selector: zod
+            .string()
+            .describe("CSS selector for the <select> element"),
+          value: zod.string().describe("The option value to select"),
+        }),
+        zod.object({
+          type: zod.enum(["hover"]),
+          selector: zod.string(),
+          selectorType: zod.enum(["css", "xpath"]),
+        }),
+        zod.object({
+          type: zod.enum(["scroll"]),
+          selector: zod
+            .string()
+            .optional()
+            .describe(
+              "CSS selector to scroll to (optional — scrolls page if omitted)",
+            ),
+          x: zod.number().optional(),
+          y: zod.number().optional(),
+        }),
+        zod.object({
+          type: zod.enum(["keypress"]),
+          key: zod
+            .string()
+            .describe("Key name (e.g. Enter, Escape, Tab, ArrowDown)"),
+        }),
+        zod.object({
+          type: zod.enum(["switchToNewPage"]),
+          timeout: zod
+            .number()
+            .optional()
+            .describe(
+              "Max ms to wait for a new page\/tab to open (default 30000)",
+            ),
+        }),
+        zod
+          .object({
+            type: zod.enum(["condition"]),
+            conditionType: zod.enum([
+              "text_contains",
+              "text_not_contains",
+              "element_visible",
+              "element_not_visible",
+              "url_contains",
+            ]),
+            conditionValue: zod
+              .string()
+              .optional()
+              .describe(
+                "Value to check against (e.g. text to look for, URL substring)",
+              ),
+            conditionSelector: zod
+              .string()
+              .optional()
+              .describe("CSS selector for element-based conditions"),
+            thenAction: zod
+              .object({
+                type: zod.enum([
+                  "click",
+                  "fill",
+                  "navigate",
+                  "wait",
+                  "keypress",
+                  "screenshot",
+                  "scroll",
+                ]),
+                selector: zod.string().optional(),
+                selectorType: zod.enum(["text", "css", "xpath"]).optional(),
+                url: zod.string().optional(),
+                value: zod.string().optional(),
+                ms: zod.number().optional(),
+                key: zod.string().optional(),
+                x: zod.number().optional(),
+                y: zod.number().optional(),
+              })
+              .optional()
+              .describe("Action to execute when the condition is true"),
+          })
+          .describe("Conditionally execute an action based on page state"),
+        zod
+          .object({
+            type: zod.enum(["login"]),
+            loginMethod: zod
+              .enum(["form", "github", "google"])
+              .describe(
+                "form=standard username\/password form, github=GitHub OAuth, google=Google OAuth",
+              ),
+            loginUrl: zod
+              .string()
+              .describe("URL of the login page to navigate to"),
+            successSelector: zod
+              .string()
+              .optional()
+              .describe(
+                "Optional CSS selector for an element that only appears after a successful login (e.g. an avatar, a logout button). When provided, its presence is treated as a definitive success signal and overrides the default form-visibility heuristic.\n",
+              ),
+            cookieMode: zod
+              .boolean()
+              .optional()
+              .describe("When true, persist th\n"),
+            sessionKey: zod.string().optional(),
+            successText: zod.string().optional(),
+          })
+          .describe(
+            "Authenticate via form login, GitHub OAuth, or Google OAuth using the task's stored credentials. All subsequent steps share the same browser session, so post-login steps run as the authenticated user.\n",
+          ),
+      ]),
+    )
+    .nullish(),
   cronExpression: zod.string().nullish(),
-  browserConfig: zod.union([TaskBrowserConfigSchema, zod.null()]).optional().describe("Per-task browser backend override. Null uses global settings."),
+  browserConfig: zod
+    .union([
+      zod
+        .object({
+          provider: zod
+            .enum(["playwright", "puppeteer", "local", "seleniumbase"])
+            .optional()
+            .describe(
+              "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nlocal=local Chromium launch, seleniumbase=CF Proxy bypass mode\n",
+            ),
+          wsEndpoint: zod
+            .string()
+            .nullish()
+            .describe("WebSocket endpoint override for this task"),
+          proxyUrl: zod
+            .string()
+            .nullish()
+            .describe(
+              'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
+            ),
+          proxyType: zod
+            .enum(["http", "socks5", "warp", "vless", "vm"])
+            .nullish(),
+          headed: zod.boolean().nullish(),
+          stealth: zod.boolean().nullish(),
+          blockAds: zod.boolean().nullish(),
+          ignoreHTTPS: zod.boolean().nullish(),
+          sessionTimeoutMs: zod.number().nullish(),
+        })
+        .describe(
+          "Per-task browser backend override. When set, these values are merged over the global browser config (Settings page), letting each task use a different execution backend.\n",
+        ),
+      zod.null(),
+    ])
+    .optional()
+    .describe("Per-task browser backend override. Null uses global settings."),
 });
 
 /**
@@ -170,25 +493,235 @@ export const GetTaskParams = zod.object({
   id: zod.coerce.number(),
 });
 
+export const getTaskResponseOneEnabledDefault = true;
+
 export const GetTaskResponse = zod
   .object({
     id: zod.number(),
     name: zod.string(),
     targetUrl: zod.string(),
-    loginType: zod.string().nullish(),
-    steps: zod.array(WorkflowStepSchema).nullish(),
+    loginType: zod
+      .string()
+      .nullish()
+      .describe("Deprecated — use a login step in the steps array instead"),
+    steps: zod
+      .array(
+        zod.union([
+          zod.object({
+            type: zod.enum(["navigate"]),
+            url: zod.string(),
+          }),
+          zod.object({
+            type: zod.enum(["click"]),
+            selector: zod.string(),
+            selectorType: zod
+              .enum(["text", "css", "xpath"])
+              .describe(
+                "text=match by visible text\/aria-label, css=CSS selector, xpath=XPath expression",
+              ),
+          }),
+          zod.object({
+            type: zod.enum(["fill"]),
+            selector: zod.string().describe("CSS selector for the input field"),
+            value: zod.string(),
+          }),
+          zod.object({
+            type: zod.enum(["wait"]),
+            ms: zod.number().describe("Milliseconds to wait"),
+          }),
+          zod.object({
+            type: zod.enum(["waitFor"]),
+            selector: zod
+              .string()
+              .describe(
+                "CSS selector or text string to wait for (depends on selectorType)",
+              ),
+            selectorType: zod
+              .enum(["css", "text"])
+              .optional()
+              .describe(
+                "css = CSS selector (default); text = wait for text content to appear on the page",
+              ),
+            timeout: zod
+              .number()
+              .optional()
+              .describe("Max wait time in ms (default 30000)"),
+          }),
+          zod.object({
+            type: zod.enum(["screenshot"]),
+          }),
+          zod.object({
+            type: zod.enum(["dismissPopups"]),
+          }),
+          zod.object({
+            type: zod.enum(["select"]),
+            selector: zod
+              .string()
+              .describe("CSS selector for the <select> element"),
+            value: zod.string().describe("The option value to select"),
+          }),
+          zod.object({
+            type: zod.enum(["hover"]),
+            selector: zod.string(),
+            selectorType: zod.enum(["css", "xpath"]),
+          }),
+          zod.object({
+            type: zod.enum(["scroll"]),
+            selector: zod
+              .string()
+              .optional()
+              .describe(
+                "CSS selector to scroll to (optional — scrolls page if omitted)",
+              ),
+            x: zod.number().optional(),
+            y: zod.number().optional(),
+          }),
+          zod.object({
+            type: zod.enum(["keypress"]),
+            key: zod
+              .string()
+              .describe("Key name (e.g. Enter, Escape, Tab, ArrowDown)"),
+          }),
+          zod.object({
+            type: zod.enum(["switchToNewPage"]),
+            timeout: zod
+              .number()
+              .optional()
+              .describe(
+                "Max ms to wait for a new page\/tab to open (default 30000)",
+              ),
+          }),
+          zod
+            .object({
+              type: zod.enum(["condition"]),
+              conditionType: zod.enum([
+                "text_contains",
+                "text_not_contains",
+                "element_visible",
+                "element_not_visible",
+                "url_contains",
+              ]),
+              conditionValue: zod
+                .string()
+                .optional()
+                .describe(
+                  "Value to check against (e.g. text to look for, URL substring)",
+                ),
+              conditionSelector: zod
+                .string()
+                .optional()
+                .describe("CSS selector for element-based conditions"),
+              thenAction: zod
+                .object({
+                  type: zod.enum([
+                    "click",
+                    "fill",
+                    "navigate",
+                    "wait",
+                    "keypress",
+                    "screenshot",
+                    "scroll",
+                  ]),
+                  selector: zod.string().optional(),
+                  selectorType: zod.enum(["text", "css", "xpath"]).optional(),
+                  url: zod.string().optional(),
+                  value: zod.string().optional(),
+                  ms: zod.number().optional(),
+                  key: zod.string().optional(),
+                  x: zod.number().optional(),
+                  y: zod.number().optional(),
+                })
+                .optional()
+                .describe("Action to execute when the condition is true"),
+            })
+            .describe("Conditionally execute an action based on page state"),
+          zod
+            .object({
+              type: zod.enum(["login"]),
+              loginMethod: zod
+                .enum(["form", "github", "google"])
+                .describe(
+                  "form=standard username\/password form, github=GitHub OAuth, google=Google OAuth",
+                ),
+              loginUrl: zod
+                .string()
+                .describe("URL of the login page to navigate to"),
+              successSelector: zod
+                .string()
+                .optional()
+                .describe(
+                  "Optional CSS selector for an element that only appears after a successful login (e.g. an avatar, a logout button). When provided, its presence is treated as a definitive success signal and overrides the default form-visibility heuristic.\n",
+                ),
+              cookieMode: zod
+                .boolean()
+                .optional()
+                .describe("When true, persist th\n"),
+              sessionKey: zod.string().optional(),
+              successText: zod.string().optional(),
+            })
+            .describe(
+              "Authenticate via form login, GitHub OAuth, or Google OAuth using the task's stored credentials. All subsequent steps share the same browser session, so post-login steps run as the authenticated user.\n",
+            ),
+        ]),
+      )
+      .nullish(),
     cronExpression: zod.string().nullish(),
-    enabled: zod.boolean(),
     status: zod
-      .enum(["idle", "running", "queued", "success", "failed", "needs_attention"])
+      .enum(["idle", "running", "success", "failed", "needs_attention"])
       .describe(
         "idle=not yet run, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution",
       ),
     lastRunAt: zod.coerce.date().nullish(),
-    nextRunAt: zod.coerce.date().nullish().describe("Next scheduled run for @after_completion: tasks"),
+    nextRunAt: zod.coerce
+      .date()
+      .nullish()
+      .describe(
+        "Next scheduled run for @after_completion: tasks (auto-set after each run finishes)",
+      ),
     createdAt: zod.coerce.date(),
     updatedAt: zod.coerce.date(),
-    browserConfig: zod.union([TaskBrowserConfigSchema, zod.null()]).optional(),
+    enabled: zod
+      .boolean()
+      .default(getTaskResponseOneEnabledDefault)
+      .describe("Whether this task is active (disabled tasks skip cron runs)"),
+    browserConfig: zod
+      .union([
+        zod
+          .object({
+            provider: zod
+              .enum(["playwright", "puppeteer", "local", "seleniumbase"])
+              .optional()
+              .describe(
+                "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nlocal=local Chromium launch, seleniumbase=CF Proxy bypass mode\n",
+              ),
+            wsEndpoint: zod
+              .string()
+              .nullish()
+              .describe("WebSocket endpoint override for this task"),
+            proxyUrl: zod
+              .string()
+              .nullish()
+              .describe(
+                'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
+              ),
+            proxyType: zod
+              .enum(["http", "socks5", "warp", "vless", "vm"])
+              .nullish(),
+            headed: zod.boolean().nullish(),
+            stealth: zod.boolean().nullish(),
+            blockAds: zod.boolean().nullish(),
+            ignoreHTTPS: zod.boolean().nullish(),
+            sessionTimeoutMs: zod.number().nullish(),
+          })
+          .describe(
+            "Per-task browser backend override. When set, these values are merged over the global browser config (Settings page), letting each task use a different execution backend.\n",
+          ),
+        zod.null(),
+      ])
+      .optional()
+      .describe(
+        "Per-task browser backend override. Null uses global settings.",
+      ),
   })
   .and(
     zod.object({
@@ -221,29 +754,448 @@ export const UpdateTaskBody = zod.object({
       zod.null(),
     ])
     .optional(),
-  steps: zod.array(WorkflowStepSchema).nullish(),
+  steps: zod
+    .array(
+      zod.union([
+        zod.object({
+          type: zod.enum(["navigate"]),
+          url: zod.string(),
+        }),
+        zod.object({
+          type: zod.enum(["click"]),
+          selector: zod.string(),
+          selectorType: zod
+            .enum(["text", "css", "xpath"])
+            .describe(
+              "text=match by visible text\/aria-label, css=CSS selector, xpath=XPath expression",
+            ),
+        }),
+        zod.object({
+          type: zod.enum(["fill"]),
+          selector: zod.string().describe("CSS selector for the input field"),
+          value: zod.string(),
+        }),
+        zod.object({
+          type: zod.enum(["wait"]),
+          ms: zod.number().describe("Milliseconds to wait"),
+        }),
+        zod.object({
+          type: zod.enum(["waitFor"]),
+          selector: zod
+            .string()
+            .describe(
+              "CSS selector or text string to wait for (depends on selectorType)",
+            ),
+          selectorType: zod
+            .enum(["css", "text"])
+            .optional()
+            .describe(
+              "css = CSS selector (default); text = wait for text content to appear on the page",
+            ),
+          timeout: zod
+            .number()
+            .optional()
+            .describe("Max wait time in ms (default 30000)"),
+        }),
+        zod.object({
+          type: zod.enum(["screenshot"]),
+        }),
+        zod.object({
+          type: zod.enum(["dismissPopups"]),
+        }),
+        zod.object({
+          type: zod.enum(["select"]),
+          selector: zod
+            .string()
+            .describe("CSS selector for the <select> element"),
+          value: zod.string().describe("The option value to select"),
+        }),
+        zod.object({
+          type: zod.enum(["hover"]),
+          selector: zod.string(),
+          selectorType: zod.enum(["css", "xpath"]),
+        }),
+        zod.object({
+          type: zod.enum(["scroll"]),
+          selector: zod
+            .string()
+            .optional()
+            .describe(
+              "CSS selector to scroll to (optional — scrolls page if omitted)",
+            ),
+          x: zod.number().optional(),
+          y: zod.number().optional(),
+        }),
+        zod.object({
+          type: zod.enum(["keypress"]),
+          key: zod
+            .string()
+            .describe("Key name (e.g. Enter, Escape, Tab, ArrowDown)"),
+        }),
+        zod.object({
+          type: zod.enum(["switchToNewPage"]),
+          timeout: zod
+            .number()
+            .optional()
+            .describe(
+              "Max ms to wait for a new page\/tab to open (default 30000)",
+            ),
+        }),
+        zod
+          .object({
+            type: zod.enum(["condition"]),
+            conditionType: zod.enum([
+              "text_contains",
+              "text_not_contains",
+              "element_visible",
+              "element_not_visible",
+              "url_contains",
+            ]),
+            conditionValue: zod
+              .string()
+              .optional()
+              .describe(
+                "Value to check against (e.g. text to look for, URL substring)",
+              ),
+            conditionSelector: zod
+              .string()
+              .optional()
+              .describe("CSS selector for element-based conditions"),
+            thenAction: zod
+              .object({
+                type: zod.enum([
+                  "click",
+                  "fill",
+                  "navigate",
+                  "wait",
+                  "keypress",
+                  "screenshot",
+                  "scroll",
+                ]),
+                selector: zod.string().optional(),
+                selectorType: zod.enum(["text", "css", "xpath"]).optional(),
+                url: zod.string().optional(),
+                value: zod.string().optional(),
+                ms: zod.number().optional(),
+                key: zod.string().optional(),
+                x: zod.number().optional(),
+                y: zod.number().optional(),
+              })
+              .optional()
+              .describe("Action to execute when the condition is true"),
+          })
+          .describe("Conditionally execute an action based on page state"),
+        zod
+          .object({
+            type: zod.enum(["login"]),
+            loginMethod: zod
+              .enum(["form", "github", "google"])
+              .describe(
+                "form=standard username\/password form, github=GitHub OAuth, google=Google OAuth",
+              ),
+            loginUrl: zod
+              .string()
+              .describe("URL of the login page to navigate to"),
+            successSelector: zod
+              .string()
+              .optional()
+              .describe(
+                "Optional CSS selector for an element that only appears after a successful login (e.g. an avatar, a logout button). When provided, its presence is treated as a definitive success signal and overrides the default form-visibility heuristic.\n",
+              ),
+            cookieMode: zod
+              .boolean()
+              .optional()
+              .describe("When true, persist th\n"),
+            sessionKey: zod.string().optional(),
+            successText: zod.string().optional(),
+          })
+          .describe(
+            "Authenticate via form login, GitHub OAuth, or Google OAuth using the task's stored credentials. All subsequent steps share the same browser session, so post-login steps run as the authenticated user.\n",
+          ),
+      ]),
+    )
+    .nullish(),
   cronExpression: zod.string().nullish(),
-  browserConfig: zod.union([TaskBrowserConfigSchema, zod.null()]).optional().describe("Per-task browser backend override. Null uses global settings."),
+  browserConfig: zod
+    .union([
+      zod
+        .object({
+          provider: zod
+            .enum(["playwright", "puppeteer", "local", "seleniumbase"])
+            .optional()
+            .describe(
+              "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nlocal=local Chromium launch, seleniumbase=CF Proxy bypass mode\n",
+            ),
+          wsEndpoint: zod
+            .string()
+            .nullish()
+            .describe("WebSocket endpoint override for this task"),
+          proxyUrl: zod
+            .string()
+            .nullish()
+            .describe(
+              'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
+            ),
+          proxyType: zod
+            .enum(["http", "socks5", "warp", "vless", "vm"])
+            .nullish(),
+          headed: zod.boolean().nullish(),
+          stealth: zod.boolean().nullish(),
+          blockAds: zod.boolean().nullish(),
+          ignoreHTTPS: zod.boolean().nullish(),
+          sessionTimeoutMs: zod.number().nullish(),
+        })
+        .describe(
+          "Per-task browser backend override. When set, these values are merged over the global browser config (Settings page), letting each task use a different execution backend.\n",
+        ),
+      zod.null(),
+    ])
+    .optional()
+    .describe("Per-task browser backend override. Null uses global settings."),
 });
+
+export const updateTaskResponseEnabledDefault = true;
 
 export const UpdateTaskResponse = zod.object({
   id: zod.number(),
   name: zod.string(),
   targetUrl: zod.string(),
-  loginType: zod.string().nullish(),
-  steps: zod.array(WorkflowStepSchema).nullish(),
+  loginType: zod
+    .string()
+    .nullish()
+    .describe("Deprecated — use a login step in the steps array instead"),
+  steps: zod
+    .array(
+      zod.union([
+        zod.object({
+          type: zod.enum(["navigate"]),
+          url: zod.string(),
+        }),
+        zod.object({
+          type: zod.enum(["click"]),
+          selector: zod.string(),
+          selectorType: zod
+            .enum(["text", "css", "xpath"])
+            .describe(
+              "text=match by visible text\/aria-label, css=CSS selector, xpath=XPath expression",
+            ),
+        }),
+        zod.object({
+          type: zod.enum(["fill"]),
+          selector: zod.string().describe("CSS selector for the input field"),
+          value: zod.string(),
+        }),
+        zod.object({
+          type: zod.enum(["wait"]),
+          ms: zod.number().describe("Milliseconds to wait"),
+        }),
+        zod.object({
+          type: zod.enum(["waitFor"]),
+          selector: zod
+            .string()
+            .describe(
+              "CSS selector or text string to wait for (depends on selectorType)",
+            ),
+          selectorType: zod
+            .enum(["css", "text"])
+            .optional()
+            .describe(
+              "css = CSS selector (default); text = wait for text content to appear on the page",
+            ),
+          timeout: zod
+            .number()
+            .optional()
+            .describe("Max wait time in ms (default 30000)"),
+        }),
+        zod.object({
+          type: zod.enum(["screenshot"]),
+        }),
+        zod.object({
+          type: zod.enum(["dismissPopups"]),
+        }),
+        zod.object({
+          type: zod.enum(["select"]),
+          selector: zod
+            .string()
+            .describe("CSS selector for the <select> element"),
+          value: zod.string().describe("The option value to select"),
+        }),
+        zod.object({
+          type: zod.enum(["hover"]),
+          selector: zod.string(),
+          selectorType: zod.enum(["css", "xpath"]),
+        }),
+        zod.object({
+          type: zod.enum(["scroll"]),
+          selector: zod
+            .string()
+            .optional()
+            .describe(
+              "CSS selector to scroll to (optional — scrolls page if omitted)",
+            ),
+          x: zod.number().optional(),
+          y: zod.number().optional(),
+        }),
+        zod.object({
+          type: zod.enum(["keypress"]),
+          key: zod
+            .string()
+            .describe("Key name (e.g. Enter, Escape, Tab, ArrowDown)"),
+        }),
+        zod.object({
+          type: zod.enum(["switchToNewPage"]),
+          timeout: zod
+            .number()
+            .optional()
+            .describe(
+              "Max ms to wait for a new page\/tab to open (default 30000)",
+            ),
+        }),
+        zod
+          .object({
+            type: zod.enum(["condition"]),
+            conditionType: zod.enum([
+              "text_contains",
+              "text_not_contains",
+              "element_visible",
+              "element_not_visible",
+              "url_contains",
+            ]),
+            conditionValue: zod
+              .string()
+              .optional()
+              .describe(
+                "Value to check against (e.g. text to look for, URL substring)",
+              ),
+            conditionSelector: zod
+              .string()
+              .optional()
+              .describe("CSS selector for element-based conditions"),
+            thenAction: zod
+              .object({
+                type: zod.enum([
+                  "click",
+                  "fill",
+                  "navigate",
+                  "wait",
+                  "keypress",
+                  "screenshot",
+                  "scroll",
+                ]),
+                selector: zod.string().optional(),
+                selectorType: zod.enum(["text", "css", "xpath"]).optional(),
+                url: zod.string().optional(),
+                value: zod.string().optional(),
+                ms: zod.number().optional(),
+                key: zod.string().optional(),
+                x: zod.number().optional(),
+                y: zod.number().optional(),
+              })
+              .optional()
+              .describe("Action to execute when the condition is true"),
+          })
+          .describe("Conditionally execute an action based on page state"),
+        zod
+          .object({
+            type: zod.enum(["login"]),
+            loginMethod: zod
+              .enum(["form", "github", "google"])
+              .describe(
+                "form=standard username\/password form, github=GitHub OAuth, google=Google OAuth",
+              ),
+            loginUrl: zod
+              .string()
+              .describe("URL of the login page to navigate to"),
+            successSelector: zod
+              .string()
+              .optional()
+              .describe(
+                "Optional CSS selector for an element that only appears after a successful login (e.g. an avatar, a logout button). When provided, its presence is treated as a definitive success signal and overrides the default form-visibility heuristic.\n",
+              ),
+            cookieMode: zod
+              .boolean()
+              .optional()
+              .describe("When true, persist th\n"),
+            sessionKey: zod.string().optional(),
+            successText: zod.string().optional(),
+          })
+          .describe(
+            "Authenticate via form login, GitHub OAuth, or Google OAuth using the task's stored credentials. All subsequent steps share the same browser session, so post-login steps run as the authenticated user.\n",
+          ),
+      ]),
+    )
+    .nullish(),
   cronExpression: zod.string().nullish(),
-  enabled: zod.boolean(),
   status: zod
     .enum(["idle", "running", "success", "failed", "needs_attention"])
     .describe(
       "idle=not yet run, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution",
     ),
   lastRunAt: zod.coerce.date().nullish(),
-  nextRunAt: zod.coerce.date().nullish().describe("Next scheduled run for @after_completion: tasks"),
+  nextRunAt: zod.coerce
+    .date()
+    .nullish()
+    .describe(
+      "Next scheduled run for @after_completion: tasks (auto-set after each run finishes)",
+    ),
   createdAt: zod.coerce.date(),
   updatedAt: zod.coerce.date(),
-  browserConfig: zod.union([TaskBrowserConfigSchema, zod.null()]).optional(),
+  enabled: zod
+    .boolean()
+    .default(updateTaskResponseEnabledDefault)
+    .describe("Whether this task is active (disabled tasks skip cron runs)"),
+  browserConfig: zod
+    .union([
+      zod
+        .object({
+          provider: zod
+            .enum(["playwright", "puppeteer", "local", "seleniumbase"])
+            .optional()
+            .describe(
+              "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nlocal=local Chromium launch, seleniumbase=CF Proxy bypass mode\n",
+            ),
+          wsEndpoint: zod
+            .string()
+            .nullish()
+            .describe("WebSocket endpoint override for this task"),
+          proxyUrl: zod
+            .string()
+            .nullish()
+            .describe(
+              'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
+            ),
+          proxyType: zod
+            .enum(["http", "socks5", "warp", "vless", "vm"])
+            .nullish(),
+          headed: zod.boolean().nullish(),
+          stealth: zod.boolean().nullish(),
+          blockAds: zod.boolean().nullish(),
+          ignoreHTTPS: zod.boolean().nullish(),
+          sessionTimeoutMs: zod.number().nullish(),
+        })
+        .describe(
+          "Per-task browser backend override. When set, these values are merged over the global browser config (Settings page), letting each task use a different execution backend.\n",
+        ),
+      zod.null(),
+    ])
+    .optional()
+    .describe("Per-task browser backend override. Null uses global settings."),
+});
+
+/**
+ * @summary Enable or disable a task
+ */
+export const ToggleTaskEnabledParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const ToggleTaskEnabledBody = zod.object({
+  enabled: zod.boolean(),
+});
+
+export const ToggleTaskEnabledResponse = zod.object({
+  ok: zod.boolean().optional(),
+  enabled: zod.boolean().optional(),
 });
 
 /**
@@ -278,13 +1230,6 @@ export const ListTaskLogsResponseItem = zod.object({
     .describe("Whether a screenshot is available for this log entry"),
   durationMs: zod.number().nullish(),
   createdAt: zod.coerce.date(),
-  stepLogs: zod.array(zod.object({
-    stepIndex: zod.number(),
-    type: zod.string(),
-    success: zod.boolean(),
-    message: zod.string(),
-    screenshotPath: zod.string().nullish(),
-  })).nullish(),
 });
 export const ListTaskLogsResponse = zod.array(ListTaskLogsResponseItem);
 
@@ -306,15 +1251,14 @@ export const GetTaskLogResponse = zod.object({
     .boolean()
     .describe("Whether a screenshot is available for this log entry"),
   durationMs: zod.number().nullish(),
-  triggeredBy: zod.string().nullish(),
-  stepLogs: zod.array(zod.object({
-    stepIndex: zod.number(),
-    type: zod.string(),
-    success: zod.boolean(),
-    message: zod.string(),
-    screenshotPath: zod.string().nullish(),
-  })).nullish(),
   createdAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Stream live task execution events via Server-Sent Events
+ */
+export const StreamTaskLogsParams = zod.object({
+  id: zod.coerce.number(),
 });
 
 /**
@@ -341,11 +1285,68 @@ export const GetTasksHistoryResponse = zod.array(GetTasksHistoryResponseItem);
 export const GetTasksSummaryResponse = zod.object({
   total: zod.number(),
   running: zod.number(),
-  queued: zod.number().describe("Number of tasks currently waiting in the concurrency queue"),
+  queued: zod
+    .number()
+    .describe("Number of tasks currently waiting in the concurrency queue"),
   successLast24h: zod.number(),
   failedLast24h: zod.number(),
   scheduled: zod.number(),
   needsAttention: zod
     .number()
-    .describe("Number of tasks currently paused waiting for manual captcha resolution"),
+    .describe(
+      "Number of tasks currently paused waiting for manual captcha resolution",
+    ),
+});
+
+/**
+ * @summary List saved credentials (without secrets)
+ */
+export const ListSavedCredentialsResponseItem = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  username: zod.string(),
+  createdAt: zod.coerce.date(),
+  updatedAt: zod.coerce.date(),
+});
+export const ListSavedCredentialsResponse = zod.array(
+  ListSavedCredentialsResponseItem,
+);
+
+/**
+ * @summary Create a saved credential
+ */
+export const CreateSavedCredentialBody = zod.object({
+  name: zod.string(),
+  username: zod.string(),
+  password: zod.string(),
+  totpSecret: zod.string().nullish(),
+});
+
+/**
+ * @summary Update a saved credential
+ */
+export const UpdateSavedCredentialParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const UpdateSavedCredentialBody = zod.object({
+  name: zod.string().optional(),
+  username: zod.string().optional(),
+  password: zod.string().optional().describe("Leave empty to keep unchanged"),
+  totpSecret: zod.string().nullish(),
+});
+
+export const UpdateSavedCredentialResponse = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  username: zod.string(),
+  createdAt: zod.coerce.date(),
+  updatedAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Delete a saved credential
+ */
+export const DeleteSavedCredentialParams = zod.object({
+  id: zod.coerce.number(),
 });

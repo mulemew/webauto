@@ -285,7 +285,7 @@ export default function TaskDetail() {
       queryClient.setQueryData(getGetTaskQueryKey(taskId), (old: typeof rawTask) =>
         old ? { ...old, enabled } : old
       );
-      toggleEnabled.mutate({ id: taskId, enabled }, {
+      toggleEnabled.mutate({ id: taskId, data: { enabled } }, {
         onSuccess: () => {
           // Re-set cache with confirmed value BEFORE invalidating so the stale
           // → refetch transition doesn't briefly flash the old enabled state.

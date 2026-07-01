@@ -35,6 +35,8 @@ import { Router, type IRouter } from "express";
           stealth: config.stealth ?? false,
           blockAds: config.blockAds ?? false,
           proxyUrl: config.proxyUrl ?? "",
+          proxyType: config.proxyType ?? null,
+          headed: config.headed ?? false,
           ignoreHTTPS: config.ignoreHTTPS ?? false,
           viewportWidth: config.viewportWidth ?? null,
           viewportHeight: config.viewportHeight ?? null,
@@ -59,6 +61,8 @@ import { Router, type IRouter } from "express";
         blockAds: body.blockAds === true,
         proxyUrl: typeof body.proxyUrl === "string" ? body.proxyUrl.trim() : "",
         ignoreHTTPS: body.ignoreHTTPS === true,
+        proxyType: typeof body.proxyType === "string" && body.proxyType.trim() ? body.proxyType.trim() as BrowserProviderConfig["proxyType"] : undefined,
+        headed: body.headed === true,
         viewportWidth: Number.isFinite(Number(body.viewportWidth)) && Number(body.viewportWidth) >= 320 ? Math.floor(Number(body.viewportWidth)) : undefined,
         viewportHeight: Number.isFinite(Number(body.viewportHeight)) && Number(body.viewportHeight) >= 240 ? Math.floor(Number(body.viewportHeight)) : undefined,
       };
@@ -261,4 +265,3 @@ import { Router, type IRouter } from "express";
     });
 
   export default router;
-  

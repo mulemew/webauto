@@ -58,6 +58,15 @@ import { pool } from "@workspace/db";
     "created_at"     timestamptz NOT NULL DEFAULT now(),
     "updated_at"     timestamptz NOT NULL DEFAULT now()
   );
+  CREATE TABLE IF NOT EXISTS "browser_sessions" (
+    "id"            serial      PRIMARY KEY,
+    "task_id"       integer     NOT NULL,
+    "session_key"   text        NOT NULL DEFAULT 'default',
+    "storage_state" jsonb       NOT NULL,
+    "created_at"    timestamptz NOT NULL DEFAULT now(),
+    "updated_at"    timestamptz NOT NULL DEFAULT now()
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS "browser_sessions_task_key_unique" ON "browser_sessions" ("task_id", "session_key");
   `;
 
   export async function runMigrations(): Promise<void> {
@@ -70,4 +79,4 @@ import { pool } from "@workspace/db";
       client.release();
     }
   }
-  
+ 

@@ -61,6 +61,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto-cjk fonts-wqy-microhei fonts-wqy-zenhei \
   && rm -rf /var/lib/apt/lists/*
 
+# ─── sing-box (advanced proxy protocols: VLESS/VMess/Trojan/Hysteria2/WARP) ───
+# The proxy-manager starts sing-box on demand to expose a local SOCKS5 inbound
+# that Chromium can consume. Passthrough http/socks5 proxies do NOT need this.
+ARG SINGBOX_VERSION=1.11.4
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) sb_arch=amd64 ;; \
+      arm64) sb_arch=arm64 ;; \
+      *) sb_arch="$arch" ;; \
+    esac; \
+    wget -qO /tmp/sing-box.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${sb_arch}.tar.gz" \
+      && tar -xzf /tmp/sing-box.tar.gz -C /tmp \
+      && mv /tmp/sing-box-${SINGBOX_VERSION}-linux-${sb_arch}/sing-box /usr/local/bin/sing-box \
+      && chmod +x /usr/local/bin/sing-box \
+      && rm -rf /tmp/sing-box* \
+      || echo "WARN: sing-box install failed — advanced proxy types (vless/vmess/trojan/hy2/warp) will be unavailable";
+
 WORKDIR /app
 
 # Install puppeteer, playwright-core, and patchright.

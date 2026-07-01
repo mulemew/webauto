@@ -575,6 +575,14 @@ components:
           enum: [screenshot]
       required: [type]
 
+    DismissPopupsStep:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [dismissPopups]
+      required: [type]
+
     SelectStep:
       type: object
       properties:
@@ -662,6 +670,14 @@ components:
             Optional CSS selector for an element that only appears after a successful login
             (e.g. an avatar, a logout button). When provided, its presence is treated as a
             definitive success signal and overrides the default form-visibility heuristic.
+        cookieMode:
+          type: boolean
+          description: >
+            When true, persist th
+        sessionKey:
+          type: string
+        successText:
+          type: string
       required: [type, loginMethod, loginUrl]
 
     ConditionalAction:
@@ -730,6 +746,11 @@ components:
         proxyUrl:
           type: ["string", "null"]
           description: HTTP/SOCKS proxy URL (e.g. "http://user:pass@host:1080")
+        proxyType:
+          type: ["string", "null"]
+          enum: [http, socks5, warp, vless, vm]
+        headed:
+          type: ["boolean", "null"]
         stealth:
           type: ["boolean", "null"]
         blockAds:
@@ -747,6 +768,7 @@ components:
         - $ref: "#/components/schemas/WaitStep"
         - $ref: "#/components/schemas/WaitForStep"
         - $ref: "#/components/schemas/ScreenshotStep"
+        - $ref: "#/components/schemas/DismissPopupsStep"
         - $ref: "#/components/schemas/SelectStep"
         - $ref: "#/components/schemas/HoverStep"
         - $ref: "#/components/schemas/ScrollStep"
@@ -960,48 +982,48 @@ components:
         - scheduled
         - needsAttention
 
-      SavedCredential:
-        type: object
-        properties:
-          id:
-            type: integer
-          name:
-            type: string
-          username:
-            type: string
-          createdAt:
-            type: string
-            format: date-time
-          updatedAt:
-            type: string
-            format: date-time
-        required: [id, name, username, createdAt, updatedAt]
+    SavedCredential:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        username:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, name, username, createdAt, updatedAt]
 
-      CreateSavedCredentialBody:
-        type: object
-        properties:
-          name:
-            type: string
-          username:
-            type: string
-          password:
-            type: string
-          totpSecret:
-            type: ["string", "null"]
-        required: [name, username, password]
+    CreateSavedCredentialBody:
+      type: object
+      properties:
+        name:
+          type: string
+        username:
+          type: string
+        password:
+          type: string
+        totpSecret:
+          type: ["string", "null"]
+      required: [name, username, password]
 
-      UpdateSavedCredentialBody:
-        type: object
-        properties:
-          name:
-            type: string
-          username:
-            type: string
-          password:
-            type: string
-            description: Leave empty to keep unchanged
-          totpSecret:
-            type: ["string", "null"]
+    UpdateSavedCredentialBody:
+      type: object
+      properties:
+        name:
+          type: string
+        username:
+          type: string
+        password:
+          type: string
+          description: Leave empty to keep unchanged
+        totpSecret:
+          type: ["string", "null"]
 
   
     TaskStreamEvent:

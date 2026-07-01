@@ -104,12 +104,23 @@ export const WaitForStepType = {
   waitFor: "waitFor",
 } as const;
 
+/**
+ * css = CSS selector (default); text = wait for text content to appear on the page
+ */
+export type WaitForStepSelectorType =
+  (typeof WaitForStepSelectorType)[keyof typeof WaitForStepSelectorType];
+
+export const WaitForStepSelectorType = {
+  css: "css",
+  text: "text",
+} as const;
+
 export interface WaitForStep {
   type: WaitForStepType;
   /** CSS selector or text string to wait for (depends on selectorType) */
   selector: string;
   /** css = CSS selector (default); text = wait for text content to appear on the page */
-  selectorType?: "css" | "text";
+  selectorType?: WaitForStepSelectorType;
   /** Max wait time in ms (default 30000) */
   timeout?: number;
 }
@@ -125,60 +136,262 @@ export interface ScreenshotStep {
   type: ScreenshotStepType;
 }
 
+export type DismissPopupsStepType =
+  (typeof DismissPopupsStepType)[keyof typeof DismissPopupsStepType];
+
+export const DismissPopupsStepType = {
+  dismissPopups: "dismissPopups",
+} as const;
+
+export interface DismissPopupsStep {
+  type: DismissPopupsStepType;
+}
+
+export type SelectStepType =
+  (typeof SelectStepType)[keyof typeof SelectStepType];
+
+export const SelectStepType = {
+  select: "select",
+} as const;
+
 export interface SelectStep {
-  type: "select";
+  type: SelectStepType;
   /** CSS selector for the <select> element */
   selector: string;
   /** The option value to select */
   value: string;
 }
 
+export type HoverStepType = (typeof HoverStepType)[keyof typeof HoverStepType];
+
+export const HoverStepType = {
+  hover: "hover",
+} as const;
+
+export type HoverStepSelectorType =
+  (typeof HoverStepSelectorType)[keyof typeof HoverStepSelectorType];
+
+export const HoverStepSelectorType = {
+  css: "css",
+  xpath: "xpath",
+} as const;
+
 export interface HoverStep {
-  type: "hover";
+  type: HoverStepType;
   selector: string;
-  selectorType: "css" | "xpath";
+  selectorType: HoverStepSelectorType;
 }
 
+export type ScrollStepType =
+  (typeof ScrollStepType)[keyof typeof ScrollStepType];
+
+export const ScrollStepType = {
+  scroll: "scroll",
+} as const;
+
 export interface ScrollStep {
-  type: "scroll";
+  type: ScrollStepType;
   /** CSS selector to scroll to (optional — scrolls page if omitted) */
   selector?: string;
   x?: number;
   y?: number;
 }
 
+export type KeypressStepType =
+  (typeof KeypressStepType)[keyof typeof KeypressStepType];
+
+export const KeypressStepType = {
+  keypress: "keypress",
+} as const;
+
 export interface KeypressStep {
-  type: "keypress";
+  type: KeypressStepType;
   /** Key name (e.g. Enter, Escape, Tab, ArrowDown) */
   key: string;
 }
 
+export type SwitchToNewPageStepType =
+  (typeof SwitchToNewPageStepType)[keyof typeof SwitchToNewPageStepType];
+
+export const SwitchToNewPageStepType = {
+  switchToNewPage: "switchToNewPage",
+} as const;
+
 export interface SwitchToNewPageStep {
-  type: "switchToNewPage";
+  type: SwitchToNewPageStepType;
   /** Max ms to wait for a new page/tab to open (default 30000) */
   timeout?: number;
 }
 
+export type LoginStepType = (typeof LoginStepType)[keyof typeof LoginStepType];
+
+export const LoginStepType = {
+  login: "login",
+} as const;
+
 /**
  * form=standard username/password form, github=GitHub OAuth, google=Google OAuth
  */
-export type LoginStepMethod = "form" | "github" | "google";
+export type LoginStepLoginMethod =
+  (typeof LoginStepLoginMethod)[keyof typeof LoginStepLoginMethod];
+
+export const LoginStepLoginMethod = {
+  form: "form",
+  github: "github",
+  google: "google",
+} as const;
 
 /**
- * Authenticate via form login, GitHub OAuth, or Google OAuth.
- * All subsequent steps share the same browser session.
+ * Authenticate via form login, GitHub OAuth, or Google OAuth using the task's stored credentials. All subsequent steps share the same browser session, so post-login steps run as the authenticated user.
+
  */
 export interface LoginStep {
-  type: "login";
+  type: LoginStepType;
   /** form=standard username/password form, github=GitHub OAuth, google=Google OAuth */
-  loginMethod: LoginStepMethod;
+  loginMethod: LoginStepLoginMethod;
   /** URL of the login page to navigate to */
   loginUrl: string;
-  /** ID of a saved credential from the vault */
-  credentialId?: number;
-  inlineUsername?: string;
-  inlinePassword?: string;
-  inlineTotp?: string;
+  /** Optional CSS selector for an element that only appears after a successful login (e.g. an avatar, a logout button). When provided, its presence is treated as a definitive success signal and overrides the default form-visibility heuristic.
+   */
+  successSelector?: string;
+  /** When true, persist th
+   */
+  cookieMode?: boolean;
+  sessionKey?: string;
+  successText?: string;
+}
+
+export type ConditionalActionType =
+  (typeof ConditionalActionType)[keyof typeof ConditionalActionType];
+
+export const ConditionalActionType = {
+  click: "click",
+  fill: "fill",
+  navigate: "navigate",
+  wait: "wait",
+  keypress: "keypress",
+  screenshot: "screenshot",
+  scroll: "scroll",
+} as const;
+
+export type ConditionalActionSelectorType =
+  (typeof ConditionalActionSelectorType)[keyof typeof ConditionalActionSelectorType];
+
+export const ConditionalActionSelectorType = {
+  text: "text",
+  css: "css",
+  xpath: "xpath",
+} as const;
+
+/**
+ * Action to execute when the condition is true
+ */
+export interface ConditionalAction {
+  type: ConditionalActionType;
+  selector?: string;
+  selectorType?: ConditionalActionSelectorType;
+  url?: string;
+  value?: string;
+  ms?: number;
+  key?: string;
+  x?: number;
+  y?: number;
+}
+
+export type ConditionStepType =
+  (typeof ConditionStepType)[keyof typeof ConditionStepType];
+
+export const ConditionStepType = {
+  condition: "condition",
+} as const;
+
+export type ConditionStepConditionType =
+  (typeof ConditionStepConditionType)[keyof typeof ConditionStepConditionType];
+
+export const ConditionStepConditionType = {
+  text_contains: "text_contains",
+  text_not_contains: "text_not_contains",
+  element_visible: "element_visible",
+  element_not_visible: "element_not_visible",
+  url_contains: "url_contains",
+} as const;
+
+/**
+ * Conditionally execute an action based on page state
+ */
+export interface ConditionStep {
+  type: ConditionStepType;
+  conditionType: ConditionStepConditionType;
+  /** Value to check against (e.g. text to look for, URL substring) */
+  conditionValue?: string;
+  /** CSS selector for element-based conditions */
+  conditionSelector?: string;
+  thenAction?: ConditionalAction;
+}
+
+/**
+ * Browser backend for this task:
+playwright=Playwright CDP (default), puppeteer=Puppeteer CDP,
+local=local Chromium launch, seleniumbase=CF Proxy bypass mode
+
+ */
+export type TaskBrowserConfigProvider =
+  (typeof TaskBrowserConfigProvider)[keyof typeof TaskBrowserConfigProvider];
+
+export const TaskBrowserConfigProvider = {
+  playwright: "playwright",
+  puppeteer: "puppeteer",
+  local: "local",
+  seleniumbase: "seleniumbase",
+} as const;
+
+/**
+ * @nullable
+ */
+export type TaskBrowserConfigProxyType =
+  | (typeof TaskBrowserConfigProxyType)[keyof typeof TaskBrowserConfigProxyType]
+  | null;
+
+export const TaskBrowserConfigProxyType = {
+  http: "http",
+  socks5: "socks5",
+  warp: "warp",
+  vless: "vless",
+  vm: "vm",
+} as const;
+
+/**
+ * Per-task browser backend override. When set, these values are merged over the global browser config (Settings page), letting each task use a different execution backend.
+
+ */
+export interface TaskBrowserConfig {
+  /** Browser backend for this task:
+playwright=Playwright CDP (default), puppeteer=Puppeteer CDP,
+local=local Chromium launch, seleniumbase=CF Proxy bypass mode
+ */
+  provider?: TaskBrowserConfigProvider;
+  /**
+   * WebSocket endpoint override for this task
+   * @nullable
+   */
+  wsEndpoint?: string | null;
+  /**
+   * HTTP/SOCKS proxy URL (e.g. "http://user:pass@host:1080")
+   * @nullable
+   */
+  proxyUrl?: string | null;
+  /** @nullable */
+  proxyType?: TaskBrowserConfigProxyType;
+  /** @nullable */
+  headed?: boolean | null;
+  /** @nullable */
+  stealth?: boolean | null;
+  /** @nullable */
+  blockAds?: boolean | null;
+  /** @nullable */
+  ignoreHTTPS?: boolean | null;
+  /** @nullable */
+  sessionTimeoutMs?: number | null;
 }
 
 export type WorkflowStep =
@@ -188,11 +401,13 @@ export type WorkflowStep =
   | WaitStep
   | WaitForStep
   | ScreenshotStep
+  | DismissPopupsStep
   | SelectStep
   | HoverStep
   | ScrollStep
   | KeypressStep
   | SwitchToNewPageStep
+  | ConditionStep
   | LoginStep;
 
 /**
@@ -208,27 +423,14 @@ export const TaskStatus = {
   needs_attention: "needs_attention",
 } as const;
 
-export interface TaskBrowserConfig {
-  provider?: 'playwright' | 'puppeteer' | 'local' | 'seleniumbase';
-  /** @nullable */
-  wsEndpoint?: string | null;
-  /** @nullable */
-  proxyUrl?: string | null;
-  /** @nullable */
-  stealth?: boolean | null;
-  /** @nullable */
-  blockAds?: boolean | null;
-  /** @nullable */
-  ignoreHTTPS?: boolean | null;
-  /** @nullable */
-  sessionTimeoutMs?: number | null;
-}
-
 export interface Task {
   id: number;
   name: string;
   targetUrl: string;
-  /** @deprecated Use a login step in the steps array instead */
+  /**
+   * Deprecated — use a login step in the steps array instead
+   * @nullable
+   */
   loginType?: string | null;
   /** @nullable */
   steps?: WorkflowStep[] | null;
@@ -238,12 +440,16 @@ export interface Task {
   status: TaskStatus;
   /** @nullable */
   lastRunAt?: string | null;
-  /** Next scheduled run time for @after_completion: tasks (auto-set after each run finishes) @nullable */
+  /**
+   * Next scheduled run for @after_completion: tasks (auto-set after each run finishes)
+   * @nullable
+   */
   nextRunAt?: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Whether this task is active (disabled tasks skip cron runs) */
   enabled: boolean;
-  /** Per-task browser backend override. Null uses global settings. @nullable */
+  /** Per-task browser backend override. Null uses global settings. */
   browserConfig?: TaskBrowserConfig | null;
 }
 
@@ -272,7 +478,7 @@ export interface CreateTaskBody {
   steps?: WorkflowStep[] | null;
   /** @nullable */
   cronExpression?: string | null;
-  /** Per-task browser backend override. Null uses global settings. @nullable */
+  /** Per-task browser backend override. Null uses global settings. */
   browserConfig?: TaskBrowserConfig | null;
 }
 
@@ -284,7 +490,7 @@ export interface UpdateTaskBody {
   steps?: WorkflowStep[] | null;
   /** @nullable */
   cronExpression?: string | null;
-  /** Per-task browser backend override. Null uses global settings. @nullable */
+  /** Per-task browser backend override. Null uses global settings. */
   browserConfig?: TaskBrowserConfig | null;
 }
 
@@ -317,3 +523,55 @@ export interface TasksSummary {
   /** Number of tasks currently paused waiting for manual captcha resolution */
   needsAttention: number;
 }
+
+export interface SavedCredential {
+  id: number;
+  name: string;
+  username: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateSavedCredentialBody {
+  name: string;
+  username: string;
+  password: string;
+  /** @nullable */
+  totpSecret?: string | null;
+}
+
+export interface UpdateSavedCredentialBody {
+  name?: string;
+  username?: string;
+  /** Leave empty to keep unchanged */
+  password?: string;
+  /** @nullable */
+  totpSecret?: string | null;
+}
+
+export type TaskStreamEventType =
+  (typeof TaskStreamEventType)[keyof typeof TaskStreamEventType];
+
+export const TaskStreamEventType = {
+  progress: "progress",
+  done: "done",
+} as const;
+
+export interface TaskStreamEvent {
+  type: TaskStreamEventType;
+  message: string;
+  /**
+   * Only present when type is "done"
+   * @nullable
+   */
+  success?: boolean | null;
+}
+
+export type ToggleTaskEnabledBody = {
+  enabled: boolean;
+};
+
+export type ToggleTaskEnabled200 = {
+  ok?: boolean;
+  enabled?: boolean;
+};

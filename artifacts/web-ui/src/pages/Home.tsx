@@ -359,7 +359,7 @@ export default function Home() {
 
   const handleToggleEnabled = (id: number, enabled: boolean) => {
     setPendingEnabled(prev => new Map(prev).set(id, enabled));
-    toggleEnabled.mutate({ id, enabled }, {
+    toggleEnabled.mutate({ id, data: { enabled } }, {
       onSuccess: async () => {
         // Keep pendingEnabled set during refetch so the switch doesn't flash back
         await queryClient.invalidateQueries({ queryKey: getListTasksQueryKey() });

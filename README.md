@@ -5,12 +5,17 @@ A self-hosted web automation platform — schedule form logins, OTP handling, CA
 ## Features
 
 - **Task scheduling** — cron-based or manual execution
-- **Workflow steps** — navigate, click (text / CSS / XPath), fill, wait, screenshot, and more
+- **Workflow steps** — navigate, click (text / CSS / XPath), fill, wait, screenshot, dismiss popups, and more
+- **Popup / overlay cleanup** — auto-dismisses cookie banners, GDPR consent, modal overlays and ad layers (built into every navigation, plus an explicit "Dismiss Popups" step)
 - **Form & OTP login** — handles TOTP, email OTP, and standard password forms
+- **Cookie / session mode** — persist a logged-in session per task; the next run auto-detects a valid session and skips login, re-authenticating and re-persisting only when the session is gone
+- **Session isolation** — each run uses a fresh browser context, so a previous run's login state never leaks into the next task
+- **Per-task proxy** — HTTP, SOCKS5, and (via bundled sing-box) VLESS, VMess, Trojan, Hysteria2, and Cloudflare WARP, configured independently for each task
+- **Headed / headless toggle** — run any task with a visible browser (over Xvfb) for troubleshooting
 - **CAPTCHA support** — 2Captcha, Capsolver, Anti-Captcha (token + image)
 - **Cloudflare bypass** — JS challenge and Turnstile click simulation
 - **Browser providers** — bundled Chromium (default), browserless.io, or any CDP-compatible remote
-- **Encrypted credentials** — AES-256-GCM storage for all saved passwords
+- **Encrypted credentials** — AES-256-GCM storage for all saved passwords and persisted sessions
 
 ---
 
@@ -119,8 +124,29 @@ docker compose -f docker-compose.yml -f docker-compose.external-db.yml run --rm 
 | `CAPSOLVER_API_KEY` | Capsolver | API key |
 | `ANTICAPTCHA_API_KEY` | Anti-Captcha | API key |
 | `PORT` | No | Host port (default `80`) |
+| `WARP_CONFIG_PATH` | WARP proxy only | Path to a sing-box WireGuard outbound JSON (generate with `wgcf`/warp-reg) used when a task's proxy type is `warp` |
 
 > **Backing up secrets**: `SESSION_SECRET` and `ENCRYPTION_KEY` are saved to `data/secrets.json` inside the Docker volume (`autoops_data`). Back up this file if you want to restore credentials after migrating to a new server.
+
+---
+
+## Per-task proxy & session options
+
+Each task has a **浏览器后端 (Browser Backend)** panel (collapsed by default) where you can, independently of the global settings:
+
+- **Proxy type + address** — choose one of:
+  - `HTTP/HTTPS` / `SOCKS5` — paste a normal proxy URL (`http://user:pass@host:8080`, `socks5://host:1080`). Chromium connects to it directly.
+  - `VLESS` / `VMess` / `Trojan` / `Hysteria2` — paste the node share link (`vless://…`, `vmess://…`, `trojan://…`, `hysteria2://…`). A local **sing-box** helper is started per run and exposes a local SOCKS5 that the browser uses. Requires the `sing-box` binary (bundled in the Docker image).
+  - `Cloudflare WARP` — set `WARP_CONFIG_PATH` to a sing-box WireGuard outbound JSON; leave the address blank.
+- **Headed mode (有头模式)** — run the task with a visible browser window (rendered on the container's Xvfb display) instead of headless, which is useful for troubleshooting. The `seleniumbase` (cf-proxy) backend is always headed.
+
+### Session / cookie mode
+
+On any **Login** step you can enable **会话保持 / Cookie 模式 (Cookie mode)**:
+
+- After a successful run the authenticated browser storage state (cookies + localStorage) is encrypted and saved for that task.
+- On the next run the task loads a fresh, isolated browser context, restores the saved state, and **auto-detects whether the session is still valid** — if so it **skips the login step entirely**; if the session is gone it logs in normally and re-persists the new session.
+- Sessions are isolated per task (optionally per `sessionKey`), so one task's login state never bleeds into another, and every run starts from a clean context to avoid stale login residue.
 
 ---
 

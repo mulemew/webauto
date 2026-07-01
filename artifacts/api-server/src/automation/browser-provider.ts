@@ -3,6 +3,7 @@ import { SeleniumBaseProvider } from "./seleniumbase-adapter";
 import { wrapPuppeteerPage, wrapPlaywrightPage, puppeteer, chromium, patchrightChromium } from "./page-adapter";
 import type { PageAdapter } from "./page-adapter";
 import { execSync, spawn } from "child_process";
+import { startLocalProxy, type ProxyType, type ResolvedProxy } from "./proxy-manager";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -68,6 +69,30 @@ export interface BrowserProviderConfig {
      * ─ Puppeteer:  injected as --proxy-server Chrome flag via ?launch= (browserless).
      */
     proxyUrl?: string;
+    /**
+     * Proxy protocol. When omitted it is inferred from proxyUrl's scheme.
+     * Values "warp" | "vless" | "vmess" | "trojan" | "hy2" are dialed through a
+     * local sing-box helper that exposes a plain SOCKS5 to Chromium.
+     */
+    proxyType?: ProxyType;
+    /**
+     * Force headed (visible) or headless mode for the local Patchright provider.
+     * ─ undefined  → auto: headed when a display (Xvfb/DISPLAY) is available.
+     * ─ true       → force headed (best for debugging + CF Turnstile bypass).
+     * ─ false      → force headless (no window, even if a display exists).
+     */
+    headed?: boolean;
+    /**
+     * Playwright storage state (cookies + localStorage) to seed the context with
+     * on startup — used by "cookie mode" logins to restore a previous session.
+     */
+    storageState?: unknown;
+    /**
+     * Called after a page's context is created, with a function that dumps the
+     * current storage state. Runner uses this to persist the session after a
+     * successful cookie-mode login. Only wired for the Playwright/local providers.
+     */
+    onContextReady?: (dumpStorageState: () => Promise<unknown>) => void;
     /**
      * Ignore HTTPS certificate errors (self-signed, expired, etc.).
      * ─ Playwright: applied via newContext({ ignoreHTTPSErrors }) — universal.
@@ -438,6 +463,26 @@ const AD_BLOCK_RE = new RegExp(
 // ── Navigation timeout ────────────────────────────────────────────────────────
 
 /**
+ * Resolve the per-config proxy into a Chromium-usable server URL, starting a
+ * local sing-box helper for advanced protocols (warp/vless/vmess/trojan/hy2).
+ * Returns null when no proxy is configured. The caller is responsible for
+ * calling `.stop()` on the returned helper when the browser closes.
+ */
+async function resolveProxyForConfig(
+  config: BrowserProviderConfig,
+): Promise<ResolvedProxy | null> {
+  if (!config.proxyUrl && !config.proxyType) return null;
+  try {
+    return await startLocalProxy({ proxyType: config.proxyType, proxyUrl: config.proxyUrl });
+  } catch (err) {
+    logger.error({ err, proxyType: config.proxyType }, "Failed to start proxy — proceeding without it");
+    throw err;
+  }
+}
+
+// ── Navigation timeout ────────────────────────────────────────────────────────
+
+/**
  * Default navigation timeout for all page.goto() / waitForNavigation() calls.
  * Remote browser services inject a low default (10 s) that causes premature
  * failures on slow or JS-heavy pages. We always override it.
@@ -452,7 +497,10 @@ class PuppeteerCDPProvider implements BrowserProvider {
     async newPage(): Promise<PageAdapter> {
       // For Puppeteer CDP, proxy and ignoreHTTPS must be baked into the WS URL as
       // Chrome launch flags (browserless reads them from the ?launch= JSON param).
-      const ws = buildWsUrl(this.config, true);
+      // Resolve advanced proxy types (warp/vless/…) to a local SOCKS5 first.
+      const _resolvedProxy = await resolveProxyForConfig(this.config);
+      const _cfg = _resolvedProxy ? { ...this.config, proxyUrl: _resolvedProxy.serverUrl } : this.config;
+      const ws = buildWsUrl(_cfg, true);
       const safeUrl = ws.replace(/([?&]token=)[^&]*/g, "$1***");
       logger.info({ wsEndpoint: safeUrl }, "Connecting to remote CDP browser (Puppeteer)");
 
@@ -487,6 +535,7 @@ class PuppeteerCDPProvider implements BrowserProvider {
     adapter.close = async (opts) => {
       await origClose(opts).catch(() => {});
       await browser.disconnect().catch(() => {});
+      if (_resolvedProxy) await _resolvedProxy.stop().catch(() => {});
     };
 
     const makePuppeteerNewPageWaiter = (opts?: { timeout?: number }): Promise<PageAdapter> =>
@@ -543,13 +592,20 @@ class PlaywrightCDPProvider implements BrowserProvider {
     protected async _makePageAdapter(browser: Awaited<ReturnType<typeof chromium.connectOverCDP>>): Promise<PageAdapter> {
       const vp = resolveViewport(this.config);
       const ua = pickRandom(UA_POOL);
+      const proxyServer = await resolveProxyForConfig(this.config);
       const context = await browser.newContext({
         viewport: vp,
         userAgent: ua,
         screen: vp,
-        ...(this.config.proxyUrl ? { proxy: { server: this.config.proxyUrl } } : {}),
+        ...(proxyServer ? { proxy: { server: proxyServer.serverUrl } } : {}),
+        ...(this.config.storageState ? { storageState: this.config.storageState as never } : {}),
         ignoreHTTPSErrors: this.config.ignoreHTTPS ?? false,
       });
+
+    // Expose a storage-state dumper for cookie-mode session persistence.
+    if (this.config.onContextReady) {
+      this.config.onContextReady(async () => context.storageState());
+    }
 
     context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
     context.setDefaultTimeout(NAV_TIMEOUT_MS);
@@ -595,6 +651,7 @@ class PlaywrightCDPProvider implements BrowserProvider {
       await page.close().catch(() => {});
       await context.close().catch(() => {});
       await browser.close().catch(() => {});
+      if (proxyServer) await proxyServer.stop().catch(() => {});
     };
 
     return adapter;
@@ -653,11 +710,25 @@ class PlaywrightLocalProvider implements BrowserProvider {
     constructor(private readonly config: BrowserProviderConfig) {}
 
     async newPage(): Promise<PageAdapter> {
-      // Try to start Xvfb for headed mode — critical for CF Turnstile bypass.
-      // Headed mode avoids headless detection and enables xdotool physical clicks.
-      ensureXvfb();
-      const useHeaded = !!process.env.DISPLAY;
-      logger.info({ headed: useHeaded, display: process.env.DISPLAY }, "Launching local Patchright Chromium");
+      // Resolve the proxy up-front so protocol helpers (warp/vless/…) are dialed
+      // before Chromium launches.
+      const proxyServer = await resolveProxyForConfig(this.config);
+
+      // Headed vs headless:
+      //  - config.headed === true  → force headed (start Xvfb if needed)
+      //  - config.headed === false → force headless (skip Xvfb)
+      //  - undefined               → auto: headed when a display is available
+      let useHeaded: boolean;
+      if (this.config.headed === false) {
+        useHeaded = false;
+      } else if (this.config.headed === true) {
+        ensureXvfb();
+        useHeaded = !!process.env.DISPLAY;
+      } else {
+        ensureXvfb();
+        useHeaded = !!process.env.DISPLAY;
+      }
+      logger.info({ headed: useHeaded, display: process.env.DISPLAY, forced: this.config.headed }, "Launching local Patchright Chromium");
 
       const launchArgs = [
         "--disable-blink-features=AutomationControlled",
@@ -683,8 +754,8 @@ class PlaywrightLocalProvider implements BrowserProvider {
           "--enable-gpu-rasterization",
           "--enable-zero-copy",
       ];
-      if (this.config.proxyUrl) {
-        launchArgs.push(`--proxy-server=${this.config.proxyUrl}`);
+      if (proxyServer) {
+        launchArgs.push(`--proxy-server=${proxyServer.serverUrl}`);
       }
       if (this.config.ignoreHTTPS) {
         launchArgs.push("--ignore-certificate-errors");
@@ -715,8 +786,14 @@ class PlaywrightLocalProvider implements BrowserProvider {
         viewport: vp,
         userAgent: ua,
         screen: vp,
+        ...(this.config.storageState ? { storageState: this.config.storageState as never } : {}),
         ignoreHTTPSErrors: this.config.ignoreHTTPS ?? false,
       });
+
+      // Expose a storage-state dumper for cookie-mode session persistence.
+      if (this.config.onContextReady) {
+        this.config.onContextReady(async () => context.storageState());
+      }
 
       context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
       context.setDefaultTimeout(NAV_TIMEOUT_MS);
@@ -764,6 +841,7 @@ class PlaywrightLocalProvider implements BrowserProvider {
         await page.close().catch(() => {});
         await context.close().catch(() => {});
         await browser.close().catch(() => {});
+        if (proxyServer) await proxyServer.stop().catch(() => {});
       };
 
       return adapter;

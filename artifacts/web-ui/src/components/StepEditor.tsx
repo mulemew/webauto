@@ -1,13 +1,13 @@
 import { useLang } from "@/contexts/lang-context";
 import type { Translations } from "@/i18n/translations";
-import { Plus, Trash2, ChevronUp, ChevronDown, MousePointer, Navigation, Keyboard, Clock, Eye, Camera, ExternalLink, ListFilter, ArrowDown, Hand, Command, LogIn, GitBranch } from "lucide-react";
+import { Plus, Trash2, ChevronUp, ChevronDown, MousePointer, Navigation, Keyboard, Clock, Eye, Camera, ExternalLink, ListFilter, ArrowDown, Hand, Command, LogIn, GitBranch, Eraser } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
-export type StepType = "navigate" | "click" | "fill" | "select" | "scroll" | "hover" | "wait" | "waitFor" | "screenshot" | "switchToNewPage" | "keypress" | "login" | "condition";
+export type StepType = "navigate" | "click" | "fill" | "select" | "scroll" | "hover" | "wait" | "waitFor" | "screenshot" | "dismissPopups" | "switchToNewPage" | "keypress" | "login" | "condition";
 
 export type ConditionType = "text_contains" | "text_not_contains" | "element_visible" | "element_not_visible" | "url_contains";
 export type ThenActionType = "click" | "fill" | "navigate" | "wait" | "keypress" | "screenshot" | "scroll";
@@ -41,6 +41,8 @@ export interface WorkflowStep {
   credentialSource?: "saved" | "inline";
   successSelector?: string;
   successText?: string;
+  cookieMode?: boolean;
+  sessionKey?: string;
   inlineUsername?: string;
   inlinePassword?: string;
   inlineTotp?: string;
@@ -76,6 +78,7 @@ function getStepMeta(t: Translations): Record<StepType, { label: string; icon: R
   wait:            { label: t.stepWait,              icon: <Clock className="h-3.5 w-3.5" />,         description: t.stepWaitDesc },
   waitFor:         { label: t.stepWaitFor,          icon: <Eye className="h-3.5 w-3.5" />,           description: t.stepWaitForDesc },
   screenshot:      { label: t.stepScreenshotType,        icon: <Camera className="h-3.5 w-3.5" />,        description: t.stepScreenshotTypeDesc },
+  dismissPopups:   { label: "关闭弹窗/遮罩",        icon: <Eraser className="h-3.5 w-3.5" />,        description: "清理 cookie 弹窗、遮罩层和广告浮层" },
   switchToNewPage: { label: t.stepSwitchTab, icon: <ExternalLink className="h-3.5 w-3.5" />,  description: t.stepSwitchTabDesc },
   keypress:        { label: t.stepKeyPress,         icon: <Command className="h-3.5 w-3.5" />,        description: t.stepKeyPressDesc },
   condition:       { label: t.stepCondition,         icon: <GitBranch className="h-3.5 w-3.5" />,     description: t.stepConditionDesc },
@@ -112,6 +115,7 @@ function defaultStep(type: StepType, taskTargetUrl = ""): WorkflowStep {
     case "switchToNewPage": return { type, timeout: 30000 };
     case "keypress":        return { type, key: "Enter" };
     case "condition":       return { type, conditionType: "text_contains", conditionValue: "", thenAction: { type: "click", selector: "", selectorType: "text" } };
+    case "dismissPopups":   return { type };
   }
 }
 
@@ -287,6 +291,33 @@ function StepCard({
               <p className="text-[10px] text-muted-foreground leading-snug">
                 登录完成后检测页面是否包含该文字，找到则登录成功，找不到则失败。
               </p>
+            </div>
+            {/* Cookie mode / session persistence */}
+            <div className="space-y-2 pt-1 border-t border-border">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-xs font-medium">Cookie 模式（会话保持）</Label>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">启用后，登录成功的会话（cookies + localStorage）会被加密保存。下次运行先检测会话是否有效：有效则跳过登录，失效则重新登录并刷新保存。</p>
+                </div>
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 shrink-0"
+                  checked={step.cookieMode === true}
+                  onChange={(e) => set({ cookieMode: e.target.checked })}
+                />
+              </div>
+              {step.cookieMode && (
+                <div className="space-y-1">
+                  <Label className="text-xs">Session Key <span className="font-normal text-muted-foreground">(可选)</span></Label>
+                  <Input
+                    className="font-mono text-xs h-8"
+                    placeholder="default"
+                    value={step.sessionKey ?? ""}
+                    onChange={(e) => set({ sessionKey: e.target.value || undefined })}
+                  />
+                  <p className="text-[10px] text-muted-foreground leading-snug">同一任务可用不同 key 保存多个身份，留空使用 &quot;default&quot;。</p>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -642,6 +673,10 @@ function StepCard({
 
       {step.type === "screenshot" && (
         <div className="px-3 py-2 text-xs text-muted-foreground font-mono">Captures the current page state to a file.</div>
+      )}
+
+      {step.type === "dismissPopups" && (
+        <div className="px-3 py-2 text-xs text-muted-foreground font-mono">关闭 cookie 弹窗、遮罩层和广告浮层，避免它们遮挡后续操作。无需任何参数。</div>
       )}
 
       {step.type === "switchToNewPage" && (

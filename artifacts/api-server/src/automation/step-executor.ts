@@ -35,9 +35,10 @@ export type WorkflowStep =
   | { type: "wait"; ms: number }
   | { type: "waitFor"; selector: string; selectorType?: "css" | "text"; timeout?: number }
   | { type: "screenshot" }
+  | { type: "dismissPopups" }
   | { type: "switchToNewPage"; timeout?: number }
   | { type: "keypress"; key: string }
-  | { type: "login"; loginMethod: "form" | "github" | "google"; loginUrl: string; inlineUsername?: string; inlinePassword?: string; inlineTotp?: string; successSelector?: string; successText?: string }
+  | { type: "login"; loginMethod: "form" | "github" | "google"; loginUrl: string; inlineUsername?: string; inlinePassword?: string; inlineTotp?: string; successSelector?: string; successText?: string; cookieMode?: boolean; sessionKey?: string }
   | { type: "condition"; conditionType: ConditionType; conditionValue: string; conditionSelector?: string; thenAction: ConditionalAction };
 
 export interface StepResult {
@@ -353,6 +354,15 @@ async function executeStep(
       return { message: `Switched to new page: ${newPage.url()}`, newPage };
     }
 
+    case "dismissPopups": {
+      const result = await dismissPopups(page);
+      return {
+        message: result.dismissed > 0
+          ? `Dismissed ${result.dismissed} popup/overlay item(s): ${result.details.join(", ")}`
+          : "No popups or overlays found to dismiss",
+      };
+    }
+
     case "keypress": {
       await page.keyboard.press(step.key);
       return { message: `Pressed key "${step.key}"` };
@@ -361,6 +371,27 @@ async function executeStep(
     case "login": {
       const loginUrl = step.loginUrl || targetUrl;
       logger.info({ taskId, stepIndex, loginMethod: step.loginMethod, loginUrl }, "Executing login step");
+
+      // ── Cookie mode: skip login if a restored session is still valid ──────
+      // When cookieMode is on, the runner seeds the browser context with the
+      // task's previously-saved storage state (cookies + localStorage). Before
+      // spending a full login attempt, navigate to the login/target URL and
+      // check whether we're already authenticated. If so, skip login entirely.
+      const cookieMode = (step as Record<string, unknown>).cookieMode === true;
+      if (cookieMode) {
+        try {
+          await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+          await dismissPopups(page);
+          const alreadyIn = await isSessionAuthenticated(page, step.successSelector, step.successText);
+          if (alreadyIn) {
+            logger.info({ taskId, stepIndex }, "Cookie mode — existing session detected, skipping login");
+            return { message: "Session restored from saved cookies — login skipped" };
+          }
+          logger.info({ taskId, stepIndex }, "Cookie mode — no valid session, performing full login");
+        } catch (probeErr) {
+          logger.warn({ taskId, stepIndex, probeErr }, "Cookie-mode session probe failed — performing full login");
+        }
+      }
 
       // Resolve per-step saved credential if credentialId is present,
       // otherwise fall back to inline values or task-level credentials.
@@ -537,9 +568,6 @@ async function settleAfterClick(page: PageAdapter, urlBefore: string): Promise<v
   try {
     const urlAfter = page.url();
     if (urlAfter !== urlBefore) {
-      // URL changed — wait for navigation to finish. Swallow timeouts only
-      // (navigation already committed); re-throw page-close/detach errors so
-      // callers know the page is gone and subsequent steps should not run against it.
       try {
         await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 5000 });
       } catch (navErr) {
@@ -549,10 +577,35 @@ async function settleAfterClick(page: PageAdapter, urlBefore: string): Promise<v
     }
   } catch {
     // page.url() / waitForNavigation can throw if the page was destroyed
-    // mid-check (e.g. the server responded with a redirect that replaced the
-    // tab).  Swallow the error — the *next* step will surface a clear failure
-    // if the page is truly gone.
   }
+}
+
+async function isSessionAuthenticated(
+  page: PageAdapter,
+  successSelector?: string,
+  successText?: string,
+): Promise<boolean> {
+  if (successText) {
+    try {
+      const bodyText = (await page.evaluate(() => document.body?.innerText).catch(() => "")) as string;
+      if (bodyText.includes(successText)) return true;
+    } catch {}
+  }
+  if (successSelector) {
+    try {
+      const el = await page.$(successSelector);
+      if (el) {
+        const visible = await el.evaluate((e: Element) => {
+          const style = window.getComputedStyle(e);
+          const rect = e.getBoundingClientRect();
+          return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0;
+        }).catch(() => false) as boolean;
+        if (visible) return true;
+      }
+    } catch {}
+  }
+  const bodyText = (await page.evaluate(() => document.body?.innerText).catch(() => "")) as string;
+  return /logout|sign out|sign-out|dashboard|account|profile|welcome/i.test(bodyText);
 }
 
 async function clickByText(page: PageAdapter, text: string): Promise<boolean> {

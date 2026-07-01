@@ -18,15 +18,20 @@ import type {
 
 import type {
   BrowserStatus,
+  CreateSavedCredentialBody,
   CreateTaskBody,
   DailyHistory,
   ErrorResponse,
   HealthStatus,
   Log,
   RunTaskResponse,
+  SavedCredential,
   Task,
   TaskWithCredentials,
   TasksSummary,
+  ToggleTaskEnabled200,
+  ToggleTaskEnabledBody,
+  UpdateSavedCredentialBody,
   UpdateTaskBody,
 } from "./api.schemas";
 
@@ -183,6 +188,158 @@ export function useBrowserHealthCheck<
   request?: SecondParameter<typeof customFetch>;
 }): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getBrowserHealthCheckQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Checks database connectivity
+ * @summary Database health check
+ */
+export const getDbHealthCheckUrl = () => {
+  return `/api/healthz/db`;
+};
+
+export const dbHealthCheck = async (
+  options?: RequestInit,
+): Promise<HealthStatus> => {
+  return customFetch<HealthStatus>(getDbHealthCheckUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getDbHealthCheckQueryKey = () => {
+  return [`/api/healthz/db`] as const;
+};
+
+export const getDbHealthCheckQueryOptions = <
+  TData = Awaited<ReturnType<typeof dbHealthCheck>>,
+  TError = ErrorType<HealthStatus>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof dbHealthCheck>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getDbHealthCheckQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof dbHealthCheck>>> = ({
+    signal,
+  }) => dbHealthCheck({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof dbHealthCheck>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type DbHealthCheckQueryResult = NonNullable<
+  Awaited<ReturnType<typeof dbHealthCheck>>
+>;
+export type DbHealthCheckQueryError = ErrorType<HealthStatus>;
+
+/**
+ * @summary Database health check
+ */
+
+export function useDbHealthCheck<
+  TData = Awaited<ReturnType<typeof dbHealthCheck>>,
+  TError = ErrorType<HealthStatus>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof dbHealthCheck>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getDbHealthCheckQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Returns status of the cron scheduler
+ * @summary Scheduler health check
+ */
+export const getSchedulerHealthCheckUrl = () => {
+  return `/api/healthz/scheduler`;
+};
+
+export const schedulerHealthCheck = async (
+  options?: RequestInit,
+): Promise<HealthStatus> => {
+  return customFetch<HealthStatus>(getSchedulerHealthCheckUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getSchedulerHealthCheckQueryKey = () => {
+  return [`/api/healthz/scheduler`] as const;
+};
+
+export const getSchedulerHealthCheckQueryOptions = <
+  TData = Awaited<ReturnType<typeof schedulerHealthCheck>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof schedulerHealthCheck>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getSchedulerHealthCheckQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof schedulerHealthCheck>>
+  > = ({ signal }) => schedulerHealthCheck({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof schedulerHealthCheck>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type SchedulerHealthCheckQueryResult = NonNullable<
+  Awaited<ReturnType<typeof schedulerHealthCheck>>
+>;
+export type SchedulerHealthCheckQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Scheduler health check
+ */
+
+export function useSchedulerHealthCheck<
+  TData = Awaited<ReturnType<typeof schedulerHealthCheck>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof schedulerHealthCheck>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getSchedulerHealthCheckQueryOptions(options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;
@@ -507,10 +664,97 @@ export const useUpdateTask = <
 };
 
 /**
+ * @summary Enable or disable a task
+ */
+export const getToggleTaskEnabledUrl = (id: number) => {
+  return `/api/tasks/${id}/enabled`;
+};
+
+export const toggleTaskEnabled = async (
+  id: number,
+  toggleTaskEnabledBody: ToggleTaskEnabledBody,
+  options?: RequestInit,
+): Promise<ToggleTaskEnabled200> => {
+  return customFetch<ToggleTaskEnabled200>(getToggleTaskEnabledUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(toggleTaskEnabledBody),
+  });
+};
+
+export const getToggleTaskEnabledMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof toggleTaskEnabled>>,
+    TError,
+    { id: number; data: BodyType<ToggleTaskEnabledBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof toggleTaskEnabled>>,
+  TError,
+  { id: number; data: BodyType<ToggleTaskEnabledBody> },
+  TContext
+> => {
+  const mutationKey = ["toggleTaskEnabled"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof toggleTaskEnabled>>,
+    { id: number; data: BodyType<ToggleTaskEnabledBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return toggleTaskEnabled(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ToggleTaskEnabledMutationResult = NonNullable<
+  Awaited<ReturnType<typeof toggleTaskEnabled>>
+>;
+export type ToggleTaskEnabledMutationBody = BodyType<ToggleTaskEnabledBody>;
+export type ToggleTaskEnabledMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Enable or disable a task
+ */
+export const useToggleTaskEnabled = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof toggleTaskEnabled>>,
+    TError,
+    { id: number; data: BodyType<ToggleTaskEnabledBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof toggleTaskEnabled>>,
+  TError,
+  { id: number; data: BodyType<ToggleTaskEnabledBody> },
+  TContext
+> => {
+  return useMutation(getToggleTaskEnabledMutationOptions(options));
+};
+
+/**
  * @summary Delete task
  */
 export const getDeleteTaskUrl = (id: number) => {
-  return `/api/tasks/${id}`;
+  return `/api/tasks/${id}/enabled`;
 };
 
 export const deleteTask = async (
@@ -852,6 +1096,93 @@ export function useGetTaskLog<
 }
 
 /**
+ * @summary Stream live task execution events via Server-Sent Events
+ */
+export const getStreamTaskLogsUrl = (id: number) => {
+  return `/api/tasks/${id}/logs/stream`;
+};
+
+export const streamTaskLogs = async (
+  id: number,
+  options?: RequestInit,
+): Promise<string> => {
+  return customFetch<string>(getStreamTaskLogsUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getStreamTaskLogsQueryKey = (id: number) => {
+  return [`/api/tasks/${id}/logs/stream`] as const;
+};
+
+export const getStreamTaskLogsQueryOptions = <
+  TData = Awaited<ReturnType<typeof streamTaskLogs>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof streamTaskLogs>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getStreamTaskLogsQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof streamTaskLogs>>> = ({
+    signal,
+  }) => streamTaskLogs(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof streamTaskLogs>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type StreamTaskLogsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof streamTaskLogs>>
+>;
+export type StreamTaskLogsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Stream live task execution events via Server-Sent Events
+ */
+
+export function useStreamTaskLogs<
+  TData = Awaited<ReturnType<typeof streamTaskLogs>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof streamTaskLogs>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getStreamTaskLogsQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
  * @summary Get screenshot PNG for a specific execution log
  */
 export const getGetTaskLogScreenshotUrl = (id: number, logId: number) => {
@@ -1093,40 +1424,336 @@ export function useGetTasksSummary<
   return { ...query, queryKey: queryOptions.queryKey };
 }
 
-  export const getToggleTaskEnabledUrl = (id: number) => `/api/tasks/${id}/enabled`;
+/**
+ * @summary List saved credentials (without secrets)
+ */
+export const getListSavedCredentialsUrl = () => {
+  return `/api/saved-credentials`;
+};
 
-  export const toggleTaskEnabled = async (
-    id: number,
-    enabled: boolean,
-    options?: RequestInit,
-  ): Promise<{ ok: boolean; enabled: boolean }> => {
-    return customFetch<{ ok: boolean; enabled: boolean }>(getToggleTaskEnabledUrl(id), {
-      ...options,
-      method: "PATCH",
-      headers: { "Content-Type": "application/json", ...(options?.headers ?? {}) },
-      body: JSON.stringify({ enabled }),
-    });
-  };
+export const listSavedCredentials = async (
+  options?: RequestInit,
+): Promise<SavedCredential[]> => {
+  return customFetch<SavedCredential[]>(getListSavedCredentialsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
 
-  export const useToggleTaskEnabled = <
-    TError = ErrorType<ErrorResponse>,
-    TContext = unknown,
-  >(options?: {
-    mutation?: UseMutationOptions<
-      Awaited<ReturnType<typeof toggleTaskEnabled>>,
-      TError,
-      { id: number; enabled: boolean },
-      TContext
-    >;
-  }): UseMutationResult<
-    Awaited<ReturnType<typeof toggleTaskEnabled>>,
+export const getListSavedCredentialsQueryKey = () => {
+  return [`/api/saved-credentials`] as const;
+};
+
+export const getListSavedCredentialsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listSavedCredentials>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listSavedCredentials>>,
     TError,
-    { id: number; enabled: boolean },
-    TContext
-  > => {
-    return useMutation({
-      mutationFn: ({ id, enabled }) => toggleTaskEnabled(id, enabled),
-      ...options?.mutation,
-    });
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListSavedCredentialsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listSavedCredentials>>
+  > = ({ signal }) => listSavedCredentials({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listSavedCredentials>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListSavedCredentialsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listSavedCredentials>>
+>;
+export type ListSavedCredentialsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List saved credentials (without secrets)
+ */
+
+export function useListSavedCredentials<
+  TData = Awaited<ReturnType<typeof listSavedCredentials>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listSavedCredentials>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListSavedCredentialsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
   };
-  
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Create a saved credential
+ */
+export const getCreateSavedCredentialUrl = () => {
+  return `/api/saved-credentials`;
+};
+
+export const createSavedCredential = async (
+  createSavedCredentialBody: CreateSavedCredentialBody,
+  options?: RequestInit,
+): Promise<SavedCredential> => {
+  return customFetch<SavedCredential>(getCreateSavedCredentialUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(createSavedCredentialBody),
+  });
+};
+
+export const getCreateSavedCredentialMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createSavedCredential>>,
+    TError,
+    { data: BodyType<CreateSavedCredentialBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createSavedCredential>>,
+  TError,
+  { data: BodyType<CreateSavedCredentialBody> },
+  TContext
+> => {
+  const mutationKey = ["createSavedCredential"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createSavedCredential>>,
+    { data: BodyType<CreateSavedCredentialBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createSavedCredential(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateSavedCredentialMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createSavedCredential>>
+>;
+export type CreateSavedCredentialMutationBody =
+  BodyType<CreateSavedCredentialBody>;
+export type CreateSavedCredentialMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Create a saved credential
+ */
+export const useCreateSavedCredential = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createSavedCredential>>,
+    TError,
+    { data: BodyType<CreateSavedCredentialBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createSavedCredential>>,
+  TError,
+  { data: BodyType<CreateSavedCredentialBody> },
+  TContext
+> => {
+  return useMutation(getCreateSavedCredentialMutationOptions(options));
+};
+
+/**
+ * @summary Update a saved credential
+ */
+export const getUpdateSavedCredentialUrl = (id: number) => {
+  return `/api/saved-credentials/${id}`;
+};
+
+export const updateSavedCredential = async (
+  id: number,
+  updateSavedCredentialBody: UpdateSavedCredentialBody,
+  options?: RequestInit,
+): Promise<SavedCredential> => {
+  return customFetch<SavedCredential>(getUpdateSavedCredentialUrl(id), {
+    ...options,
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(updateSavedCredentialBody),
+  });
+};
+
+export const getUpdateSavedCredentialMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateSavedCredential>>,
+    TError,
+    { id: number; data: BodyType<UpdateSavedCredentialBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateSavedCredential>>,
+  TError,
+  { id: number; data: BodyType<UpdateSavedCredentialBody> },
+  TContext
+> => {
+  const mutationKey = ["updateSavedCredential"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateSavedCredential>>,
+    { id: number; data: BodyType<UpdateSavedCredentialBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return updateSavedCredential(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateSavedCredentialMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateSavedCredential>>
+>;
+export type UpdateSavedCredentialMutationBody =
+  BodyType<UpdateSavedCredentialBody>;
+export type UpdateSavedCredentialMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Update a saved credential
+ */
+export const useUpdateSavedCredential = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateSavedCredential>>,
+    TError,
+    { id: number; data: BodyType<UpdateSavedCredentialBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateSavedCredential>>,
+  TError,
+  { id: number; data: BodyType<UpdateSavedCredentialBody> },
+  TContext
+> => {
+  return useMutation(getUpdateSavedCredentialMutationOptions(options));
+};
+
+/**
+ * @summary Delete a saved credential
+ */
+export const getDeleteSavedCredentialUrl = (id: number) => {
+  return `/api/saved-credentials/${id}`;
+};
+
+export const deleteSavedCredential = async (
+  id: number,
+  options?: RequestInit,
+): Promise<void> => {
+  return customFetch<void>(getDeleteSavedCredentialUrl(id), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteSavedCredentialMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteSavedCredential>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteSavedCredential>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["deleteSavedCredential"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteSavedCredential>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return deleteSavedCredential(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteSavedCredentialMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteSavedCredential>>
+>;
+
+export type DeleteSavedCredentialMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Delete a saved credential
+ */
+export const useDeleteSavedCredential = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteSavedCredential>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteSavedCredential>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getDeleteSavedCredentialMutationOptions(options));
+};

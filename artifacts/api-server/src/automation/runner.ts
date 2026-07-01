@@ -8,6 +8,7 @@ import path from "path";
   import { loadBrowserConfig, loadCaptchaConfig, loadTaskTimeoutConfig, loadConcurrencyConfig } from "../lib/appSettings";
   import { emitTaskProgress, emitTaskDone, getTaskEmitter, clearTaskEventBuffer } from "../lib/taskEvents";
   import { executeWorkflowSteps, CaptchaBlockedError, type WorkflowStep, type StepResult } from "./step-executor";
+  import { loadBrowserSession, saveBrowserSession, clearBrowserSession, taskUsesCookieMode } from "../lib/browserSessionStore";
 
 /** After a post-completion interval run finishes, write the nextRunAt timestamp into the DB. */
   async function schedulePostCompletionIfNeeded(taskId: number, dryRun: boolean): Promise<void> {
@@ -185,6 +186,30 @@ import path from "path";
       if (taskBrowserOverride) {
         logger.info({ taskId, provider: browserConfig.provider }, "Using task-level browser config override");
       }
+
+      // ── Cookie mode: restore + capture browser session (storage state) ──────
+      // If any login step in this task enables cookie mode, seed the browser
+      // context with the previously-saved storage state and register a dumper
+      // so we can persist the updated session after a successful run.
+      const _taskSteps = (task.steps as WorkflowStep[] | null) ?? [];
+      const cookieModeStep = _taskSteps.find(
+        (s) => s.type === "login" && (s as Record<string, unknown>).cookieMode === true,
+      ) as (Record<string, unknown> | undefined);
+      const cookieModeEnabled = !!cookieModeStep;
+      const cookieSessionKey =
+        (cookieModeStep?.sessionKey as string | undefined)?.trim() || "default";
+      let dumpStorageState: (() => Promise<unknown>) | null = null;
+
+      if (cookieModeEnabled) {
+        const saved = await loadBrowserSession(taskId, cookieSessionKey);
+        if (saved) {
+          browserConfig.storageState = saved;
+          emitTaskProgress(taskId, "Restored saved browser session (cookie mode)-¦");
+          logger.info({ taskId, cookieSessionKey }, "Cookie mode — restored saved session");
+        }
+        browserConfig.onContextReady = (dumper) => { dumpStorageState = dumper; };
+      }
+
       const browserProvider = createBrowserProvider(browserConfig);
 
       if (!dryRun) {
@@ -358,6 +383,18 @@ import path from "path";
             if (!dryRun) {
               await db.update(tasksTable).set({ status: overallSuccess ? "success" : "failed", lastRunAt: new Date() }).where(eq(tasksTable.id, taskId));
             }
+            // Cookie mode: persist the (possibly refreshed) session after a successful run.
+            if (!dryRun && overallSuccess && cookieModeEnabled) {
+              const _dumper = dumpStorageState as (() => Promise<unknown>) | null;
+              if (_dumper) {
+                try {
+                  const state = await _dumper();
+                  if (state) await saveBrowserSession(taskId, state, cookieSessionKey);
+                } catch (persistErr) {
+                  logger.warn({ taskId, persistErr }, "Failed to persist cookie-mode session");
+                }
+              }
+            }
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
             emitTaskDone(taskId, overallSuccess, overallSuccess ? `Task completed in ${elapsed}s` : `Task failed after ${elapsed}s`);
             await schedulePostCompletionIfNeeded(taskId, dryRun);
@@ -415,4 +452,3 @@ import path from "path";
       stepLogs: (stepLogs && stepLogs.length > 0) ? stepLogs : null,
     });
   }
-  

@@ -33,7 +33,7 @@ const thenActionSchema = z.object({
 }).optional();
 
 const stepSchema = z.object({
-  type: z.enum(["navigate", "click", "fill", "wait", "waitFor", "screenshot", "scroll", "hover", "keypress", "select", "switchToNewPage", "login", "condition"]),
+  type: z.enum(["navigate", "click", "fill", "wait", "waitFor", "screenshot", "scroll", "hover", "keypress", "select", "switchToNewPage", "login", "condition", "dismissPopups"]),
   url: z.string().optional(),
   selector: z.string().optional(),
   selectorType: z.enum(["text", "css", "xpath"]).optional(),
@@ -50,6 +50,10 @@ const stepSchema = z.object({
   inlineUsername: z.string().optional(),
   inlinePassword: z.string().optional(),
   inlineTotp: z.string().optional(),
+  successSelector: z.string().optional(),
+  successText: z.string().optional(),
+  cookieMode: z.boolean().optional(),
+  sessionKey: z.string().optional(),
   conditionType: z.enum(["text_contains", "text_not_contains", "element_visible", "element_not_visible", "url_contains"]).optional(),
   conditionValue: z.string().optional(),
   conditionSelector: z.string().optional(),

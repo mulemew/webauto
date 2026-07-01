@@ -264,6 +264,8 @@ interface BrowserConfig {
     sessionTimeoutMs?: number;
     stealth?: boolean;
     blockAds?: boolean;
+    proxyType?: "http" | "socks5" | "warp" | "vless" | "vmess" | "trojan" | "hy2";
+    headed?: boolean;
     proxyUrl?: string;
     ignoreHTTPS?: boolean;
     viewportWidth?: number;
@@ -776,6 +778,8 @@ function BrowserProviderSection() {
       sessionTimeoutMs: 1_800_000,
       stealth: true,
       blockAds: false,
+      proxyType: "http",
+      headed: false,
       proxyUrl: "",
       ignoreHTTPS: false,
       viewportWidth: undefined,
@@ -800,6 +804,8 @@ function BrowserProviderSection() {
             sessionTimeoutMs: data.sessionTimeoutMs ?? 1_800_000,
             stealth: data.stealth ?? false,
             blockAds: data.blockAds ?? false,
+            proxyType: (data.proxyType as BrowserConfig["proxyType"]) ?? "http",
+            headed: data.headed ?? false,
             proxyUrl: data.proxyUrl ?? "",
             ignoreHTTPS: data.ignoreHTTPS ?? false,
             viewportWidth: data.viewportWidth ?? undefined,
@@ -1018,6 +1024,31 @@ function BrowserProviderSection() {
           </div>
         </button>
 
+        {/* Proxy type */}
+        <div className="space-y-2">
+          <Label htmlFor="proxyType" className="text-sm">
+            Proxy type
+            <span className="ml-2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">socks5 / warp / vless / vmess / trojan / hy2</span>
+          </Label>
+          <select
+            id="proxyType"
+            value={config.proxyType ?? "http"}
+            onChange={(e) => { setConfig((c) => ({ ...c, proxyType: e.target.value as BrowserConfig["proxyType"] })); setTestResult(null); }}
+            className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring font-mono"
+          >
+            <option value="http">HTTP / HTTPS</option>
+            <option value="socks5">SOCKS5</option>
+            <option value="warp">Cloudflare WARP</option>
+            <option value="vless">VLESS</option>
+            <option value="vmess">VMess</option>
+            <option value="trojan">Trojan</option>
+            <option value="hy2">Hysteria2</option>
+          </select>
+          <p className="text-xs text-muted-foreground">
+            http/socks5 are used directly by the browser. warp/vless/vmess/trojan/hy2 are dialed through a bundled sing-box helper that exposes a local SOCKS5 to the browser (requires the sing-box binary in the image).
+          </p>
+        </div>
+
         {/* Proxy URL */}
         <div className="space-y-2">
           <Label htmlFor="proxyUrl" className="text-sm">
@@ -1036,6 +1067,24 @@ function BrowserProviderSection() {
             Routes all browser traffic through a proxy. Playwright applies this via context options (universal). Puppeteer injects it as a Chrome flag in the WS URL.
           </p>
         </div>
+
+        {/* Headed (visible) mode */}
+        <button
+          type="button"
+          onClick={() => { setConfig((c) => ({ ...c, headed: !c.headed })); setTestResult(null); }}
+          className={`w-full flex items-center gap-3 p-3 rounded-md border text-left transition-all duration-150 ${config.headed ? "border-primary bg-primary/5 text-foreground" : "border-border bg-card hover:bg-accent/40 text-muted-foreground hover:text-foreground"}`}
+        >
+          <div className={`flex-shrink-0 h-4 w-7 rounded-full border-2 relative transition-colors ${config.headed ? "border-primary bg-primary" : "border-muted-foreground bg-muted"}`}>
+            <div className={`absolute top-0.5 h-2 w-2 rounded-full bg-white transition-transform ${config.headed ? "translate-x-3" : "translate-x-0.5"}`} />
+          </div>
+          <div>
+            <p className="text-sm font-medium leading-none">
+              Headed (visible) mode
+              <span className="ml-2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300">local Chrome</span>
+            </p>
+            <p className="text-xs mt-1 opacity-70">Run the local Chrome with a visible window (via Xvfb in Docker) instead of headless. Helpful for debugging and for bypassing bot checks that flag headless. Applies to the Local Chrome provider.</p>
+          </div>
+        </button>
 
         {/* Ignore HTTPS errors */}
         <button
