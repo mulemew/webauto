@@ -13,7 +13,7 @@ A self-hosted web automation platform — schedule form logins, OTP handling, CA
 - **Per-task proxy** — HTTP, SOCKS5, and (via bundled sing-box) VLESS, VMess, Trojan, Hysteria2, and Cloudflare WARP, configured independently for each task
 - **Headed / headless toggle** — run any task with a visible browser (over Xvfb) for troubleshooting
 - **CAPTCHA support** — 2Captcha, Capsolver, Anti-Captcha (token + image)
-- **Cloudflare bypass** — JS challenge and Turnstile click simulation
+- **Cloudflare bypass** — full-page interstitial ("Just a moment…" managed / non-interactive challenges) cleared automatically before every login and navigation, plus JS-challenge and Turnstile click simulation
 - **Browser providers** — bundled Chromium (default), browserless.io, or any CDP-compatible remote
 - **Encrypted credentials** — AES-256-GCM storage for all saved passwords and persisted sessions
 

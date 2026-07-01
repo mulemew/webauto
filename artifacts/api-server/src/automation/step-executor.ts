@@ -3,6 +3,7 @@ import fs from "fs";
 import type { PageAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
 import { dismissPopups } from "./popup-handler";
+import { clearCloudflareInterstitial } from "./cloudflare-bypass";
 import { formLogin } from "./form-login";
 import { githubLogin } from "./github-login";
 import { googleLogin } from "./google-login";
@@ -176,6 +177,16 @@ async function executeStep(
       // #fix-navigate — use domcontentloaded instead of networkidle2 to avoid
       // timeouts on pages with continuous background requests (SPAs, polling, etc.)
       await page.goto(step.url, { waitUntil: "domcontentloaded", timeout: step.timeout ?? 30000 });
+      // ── Clear a full-page Cloudflare interstitial before continuing ───────
+      // If the destination sits behind a CF challenge ("Just a moment…"),
+      // subsequent steps (fill/click/waitFor) would operate on the challenge
+      // page instead of the real content. Clear it up-front, at parity with the
+      // SeleniumBase/cf-proxy backend's per-navigation uc_open_with_reconnect.
+      try {
+        await clearCloudflareInterstitial(page, { url: step.url });
+      } catch (cfErr) {
+        logger.warn({ url: step.url, cfErr }, "Cloudflare interstitial clear on navigate threw — continuing");
+      }
       // Wait for URL to stabilize — JS SPAs often redirect after domcontentloaded.
       // Without this, subsequent steps may operate on an already-closed page.
       {

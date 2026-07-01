@@ -2,6 +2,7 @@ import type { PageAdapter } from "./page-adapter";
   import { logger } from "../lib/logger";
   import { attachPopupHandler, dismissPopups } from "./popup-handler";
   import { detectAndHandleCaptcha } from "./captcha";
+  import { clearCloudflareInterstitial } from "./cloudflare-bypass";
   import type { CaptchaSolver } from "./captcha-solver";
   import crypto from "crypto";
 
@@ -357,6 +358,24 @@ import type { PageAdapter } from "./page-adapter";
       logger.info({ targetUrl }, "Starting form login flow");
       await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
 
+      // ── 0a. Clear a full-page Cloudflare interstitial FIRST ───────────────
+      // Sites like wispbyte.com, betadash.lunes.host and dash.domain.digitalplat.org
+      // serve the login page behind a full-page CF challenge ("Just a moment…").
+      // The username/password fields do not exist until the challenge clears, so
+      // we must pass it *before* trying to locate the form — otherwise findSelector
+      // times out and login fails without the CF bypass ever running.
+      // (The SeleniumBase/cf-proxy backend clears this natively via
+      // uc_open_with_reconnect on every goto; this brings the CDP/local backends
+      // to parity.)
+      try {
+        const cleared = await clearCloudflareInterstitial(page, { url: targetUrl });
+        if (!cleared) {
+          logger.warn({ targetUrl }, "Cloudflare interstitial not confirmed cleared before login — continuing anyway");
+        }
+      } catch (cfErr) {
+        logger.warn({ targetUrl, cfErr }, "Cloudflare interstitial pre-clear threw — continuing");
+      }
+
       // ── 0. Dismiss cookie consent banners & common popups ─────────────────
       // These overlays can block captcha widgets and form fields. Dismiss them
       // early so subsequent interactions land on the correct elements.
@@ -499,4 +518,4 @@ import type { PageAdapter } from "./page-adapter";
       return { success: false, captchaBlocked: false, message: `Form login error: ${message}` };
     }
   }
-  
+ 

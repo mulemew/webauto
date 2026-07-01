@@ -654,6 +654,64 @@ export async function bypassCloudflareChallenge(
   return "failed";
 }
 
+/**
+ * Ensure a full-page Cloudflare interstitial ("Just a moment…" / managed /
+ * non-interactive challenge) is cleared *before* the caller tries to interact
+ * with the real page (find a login form, click a button, etc.).
+ *
+ * This mirrors the cf-proxy (SeleniumBase UC) login flow, where every
+ * navigation goes through `uc_open_with_reconnect()` so Cloudflare sees a
+ * clean browser during the challenge window. For the Playwright / Puppeteer /
+ * local backends we cannot disconnect CDP, so instead we:
+ *
+ *   1. Run the standard bypass (human presence + Turnstile checkbox click).
+ *   2. If it does not clear, **reload the page** and retry — a fresh navigation
+ *      is the closest analogue to uc_open_with_reconnect and frequently lets a
+ *      stalled non-interactive / managed challenge finish.
+ *
+ * Returns:
+ *   true  — no CF interstitial present, or it was cleared.
+ *   false — a challenge is still blocking the page (WAF block or unsolved).
+ *
+ * IMPORTANT: this is safe to call on any page. If there is no CF challenge it
+ * returns immediately, so callers can invoke it unconditionally after a goto.
+ */
+export async function clearCloudflareInterstitial(
+  page: PageAdapter,
+  opts?: { url?: string; maxReloads?: number },
+): Promise<boolean> {
+  const maxReloads = opts?.maxReloads ?? 2;
+
+  for (let round = 0; round <= maxReloads; round++) {
+    const result = await bypassCloudflareChallenge(page);
+    if (result === "not_detected" || result === "passed") {
+      if (round > 0) logger.info({ round }, "Cloudflare interstitial cleared after reload");
+      return true;
+    }
+    if (result === "blocked") {
+      logger.warn("Cloudflare WAF block — cannot clear interstitial by browser bypass");
+      return false;
+    }
+
+    // result === "failed" — reload and retry (analogue of uc_open_with_reconnect).
+    if (round < maxReloads) {
+      const reloadUrl = opts?.url || page.url();
+      logger.info({ round, reloadUrl }, "CF interstitial not cleared — reloading page and retrying");
+      try {
+        await page.goto(reloadUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      } catch {
+        // Navigation may be interrupted by the challenge redirect — ignore.
+      }
+      // Give CF's JS a moment to spin up before the next bypass round.
+      await sleep(2_500 + Math.random() * 1_500);
+    }
+  }
+
+  // Final status check — the challenge may have cleared during the last wait.
+  const finalType = await bypassCloudflareChallenge(page);
+  return finalType === "not_detected" || finalType === "passed";
+}
+
 // ── CF environment patches ───────────────────────────────────────────────────
 
 /**
