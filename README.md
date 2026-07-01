@@ -125,6 +125,8 @@ docker compose -f docker-compose.yml -f docker-compose.external-db.yml run --rm 
 | `ANTICAPTCHA_API_KEY` | Anti-Captcha | API key |
 | `PORT` | No | Host port (default `80`) |
 | `WARP_CONFIG_PATH` | WARP proxy only | Path to a sing-box WireGuard outbound JSON (generate with `wgcf`/warp-reg) used when a task's proxy type is `warp` |
+| `SINGBOX_PROXY_PUBLIC_HOST` | No | Host/IP the **browser** dials to reach the on-demand sing-box SOCKS5 (VLESS/VMess/Trojan/Hysteria2/WARP). Only relevant when the browser runs in a **separate container** (browserless / cf-proxy / remote CDP). Auto-detected from the app container's non-loopback IP when unset; set it explicitly (e.g. the app's compose service name `app`, or the host IP in host-network mode) if auto-detection picks the wrong interface. |
+| `SINGBOX_PROXY_LISTEN_HOST` | No | Interface the sing-box SOCKS5 inbound binds to. Defaults to `0.0.0.0` so sibling containers can reach it; set to `127.0.0.1` to restrict it to the local container only (safe only when the browser is the bundled `local` provider). |
 
 > **Backing up secrets**: `SESSION_SECRET` and `ENCRYPTION_KEY` are saved to `data/secrets.json` inside the Docker volume (`autoops_data`). Back up this file if you want to restore credentials after migrating to a new server.
 
@@ -136,7 +138,7 @@ Each task has a **浏览器后端 (Browser Backend)** panel (collapsed by defaul
 
 - **Proxy type + address** — choose one of:
   - `HTTP/HTTPS` / `SOCKS5` — paste a normal proxy URL (`http://user:pass@host:8080`, `socks5://host:1080`). Chromium connects to it directly.
-  - `VLESS` / `VMess` / `Trojan` / `Hysteria2` — paste the node share link (`vless://…`, `vmess://…`, `trojan://…`, `hysteria2://…`). A local **sing-box** helper is started per run and exposes a local SOCKS5 that the browser uses. Requires the `sing-box` binary (bundled in the Docker image).
+  - `VLESS` / `VMess` / `Trojan` / `Hysteria2` — paste the node share link (`vless://…`, `vmess://…`, `trojan://…`, `hysteria2://…`). A per-run **sing-box** helper is started that dials the node and exposes a SOCKS5 the browser uses. Requires the `sing-box` binary (bundled in the Docker image). When the task's browser backend runs in a **separate container** (browserless / cf-proxy / remote CDP), the app binds sing-box to all interfaces (`0.0.0.0`) and advertises a cross-container-reachable address to the browser instead of `127.0.0.1` — auto-detected, or set `SINGBOX_PROXY_PUBLIC_HOST` to override. For the bundled `local` backend it stays on `127.0.0.1`.
   - `Cloudflare WARP` — set `WARP_CONFIG_PATH` to a sing-box WireGuard outbound JSON; leave the address blank.
 - **Headed mode (有头模式)** — run the task with a visible browser window (rendered on the container's Xvfb display) instead of headless, which is useful for troubleshooting. The `seleniumbase` (cf-proxy) backend is always headed.
 

@@ -8,10 +8,20 @@
  *
  * Modern node protocols (VLESS / VMess / Trojan / Hysteria2 / Cloudflare WARP)
  * are NOT understood by Chromium directly. For those we start a local
- * `sing-box` client that dials the upstream node and exposes a plain local
- * SOCKS5 inbound on 127.0.0.1:<port>. The browser is then pointed at that
- * local SOCKS5, so from Chromium's perspective every task just uses a normal
- * SOCKS5 proxy.
+ * `sing-box` client that dials the upstream node and exposes a plain SOCKS5
+ * inbound. The browser is then pointed at that SOCKS5, so from Chromium's
+ * perspective every task just uses a normal SOCKS5 proxy.
+ *
+ * IMPORTANT — reachability across containers:
+ *   The browser that consumes this proxy may NOT run in the same container as
+ *   this process. With BROWSER_PROVIDER=browserless / seleniumbase / remote the
+ *   browser lives in a separate container, so a `127.0.0.1:<port>` proxy URL
+ *   would resolve to *that* container's own loopback and fail. sing-box is
+ *   therefore bound to `0.0.0.0` (override with SINGBOX_PROXY_LISTEN_HOST) and
+ *   the proxy URL handed to the browser advertises a reachable host
+ *   (SINGBOX_PROXY_PUBLIC_HOST, e.g. the app's service name `app` on a Docker
+ *   network, or the host IP with host networking). It defaults to 127.0.0.1
+ *   for the local provider where the browser shares this container.
  *
  * Supported `proxyType` values:
  *   - "http"     — passthrough http/https proxy URL
@@ -41,6 +51,52 @@ export type ProxyType =
   | "vmess"
   | "trojan"
   | "hy2";
+
+function getSingBoxListenHost(): string {
+  return process.env.SINGBOX_PROXY_LISTEN_HOST?.trim() || process.env.PROXY_LISTEN_HOST?.trim() || "0.0.0.0";
+}
+
+/**
+ * The host that the *browser* should dial to reach the sing-box SOCKS5 inbound.
+ *
+ *   - Local provider (browser shares this container): 127.0.0.1 is correct and
+ *     safest — nothing outside the container can reach the proxy.
+ *   - Remote provider (browser in a separate container: browserless / cf-proxy /
+ *     remote CDP): 127.0.0.1 would resolve to *that* container's loopback and
+ *     fail. We must advertise an address reachable from the other container.
+ *
+ * Resolution order:
+ *   1. SINGBOX_PROXY_PUBLIC_HOST / PROXY_PUBLIC_HOST env override (explicit).
+ *   2. For a remote consumer: this container's first non-internal IPv4 address
+ *      (reachable by sibling containers on the same Docker network, or by the
+ *      host in host-networking mode).
+ *   3. Fallback: 127.0.0.1.
+ */
+function getSingBoxPublicHost(remoteConsumer: boolean): string {
+  const explicit = process.env.SINGBOX_PROXY_PUBLIC_HOST?.trim() || process.env.PROXY_PUBLIC_HOST?.trim();
+  if (explicit) return explicit;
+  if (remoteConsumer) {
+    const ip = detectReachableIPv4();
+    if (ip) return ip;
+    logger.warn(
+      "Could not auto-detect a reachable IPv4 for the sing-box proxy while using a remote browser " +
+        "container. The browser may not be able to reach 127.0.0.1. Set SINGBOX_PROXY_PUBLIC_HOST to " +
+        "an address the browser container can reach (e.g. the app's service name or host IP).",
+    );
+  }
+  return "127.0.0.1";
+}
+
+/** First non-internal IPv4 address of this host/container, or null. */
+function detectReachableIPv4(): string | null {
+  const ifaces = os.networkInterfaces();
+  for (const name of Object.keys(ifaces)) {
+    for (const addr of ifaces[name] ?? []) {
+      if (addr.family === "IPv4" && !addr.internal) return addr.address;
+    }
+  }
+  return null;
+}
 
 /** Per-task proxy configuration, stored inside browserConfig. */
 export interface ProxyConfig {
@@ -314,12 +370,14 @@ function buildOutbound(type: ProxyType, link: string): Record<string, unknown> {
 }
 
 /**
- * Start a local sing-box that exposes a SOCKS5 inbound on 127.0.0.1 and
- * forwards to the given upstream node. Returns the local socks URL + a stop().
+ * Start a local sing-box that exposes a SOCKS5 inbound on 0.0.0.0 (or a
+ * configured bind host) and forwards to the given upstream node. Returns the
+ * proxy URL that remote browser containers should use plus a stop().
  */
 async function startSingBox(
   type: ProxyType,
   link: string,
+  remoteConsumer: boolean,
 ): Promise<ResolvedProxy> {
   if (!hasSingBox()) {
     throw new Error(
@@ -328,11 +386,13 @@ async function startSingBox(
     );
   }
   const port = await getFreePort();
+  const listenHost = getSingBoxListenHost();
+  const publicHost = getSingBoxPublicHost(remoteConsumer);
   const outbound = buildOutbound(type, link);
   const config = {
     log: { level: "warn" },
     inbounds: [
-      { type: "socks", tag: "in", listen: "127.0.0.1", listen_port: port },
+      { type: "socks", tag: "in", listen: listenHost, listen_port: port },
     ],
     outbounds: [outbound, { type: "direct", tag: "direct" }],
   };
@@ -354,10 +414,10 @@ async function startSingBox(
     throw err;
   }
 
-  logger.info({ type, localPort: port }, "Local sing-box proxy started");
+  logger.info({ type, listenHost, publicHost, localPort: port }, "Local sing-box proxy started");
 
   return {
-    serverUrl: `socks5://127.0.0.1:${port}`,
+    serverUrl: `socks5://${publicHost}:${port}`,
     stop: async () => {
       try {
         child.kill("SIGKILL");
@@ -377,12 +437,18 @@ async function startSingBox(
 /**
  * Resolve a ProxyConfig into a Chromium-usable proxy. For passthrough proxies
  * this returns the URL directly. For advanced protocols it starts a local
- * sing-box helper and returns the local SOCKS5 URL.
+ * sing-box helper and returns the SOCKS5 URL.
+ *
+ * `remoteConsumer` tells us whether the browser that will use this proxy lives
+ * in a separate container (browserless / cf-proxy / remote CDP). When true, the
+ * returned URL advertises a cross-container-reachable address instead of
+ * 127.0.0.1, and the sing-box inbound binds to all interfaces.
  *
  * Returns null when no proxy is configured.
  */
 export async function startLocalProxy(
   cfg: ProxyConfig,
+  remoteConsumer = false,
 ): Promise<ResolvedProxy | null> {
   const type = resolveProxyType(cfg);
   if (!type) return null;
@@ -402,7 +468,7 @@ export async function startLocalProxy(
     );
   }
 
-  return startSingBox(type, url);
+  return startSingBox(type, url, remoteConsumer);
 }
 
 /** Human-readable label for each proxy type (for UI/logging). */

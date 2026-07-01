@@ -470,10 +470,11 @@ const AD_BLOCK_RE = new RegExp(
  */
 async function resolveProxyForConfig(
   config: BrowserProviderConfig,
+  remoteConsumer = false,
 ): Promise<ResolvedProxy | null> {
   if (!config.proxyUrl && !config.proxyType) return null;
   try {
-    return await startLocalProxy({ proxyType: config.proxyType, proxyUrl: config.proxyUrl });
+    return await startLocalProxy({ proxyType: config.proxyType, proxyUrl: config.proxyUrl }, remoteConsumer);
   } catch (err) {
     logger.error({ err, proxyType: config.proxyType }, "Failed to start proxy — proceeding without it");
     throw err;
@@ -498,7 +499,7 @@ class PuppeteerCDPProvider implements BrowserProvider {
       // For Puppeteer CDP, proxy and ignoreHTTPS must be baked into the WS URL as
       // Chrome launch flags (browserless reads them from the ?launch= JSON param).
       // Resolve advanced proxy types (warp/vless/…) to a local SOCKS5 first.
-      const _resolvedProxy = await resolveProxyForConfig(this.config);
+      const _resolvedProxy = await resolveProxyForConfig(this.config, true);
       const _cfg = _resolvedProxy ? { ...this.config, proxyUrl: _resolvedProxy.serverUrl } : this.config;
       const ws = buildWsUrl(_cfg, true);
       const safeUrl = ws.replace(/([?&]token=)[^&]*/g, "$1***");
@@ -592,7 +593,7 @@ class PlaywrightCDPProvider implements BrowserProvider {
     protected async _makePageAdapter(browser: Awaited<ReturnType<typeof chromium.connectOverCDP>>): Promise<PageAdapter> {
       const vp = resolveViewport(this.config);
       const ua = pickRandom(UA_POOL);
-      const proxyServer = await resolveProxyForConfig(this.config);
+      const proxyServer = await resolveProxyForConfig(this.config, true);
       const context = await browser.newContext({
         viewport: vp,
         userAgent: ua,
