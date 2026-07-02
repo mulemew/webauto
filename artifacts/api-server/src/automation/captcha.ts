@@ -27,6 +27,45 @@ interface TokenDetection {
 }
 
 async function detectTokenCaptcha(page: PageAdapter): Promise<TokenDetection | null> {
+  // ── 0. Cloudflare Turnstile in reCAPTCHA-compatibility mode ───────────────
+  // Some sites (e.g. betadash.lunes.host) embed Cloudflare Turnstile but render
+  // it inside a `.g-recaptcha` container with a `g-recaptcha-response` field for
+  // drop-in reCAPTCHA compatibility. Detecting `.g-recaptcha` first would
+  // misclassify it as reCAPTCHA and skip the (working) Turnstile solve path,
+  // leaving the login stuck on the form. Turnstile has unambiguous fingerprints
+  // that we must check BEFORE the generic selectors below:
+  //   - a hidden `input[name='cf-turnstile-response']`
+  //   - the Cloudflare challenges script / iframe
+  //   - a sitekey in Turnstile format (starts with "0x"; reCAPTCHA keys start
+  //     with "6L", hCaptcha are UUIDs)
+  const turnstile = await page.evaluate(() => {
+    const cfInput = document.querySelector("input[name='cf-turnstile-response']");
+    const cfScript = document.querySelector("script[src*='challenges.cloudflare.com']");
+    const cfIframe = document.querySelector(
+      "iframe[src*='turnstile'], iframe[src*='challenges.cloudflare.com']",
+    );
+    // Sitekey may live on .cf-turnstile, .g-recaptcha, or any [data-sitekey] host.
+    let sitekey: string | null = null;
+    const hosts = document.querySelectorAll<HTMLElement>(
+      ".cf-turnstile, .g-recaptcha, [data-sitekey]",
+    );
+    for (const h of Array.from(hosts)) {
+      const k = h.dataset.sitekey ?? h.getAttribute("data-sitekey");
+      if (k) { sitekey = k; break; }
+    }
+    const isTurnstileKey = !!sitekey && /^0x/i.test(sitekey);
+    const detected = !!(cfInput || cfScript || cfIframe || isTurnstileKey);
+    return { detected, sitekey };
+  }) as { detected: boolean; sitekey: string | null };
+
+  if (turnstile.detected) {
+    logger.warn(
+      { type: "Turnstile", sitekey: turnstile.sitekey },
+      "Turnstile detected (incl. reCAPTCHA-compatibility mode)",
+    );
+    return { type: "Turnstile", sitekey: turnstile.sitekey };
+  }
+
   for (const { selector, type } of TOKEN_CAPTCHA_SELECTORS) {
     const el = await page.$(selector);
     if (el) {
