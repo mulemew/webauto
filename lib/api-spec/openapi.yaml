@@ -170,6 +170,25 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      operationId: deleteTask
+      tags: [tasks]
+      summary: Delete task
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /tasks/{id}/enabled:
     patch:
@@ -204,25 +223,6 @@ paths:
                     type: boolean
                   enabled:
                     type: boolean
-        "404":
-          description: Not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-    delete:
-      operationId: deleteTask
-      tags: [tasks]
-      summary: Delete task
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-      responses:
-        "204":
-          description: Deleted
         "404":
           description: Not found
           content:
@@ -678,6 +678,22 @@ components:
           type: string
         successText:
           type: string
+        credentialId:
+          type: integer
+          description: ID of a saved credential to use for this login step
+        credentialSource:
+          type: string
+          enum: [saved, inline]
+          description: Whether to use a saved credential (credentialId) or inline username/password
+        inlineUsername:
+          type: string
+          description: Inline username/email when credentialSource is "inline"
+        inlinePassword:
+          type: string
+          description: Inline password when credentialSource is "inline"
+        inlineTotp:
+          type: string
+          description: Optional inline TOTP secret when credentialSource is "inline"
       required: [type, loginMethod, loginUrl]
 
     ConditionalAction:

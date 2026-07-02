@@ -242,6 +242,17 @@ export const LoginStepLoginMethod = {
 } as const;
 
 /**
+ * Whether to use a saved credential (credentialId) or inline username/password
+ */
+export type LoginStepCredentialSource =
+  (typeof LoginStepCredentialSource)[keyof typeof LoginStepCredentialSource];
+
+export const LoginStepCredentialSource = {
+  saved: "saved",
+  inline: "inline",
+} as const;
+
+/**
  * Authenticate via form login, GitHub OAuth, or Google OAuth using the task's stored credentials. All subsequent steps share the same browser session, so post-login steps run as the authenticated user.
 
  */
@@ -259,6 +270,16 @@ export interface LoginStep {
   cookieMode?: boolean;
   sessionKey?: string;
   successText?: string;
+  /** ID of a saved credential to use for this login step */
+  credentialId?: number;
+  /** Whether to use a saved credential (credentialId) or inline username/password */
+  credentialSource?: LoginStepCredentialSource;
+  /** Inline username/email when credentialSource is "inline" */
+  inlineUsername?: string;
+  /** Inline password when credentialSource is "inline" */
+  inlinePassword?: string;
+  /** Optional inline TOTP secret when credentialSource is "inline" */
+  inlineTotp?: string;
 }
 
 export type ConditionalActionType =

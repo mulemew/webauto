@@ -207,6 +207,32 @@ export const ListTasksResponseItem = zod.object({
               .describe("When true, persist th\n"),
             sessionKey: zod.string().optional(),
             successText: zod.string().optional(),
+            credentialId: zod
+              .number()
+              .optional()
+              .describe("ID of a saved credential to use for this login step"),
+            credentialSource: zod
+              .enum(["saved", "inline"])
+              .optional()
+              .describe(
+                "Whether to use a saved credential (credentialId) or inline username\/password",
+              ),
+            inlineUsername: zod
+              .string()
+              .optional()
+              .describe(
+                'Inline username\/email when credentialSource is \"inline\"',
+              ),
+            inlinePassword: zod
+              .string()
+              .optional()
+              .describe('Inline password when credentialSource is \"inline\"'),
+            inlineTotp: zod
+              .string()
+              .optional()
+              .describe(
+                'Optional inline TOTP secret when credentialSource is \"inline\"',
+              ),
           })
           .describe(
             "Authenticate via form login, GitHub OAuth, or Google OAuth using the task's stored credentials. All subsequent steps share the same browser session, so post-login steps run as the authenticated user.\n",
@@ -440,6 +466,32 @@ export const CreateTaskBody = zod.object({
               .describe("When true, persist th\n"),
             sessionKey: zod.string().optional(),
             successText: zod.string().optional(),
+            credentialId: zod
+              .number()
+              .optional()
+              .describe("ID of a saved credential to use for this login step"),
+            credentialSource: zod
+              .enum(["saved", "inline"])
+              .optional()
+              .describe(
+                "Whether to use a saved credential (credentialId) or inline username\/password",
+              ),
+            inlineUsername: zod
+              .string()
+              .optional()
+              .describe(
+                'Inline username\/email when credentialSource is \"inline\"',
+              ),
+            inlinePassword: zod
+              .string()
+              .optional()
+              .describe('Inline password when credentialSource is \"inline\"'),
+            inlineTotp: zod
+              .string()
+              .optional()
+              .describe(
+                'Optional inline TOTP secret when credentialSource is \"inline\"',
+              ),
           })
           .describe(
             "Authenticate via form login, GitHub OAuth, or Google OAuth using the task's stored credentials. All subsequent steps share the same browser session, so post-login steps run as the authenticated user.\n",
@@ -658,6 +710,36 @@ export const GetTaskResponse = zod
                 .describe("When true, persist th\n"),
               sessionKey: zod.string().optional(),
               successText: zod.string().optional(),
+              credentialId: zod
+                .number()
+                .optional()
+                .describe(
+                  "ID of a saved credential to use for this login step",
+                ),
+              credentialSource: zod
+                .enum(["saved", "inline"])
+                .optional()
+                .describe(
+                  "Whether to use a saved credential (credentialId) or inline username\/password",
+                ),
+              inlineUsername: zod
+                .string()
+                .optional()
+                .describe(
+                  'Inline username\/email when credentialSource is \"inline\"',
+                ),
+              inlinePassword: zod
+                .string()
+                .optional()
+                .describe(
+                  'Inline password when credentialSource is \"inline\"',
+                ),
+              inlineTotp: zod
+                .string()
+                .optional()
+                .describe(
+                  'Optional inline TOTP secret when credentialSource is \"inline\"',
+                ),
             })
             .describe(
               "Authenticate via form login, GitHub OAuth, or Google OAuth using the task's stored credentials. All subsequent steps share the same browser session, so post-login steps run as the authenticated user.\n",
@@ -908,6 +990,32 @@ export const UpdateTaskBody = zod.object({
               .describe("When true, persist th\n"),
             sessionKey: zod.string().optional(),
             successText: zod.string().optional(),
+            credentialId: zod
+              .number()
+              .optional()
+              .describe("ID of a saved credential to use for this login step"),
+            credentialSource: zod
+              .enum(["saved", "inline"])
+              .optional()
+              .describe(
+                "Whether to use a saved credential (credentialId) or inline username\/password",
+              ),
+            inlineUsername: zod
+              .string()
+              .optional()
+              .describe(
+                'Inline username\/email when credentialSource is \"inline\"',
+              ),
+            inlinePassword: zod
+              .string()
+              .optional()
+              .describe('Inline password when credentialSource is \"inline\"'),
+            inlineTotp: zod
+              .string()
+              .optional()
+              .describe(
+                'Optional inline TOTP secret when credentialSource is \"inline\"',
+              ),
           })
           .describe(
             "Authenticate via form login, GitHub OAuth, or Google OAuth using the task's stored credentials. All subsequent steps share the same browser session, so post-login steps run as the authenticated user.\n",
@@ -1118,6 +1226,32 @@ export const UpdateTaskResponse = zod.object({
               .describe("When true, persist th\n"),
             sessionKey: zod.string().optional(),
             successText: zod.string().optional(),
+            credentialId: zod
+              .number()
+              .optional()
+              .describe("ID of a saved credential to use for this login step"),
+            credentialSource: zod
+              .enum(["saved", "inline"])
+              .optional()
+              .describe(
+                "Whether to use a saved credential (credentialId) or inline username\/password",
+              ),
+            inlineUsername: zod
+              .string()
+              .optional()
+              .describe(
+                'Inline username\/email when credentialSource is \"inline\"',
+              ),
+            inlinePassword: zod
+              .string()
+              .optional()
+              .describe('Inline password when credentialSource is \"inline\"'),
+            inlineTotp: zod
+              .string()
+              .optional()
+              .describe(
+                'Optional inline TOTP secret when credentialSource is \"inline\"',
+              ),
           })
           .describe(
             "Authenticate via form login, GitHub OAuth, or Google OAuth using the task's stored credentials. All subsequent steps share the same browser session, so post-login steps run as the authenticated user.\n",
@@ -1183,6 +1317,13 @@ export const UpdateTaskResponse = zod.object({
 });
 
 /**
+ * @summary Delete task
+ */
+export const DeleteTaskParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+/**
  * @summary Enable or disable a task
  */
 export const ToggleTaskEnabledParams = zod.object({
@@ -1196,13 +1337,6 @@ export const ToggleTaskEnabledBody = zod.object({
 export const ToggleTaskEnabledResponse = zod.object({
   ok: zod.boolean().optional(),
   enabled: zod.boolean().optional(),
-});
-
-/**
- * @summary Delete task
- */
-export const DeleteTaskParams = zod.object({
-  id: zod.coerce.number(),
 });
 
 /**
