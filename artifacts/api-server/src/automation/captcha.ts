@@ -10,6 +10,98 @@ export type CaptchaResult =
   | { detected: true; solved: true; message: string }
   | { detected: true; solved: false; needsAttention: boolean; message: string };
 
+// ── ALTCHA detection ─────────────────────────────────────────────────────────
+
+interface AltchaDetection {
+  widgetSelector: string;
+  inputSelector: string;
+  stateSelector: string;
+}
+
+function getVisibleRect(page: PageAdapter, selector: string): Promise<boolean> {
+  return page.evaluate((sel: string) => {
+    const el = document.querySelector<HTMLElement>(sel);
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+  }, selector as never) as Promise<boolean>;
+}
+
+async function detectAltchaCaptcha(page: PageAdapter): Promise<AltchaDetection | null> {
+  const candidates = [
+    "altcha-widget",
+    "[name='altcha']",
+    "input[name='altcha']",
+    "[data-altcha]",
+    "[class*='altcha' i]",
+  ];
+
+  for (const selector of candidates) {
+    const el = await page.$(selector);
+    if (!el) continue;
+    const visible = await getVisibleRect(page, selector);
+    if (!visible) continue;
+
+    const inputSelector = await page.evaluate((sel: string) => {
+      const widget = document.querySelector<HTMLElement>(sel);
+      if (!widget) return "";
+      const input =
+        widget.querySelector<HTMLInputElement>("input[name='altcha']") ||
+        document.querySelector<HTMLInputElement>("input[name='altcha']");
+      return input ? "input[name='altcha']" : "";
+    }, selector as never) as string;
+
+    if (!inputSelector) continue;
+
+    return {
+      widgetSelector: selector,
+      inputSelector,
+      stateSelector: selector,
+    };
+  }
+
+  return null;
+}
+
+async function waitForAltchaVerification(page: PageAdapter, timeoutMs = 30_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const solved = await page.evaluate(() => {
+        const widget = document.querySelector<any>("altcha-widget");
+        const input = document.querySelector<HTMLInputElement>("input[name='altcha']");
+        if (input && input.value.trim().length > 0) return true;
+        if (widget) {
+          const state = typeof widget.getState === "function" ? widget.getState() : "";
+          if (state === "verified") return true;
+        }
+        return false;
+      }) as boolean;
+      if (solved) return true;
+    } catch {
+      // ignore and keep polling
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return false;
+}
+
+async function clickAltchaWidget(page: PageAdapter): Promise<boolean> {
+  try {
+    const widget = await page.$("altcha-widget, [name='altcha'], [data-altcha]");
+    if (!widget) return false;
+    const box = await widget.boundingBox();
+    if (!box || box.width === 0 || box.height === 0) return false;
+    await page.mouse.move(box.x + Math.min(20, box.width / 2), box.y + box.height / 2);
+    await new Promise((r) => setTimeout(r, 150));
+    await page.mouse.click(box.x + Math.min(20, box.width / 2), box.y + box.height / 2);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ── Token captcha detection ───────────────────────────────────────────────────
 
 const TOKEN_CAPTCHA_SELECTORS: Array<{ selector: string; type: CaptchaTokenType }> = [
@@ -477,6 +569,50 @@ async function detectAndBypassClickCaptcha(page: PageAdapter): Promise<CaptchaRe
   return null;
 }
 
+async function detectAndBypassAltcha(page: PageAdapter): Promise<CaptchaResult | null> {
+  const detection = await detectAltchaCaptcha(page);
+  if (!detection) return null;
+
+  logger.info({ widget: detection.widgetSelector }, "ALTCHA widget detected — driving proof-of-work verification");
+
+  // 1. It may already be verified (auto mode) or verify in the background.
+  if (await waitForAltchaVerification(page, 6_000)) {
+    logger.info("ALTCHA verified automatically (token populated)");
+    return { detected: true, solved: true, message: "ALTCHA verified (auto proof-of-work)" };
+  }
+
+  // 2. Not auto-verified — click the checkbox/switch to kick off the PoW, then
+  //    poll for the token (PoW can take several seconds on slow CPUs).
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const clicked = await clickAltchaWidget(page);
+    if (!clicked) {
+      logger.debug({ attempt }, "Could not locate ALTCHA widget to click");
+    }
+    if (await waitForAltchaVerification(page, 30_000)) {
+      logger.info({ attempt }, "ALTCHA verified after click (token populated)");
+      return { detected: true, solved: true, message: `ALTCHA verified via checkbox click (attempt ${attempt})` };
+    }
+    // Try programmatically triggering verification via the widget API before retrying.
+    try {
+      await page.evaluate(() => {
+        const w = document.querySelector<any>("altcha-widget");
+        if (w && typeof w.verify === "function") w.verify();
+      });
+    } catch { /* non-critical */ }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+
+  return {
+    detected: true,
+    solved: false,
+    needsAttention: true,
+    message:
+      "ALTCHA captcha detected but proof-of-work verification did not complete (token never populated). " +
+      "ALTCHA runs entirely in-browser and cannot be solved by external captcha services — retry, or check " +
+      "that the page finished loading the ALTCHA script.",
+  };
+}
+
 // ── Main export ───────────────────────────────────────────────────────────────
 
 /**
@@ -492,6 +628,9 @@ export async function detectAndHandleCaptcha(
   page: PageAdapter,
   solver: CaptchaSolver | null,
 ): Promise<CaptchaResult> {
+  const altchaResult = await detectAndBypassAltcha(page);
+  if (altchaResult) return altchaResult;
+
   // ── 1. Cloudflare challenge ──────────────────────────────────────────────
   const cfResult = await bypassCloudflareChallenge(page);
   if (cfResult === "passed") {

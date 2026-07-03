@@ -149,12 +149,103 @@ export function needsLocalHelper(type: ProxyType): boolean {
 }
 
 function hasSingBox(): boolean {
-  try {
-    execSync("which sing-box", { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
+  return !!resolveSingBoxBin();
+}
+
+/**
+ * Resolve the path to a usable sing-box binary, or null if none is found.
+ * Checks (in order): SINGBOX_BIN env override, the system PATH, a couple of
+ * common install locations, and a runtime-downloaded copy under DATA_DIR.
+ */
+function resolveSingBoxBin(): string | null {
+  const candidates = [
+    process.env.SINGBOX_BIN?.trim(),
+    RUNTIME_SINGBOX_PATH,
+    "/usr/local/bin/sing-box",
+    "/usr/bin/sing-box",
+  ].filter(Boolean) as string[];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) return p;
+    } catch {
+      /* ignore */
+    }
   }
+  try {
+    const found = execSync("command -v sing-box", { encoding: "utf8" }).trim();
+    if (found) return found;
+  } catch {
+    /* not on PATH */
+  }
+  return null;
+}
+
+/** Where a runtime-downloaded sing-box is cached (writable in the container). */
+const RUNTIME_SINGBOX_PATH = path.join(
+  process.env.DATA_DIR?.trim() || "/app/data",
+  "bin",
+  "sing-box",
+);
+
+const SINGBOX_DOWNLOAD_VERSION = process.env.SINGBOX_VERSION?.trim() || "1.11.4";
+
+/** Guards against concurrent downloads racing each other. */
+let _singBoxInstallPromise: Promise<string | null> | null = null;
+
+/**
+ * Ensure a sing-box binary is available, downloading it at runtime if the image
+ * shipped without one. This is a safety net for already-deployed images (built
+ * before the Dockerfile install was hardened): rather than hard-failing every
+ * advanced-proxy task with "sing-box is not installed", we fetch the binary
+ * into DATA_DIR (which persists on the mounted volume) on first use.
+ *
+ * Returns the resolved binary path, or null if it could not be installed
+ * (e.g. no network access from the container).
+ */
+async function ensureSingBox(): Promise<string | null> {
+  const existing = resolveSingBoxBin();
+  if (existing) return existing;
+  if (_singBoxInstallPromise) return _singBoxInstallPromise;
+
+  _singBoxInstallPromise = (async () => {
+    const arch = process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "amd64" : process.arch;
+    const version = SINGBOX_DOWNLOAD_VERSION;
+    const url =
+      `https://github.com/SagerNet/sing-box/releases/download/v${version}/` +
+      `sing-box-${version}-linux-${arch}.tar.gz`;
+    const dir = path.dirname(RUNTIME_SINGBOX_PATH);
+    const tmpTar = path.join(os.tmpdir(), `sing-box-${version}-${arch}.tar.gz`);
+    const tmpExtract = fs.mkdtempSync(path.join(os.tmpdir(), "singbox-dl-"));
+    try {
+      logger.warn({ url }, "sing-box binary missing — downloading at runtime (one-time)");
+      fs.mkdirSync(dir, { recursive: true });
+      const res = await fetch(url, { redirect: "follow" });
+      if (!res.ok || !res.body) {
+        throw new Error(`download failed: HTTP ${res.status}`);
+      }
+      const buf = Buffer.from(await res.arrayBuffer());
+      fs.writeFileSync(tmpTar, buf);
+      execSync(`tar -xzf ${JSON.stringify(tmpTar)} -C ${JSON.stringify(tmpExtract)}`, { stdio: "ignore" });
+      const extractedBin = path.join(tmpExtract, `sing-box-${version}-linux-${arch}`, "sing-box");
+      fs.copyFileSync(extractedBin, RUNTIME_SINGBOX_PATH);
+      fs.chmodSync(RUNTIME_SINGBOX_PATH, 0o755);
+      // Sanity-check the binary runs.
+      execSync(`${JSON.stringify(RUNTIME_SINGBOX_PATH)} version`, { stdio: "ignore" });
+      logger.info({ path: RUNTIME_SINGBOX_PATH }, "sing-box installed at runtime");
+      return RUNTIME_SINGBOX_PATH;
+    } catch (err) {
+      logger.error({ err }, "Runtime sing-box install failed");
+      return null;
+    } finally {
+      try { fs.rmSync(tmpTar, { force: true }); } catch { /* ignore */ }
+      try { fs.rmSync(tmpExtract, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  })();
+
+  const result = await _singBoxInstallPromise;
+  // Allow a retry on a later call if this attempt failed.
+  if (!result) _singBoxInstallPromise = null;
+  return result;
 }
 
 /** Find a free localhost TCP port. */
@@ -379,16 +470,18 @@ async function startSingBox(
   link: string,
   remoteConsumer: boolean,
 ): Promise<ResolvedProxy> {
-  if (!hasSingBox()) {
+  const outbound = buildOutbound(type, link);
+  const singBoxBin = await ensureSingBox();
+  if (!singBoxBin) {
     throw new Error(
-      `Proxy type "${type}" needs the sing-box binary, which is not installed on this host. ` +
-        `Install it (https://sing-box.sagernet.org) or use an http/socks5 proxy instead.`,
+      `Proxy type "${type}" needs the sing-box binary, which is not installed on this host and ` +
+        `could not be downloaded automatically (no network access, or the release is unavailable). ` +
+        `Install it (https://sing-box.sagernet.org), set SINGBOX_BIN to its path, or use an http/socks5 proxy instead.`,
     );
   }
   const port = await getFreePort();
   const listenHost = getSingBoxListenHost();
   const publicHost = getSingBoxPublicHost(remoteConsumer);
-  const outbound = buildOutbound(type, link);
   const config = {
     log: { level: "warn" },
     inbounds: [
@@ -401,7 +494,7 @@ async function startSingBox(
   const cfgFile = path.join(dir, "config.json");
   fs.writeFileSync(cfgFile, JSON.stringify(config));
 
-  const child: ChildProcess = spawn("sing-box", ["run", "-c", cfgFile], {
+  const child: ChildProcess = spawn(singBoxBin, ["run", "-c", cfgFile], {
     stdio: "ignore",
   });
   child.on("error", (err) => logger.error({ err }, "sing-box process error"));

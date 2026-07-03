@@ -64,6 +64,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ─── sing-box (advanced proxy protocols: VLESS/VMess/Trojan/Hysteria2/WARP) ───
 # The proxy-manager starts sing-box on demand to expose a local SOCKS5 inbound
 # that Chromium can consume. Passthrough http/socks5 proxies do NOT need this.
+#
+# IMPORTANT: this step must FAIL THE BUILD if sing-box cannot be installed.
+# Previously a "|| echo WARN" swallowed download errors, so the image shipped
+# WITHOUT the binary and every advanced-proxy task failed at runtime with
+# "sing-box is not installed on this host". We now retry the download and then
+# verify the binary actually runs, so a broken build never reaches production.
 ARG SINGBOX_VERSION=1.11.4
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
@@ -72,12 +78,19 @@ RUN set -eux; \
       arm64) sb_arch=arm64 ;; \
       *) sb_arch="$arch" ;; \
     esac; \
-    wget -qO /tmp/sing-box.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${sb_arch}.tar.gz" \
-      && tar -xzf /tmp/sing-box.tar.gz -C /tmp \
-      && mv /tmp/sing-box-${SINGBOX_VERSION}-linux-${sb_arch}/sing-box /usr/local/bin/sing-box \
-      && chmod +x /usr/local/bin/sing-box \
-      && rm -rf /tmp/sing-box* \
-      || echo "WARN: sing-box install failed — advanced proxy types (vless/vmess/trojan/hy2/warp) will be unavailable";
+    url="https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${sb_arch}.tar.gz"; \
+    for i in 1 2 3 4 5; do \
+      echo "Downloading sing-box (attempt $i): $url"; \
+      if wget -qO /tmp/sing-box.tar.gz "$url"; then break; fi; \
+      if [ "$i" = "5" ]; then echo "ERROR: failed to download sing-box after 5 attempts" >&2; exit 1; fi; \
+      sleep 5; \
+    done; \
+    tar -xzf /tmp/sing-box.tar.gz -C /tmp; \
+    mv "/tmp/sing-box-${SINGBOX_VERSION}-linux-${sb_arch}/sing-box" /usr/local/bin/sing-box; \
+    chmod +x /usr/local/bin/sing-box; \
+    rm -rf /tmp/sing-box*; \
+    # Verify the binary is present and runnable — fail the build otherwise.
+    /usr/local/bin/sing-box version
 
 WORKDIR /app
 

@@ -4,6 +4,7 @@ import type { PageAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
 import { dismissPopups } from "./popup-handler";
 import { clearCloudflareInterstitial, bypassCloudflareChallenge } from "./cloudflare-bypass";
+import { detectAndHandleCaptcha } from "./captcha";
 import { formLogin } from "./form-login";
 import { githubLogin } from "./github-login";
 import { googleLogin } from "./google-login";
@@ -383,18 +384,39 @@ async function executeStep(
     }
 
     case "cfVerify": {
-      // Explicitly clear a Cloudflare challenge / click a Turnstile checkbox
-      // that is gating the current page (or a freshly-navigated URL). Use this
-      // before a click/fill step whose target only becomes interactive once the
-      // CF "Verifying you are human" / Turnstile widget has passed.
+      // Explicitly clear a bot-gate that is blocking the current page (or a
+      // freshly-navigated URL) before a later click/fill step whose target only
+      // becomes interactive once the challenge has passed.
+      //
+      // Handles BOTH:
+      //   • Cloudflare "Verifying you are human" / Turnstile interstitials, and
+      //   • Embedded widget captchas (ALTCHA, reCAPTCHA/hCaptcha/Turnstile,
+      //     GeeTest, etc.) — e.g. the "Protected by ALTCHA" checkbox on the
+      //     ikuuu renew dialog, which is NOT a Cloudflare challenge.
       const cleared = await clearCloudflareInterstitial(page, {
         url: step.url || page.url(),
         maxReloads: step.maxReloads ?? 2,
       });
+
+      // After any CF interstitial is out of the way, drive an embedded captcha
+      // widget (ALTCHA / token / click-to-verify) to a solved state if present.
+      let widgetMsg = "";
+      try {
+        const captchaResult = await detectAndHandleCaptcha(page, solver);
+        if (captchaResult.detected) {
+          widgetMsg = captchaResult.solved
+            ? ` Widget captcha handled: ${(captchaResult as { message: string }).message}`
+            : ` Widget captcha detected but not solved: ${(captchaResult as { message: string }).message}`;
+        }
+      } catch (err) {
+        logger.debug({ err }, "cfVerify widget captcha handling threw");
+      }
+
       return {
-        message: cleared
-          ? "Cloudflare verification cleared (or none present)"
-          : "Cloudflare verification could not be confirmed cleared — continuing",
+        message:
+          (cleared
+            ? "Cloudflare verification cleared (or none present)."
+            : "Cloudflare verification could not be confirmed cleared — continuing.") + widgetMsg,
       };
     }
 

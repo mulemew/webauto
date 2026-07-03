@@ -23,6 +23,16 @@ app.config["JSON_SORT_KEYS"] = False
 _sessions: dict = {}
 _sessions_lock = threading.Lock()
 
+# ── Global GUI-input lock ────────────────────────────────────────────────────
+# All sessions share ONE Xvfb virtual display (:99) and therefore ONE mouse
+# cursor + keyboard focus. SeleniumBase's uc_gui_click_captcha() and xdotool
+# clicks move that single shared pointer and raise/focus a window. If two
+# concurrent sessions try to click a captcha at the same time they fight over
+# the cursor and focus, so both clicks land in the wrong window and both
+# captchas fail. Serialise every OS-level GUI interaction behind this lock so
+# concurrent seleniumbase tasks each get an uninterrupted turn at the display.
+_gui_lock = threading.Lock()
+
 SESSION_TIMEOUT_S = int(os.getenv("SESSION_TIMEOUT_S", "1800"))
 DEFAULT_RECONNECT_TIME = int(os.getenv("CF_RECONNECT_TIME", "4"))
 DEFAULT_MAX_RETRIES = int(os.getenv("CF_MAX_RETRIES", "3"))
@@ -353,10 +363,12 @@ def goto(sid):
                 if not _is_cf_challenge(sb):
                     break
 
-                # Strategy 1: Use SB's built-in GUI captcha clicker
+                # Strategy 1: Use SB's built-in GUI captcha clicker.
+                # Serialise behind the shared GUI lock — see _gui_lock docstring.
                 try:
-                    sb.uc_gui_click_captcha()
-                    time.sleep(3)
+                    with _gui_lock:
+                        sb.uc_gui_click_captcha()
+                        time.sleep(3)
                 except Exception:
                     pass
 
@@ -378,8 +390,9 @@ def goto(sid):
 
                 # Strategy 3: Try uc_gui_click_captcha again after reconnect
                 try:
-                    sb.uc_gui_click_captcha()
-                    time.sleep(3)
+                    with _gui_lock:
+                        sb.uc_gui_click_captcha()
+                        time.sleep(3)
                 except Exception:
                     pass
         else:
@@ -389,8 +402,9 @@ def goto(sid):
                 sb.uc_open_with_reconnect(url, reconnect_time=reconnect_time)
                 if _is_cf_challenge(sb):
                     try:
-                        sb.uc_gui_click_captcha()
-                        time.sleep(3)
+                        with _gui_lock:
+                            sb.uc_gui_click_captcha()
+                            time.sleep(3)
                     except Exception:
                         pass
 
@@ -848,8 +862,9 @@ def click_turnstile(sid):
 
             # Strategy 1: SB's built-in uc_gui_click_captcha (PyAutoGUI)
             try:
-                sb.uc_gui_click_captcha()
-                time.sleep(3)
+                with _gui_lock:
+                    sb.uc_gui_click_captcha()
+                    time.sleep(3)
             except Exception:
                 pass
 
