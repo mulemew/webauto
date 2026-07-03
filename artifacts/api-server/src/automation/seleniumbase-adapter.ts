@@ -18,7 +18,8 @@
     DialogAdapter,
   } from "./page-adapter";
   import { logger } from "../lib/logger";
-  import type { BrowserProvider } from "./browser-provider";
+  import type { BrowserProvider, BrowserProviderConfig } from "./browser-provider";
+  import { startLocalProxy, type ResolvedProxy } from "./proxy-manager";
 
   const DEFAULT_CF_PROXY_URL = "http://cf-proxy:7317";
 
@@ -84,10 +85,13 @@
     private _cachedUrl: string = "about:blank";
     private _closed = false;
     private _cachedFrames: FrameAdapter[] = [];
+    /** Local sing-box helper backing an advanced proxy — stopped on close(). */
+    private _resolvedProxy: ResolvedProxy | null = null;
 
-    constructor(baseUrl: string, sid: string) {
+    constructor(baseUrl: string, sid: string, resolvedProxy: ResolvedProxy | null = null) {
       this.baseUrl = baseUrl;
       this.sid = sid;
+      this._resolvedProxy = resolvedProxy;
     }
 
     readonly keyboard: KeyboardAdapter = {
@@ -195,6 +199,10 @@
     async close(_options?: Record<string, unknown>): Promise<void> {
       this._closed = true;
       await cfDelete(this.baseUrl, `/sessions/${this.sid}`);
+      if (this._resolvedProxy) {
+        await this._resolvedProxy.stop().catch(() => {});
+        this._resolvedProxy = null;
+      }
     }
 
     viewport(): { width: number; height: number } | null {
@@ -268,27 +276,65 @@
 
   export class SeleniumBaseProvider implements BrowserProvider {
     private readonly baseUrl: string;
+    private readonly config: BrowserProviderConfig | null;
 
-    constructor(baseUrl: string = DEFAULT_CF_PROXY_URL) {
+    constructor(baseUrl: string = DEFAULT_CF_PROXY_URL, config: BrowserProviderConfig | null = null) {
       this.baseUrl = baseUrl;
+      this.config = config;
     }
 
     async newPage(): Promise<SeleniumBasePageAdapter> {
       logger.info({ cfProxyUrl: this.baseUrl }, "Creating SeleniumBase UC session...");
-      const res = await fetch(`${this.baseUrl}/sessions`, { method: "POST" });
+
+      // ── Resolve the per-task proxy so cf-proxy's Chrome routes through it ──
+      // cf-proxy runs in a SEPARATE container, so 127.0.0.1 there is itself.
+      // For advanced protocols (vless/vmess/trojan/hy2/warp) we start a local
+      // sing-box helper bound to a cross-container-reachable address (remote
+      // consumer) and hand cf-proxy the resulting socks5:// URL. Plain
+      // http/socks5 proxies are passed straight through.
+      let resolvedProxy: ResolvedProxy | null = null;
+      let proxyServerUrl: string | null = null;
+      if (this.config && (this.config.proxyUrl || this.config.proxyType)) {
+        try {
+          resolvedProxy = await startLocalProxy(
+            { proxyType: this.config.proxyType, proxyUrl: this.config.proxyUrl },
+            true, // remoteConsumer — cf-proxy's browser is in another container
+          );
+          proxyServerUrl = resolvedProxy?.serverUrl ?? null;
+          if (proxyServerUrl) {
+            logger.info({ proxyServerUrl }, "SeleniumBase session will use resolved proxy");
+          }
+        } catch (err) {
+          logger.error({ err, proxyType: this.config.proxyType }, "Failed to resolve proxy for cf-proxy — proceeding without it");
+          throw err;
+        }
+      }
+
+      const body = proxyServerUrl ? { proxy: proxyServerUrl } : undefined;
+      let res: Response;
+      try {
+        res = await fetch(`${this.baseUrl}/sessions`, {
+          method: "POST",
+          headers: body ? { "Content-Type": "application/json" } : undefined,
+          body: body ? JSON.stringify(body) : undefined,
+        });
+      } catch (err) {
+        if (resolvedProxy) await resolvedProxy.stop().catch(() => {});
+        throw err;
+      }
       const data = (await res.json()) as Record<string, unknown>;
       if (!res.ok || !data["session_id"]) {
+        if (resolvedProxy) await resolvedProxy.stop().catch(() => {});
         throw new Error(
           `SeleniumBase session creation failed: ${data["error"] ?? `HTTP ${res.status}`}`,
         );
       }
       const sid = data["session_id"] as string;
-      logger.info({ sid }, "SeleniumBase UC session ready");
-      return new SeleniumBasePageAdapter(this.baseUrl, sid);
+      logger.info({ sid, proxied: !!proxyServerUrl }, "SeleniumBase UC session ready");
+      return new SeleniumBasePageAdapter(this.baseUrl, sid, resolvedProxy);
     }
 
     async close(): Promise<void> {
       // Sessions are closed individually when page.close() is called
     }
   }
-  

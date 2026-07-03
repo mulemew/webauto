@@ -90,11 +90,16 @@ def _is_cf_challenge(sb) -> bool:
 class SessionThread:
     """One Chrome session running in a dedicated thread (Selenium is not thread-safe)."""
 
-    def __init__(self):
+    def __init__(self, proxy: str = None):
         self.session_id = str(uuid.uuid4())
         self.last_used = time.time()
         self.created_at = time.time()
         self._closed = False
+        # Optional upstream proxy (http://, https://, socks5://). When set, it is
+        # baked into Chrome at launch time via SB(proxy=...) — a proxy cannot be
+        # attached to an already-running browser, so proxied sessions are always
+        # cold-started (never taken from the warm pool).
+        self.proxy = (proxy or "").strip() or None
         self._cmd_q: queue.Queue = queue.Queue()
         self._res_q: queue.Queue = queue.Queue()
         self._seq = 0          # monotonic command sequence number
@@ -117,6 +122,11 @@ class SessionThread:
             )
             if _CHROME_BIN:
                 _kw["binary_location"] = _CHROME_BIN
+            if self.proxy:
+                # SeleniumBase accepts proxy as "host:port", "user:pass@host:port",
+                # or "scheme://host:port". Chromium has native SOCKS5 support, so
+                # socks5://host:port works for sing-box-backed advanced proxies.
+                _kw["proxy"] = self.proxy
             with SB(**_kw) as sb:
                 self._res_q.put({"ok": True})
                 while True:
@@ -293,8 +303,16 @@ def health():
 
 @app.route("/sessions", methods=["POST"])
 def create_session():
+    body = request.json if request.is_json else {}
+    proxy = (body or {}).get("proxy") if isinstance(body, dict) else None
     try:
-        s = _pool.acquire()
+        if proxy:
+            # A proxy must be set at Chrome launch, so it cannot come from the
+            # warm pool (those are launched proxy-less). Cold-start a dedicated
+            # session bound to the requested proxy instead.
+            s = SessionThread(proxy=proxy)
+        else:
+            s = _pool.acquire()
     except Exception as e:
         return _err(str(e), 500)
     with _sessions_lock:
