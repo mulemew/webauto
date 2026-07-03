@@ -81,7 +81,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          dockerfile: Dockerfile
+          file: Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta-app.outputs.tags }}
@@ -106,7 +106,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: artifacts/cf-proxy
-          dockerfile: artifacts/cf-proxy/Dockerfile
+          file: artifacts/cf-proxy/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta-cf-proxy.outputs.tags }}

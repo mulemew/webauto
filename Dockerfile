@@ -79,12 +79,17 @@ RUN set -eux; \
       *) sb_arch="$arch" ;; \
     esac; \
     url="https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${sb_arch}.tar.gz"; \
-    for i in 1 2 3 4 5; do \
+    delay=3; \
+    ok=0; \
+    for i in 1 2 3 4 5 6 7 8; do \
       echo "Downloading sing-box (attempt $i): $url"; \
-      if wget -qO /tmp/sing-box.tar.gz "$url"; then break; fi; \
-      if [ "$i" = "5" ]; then echo "ERROR: failed to download sing-box after 5 attempts" >&2; exit 1; fi; \
-      sleep 5; \
+      if wget -qO /tmp/sing-box.tar.gz "$url" || curl -fsSL -o /tmp/sing-box.tar.gz "$url"; then ok=1; break; fi; \
+      echo "attempt $i failed; retrying in ${delay}s"; \
+      sleep "$delay"; \
+      delay=$(( delay * 2 )); \
+      if [ "$delay" -gt 30 ]; then delay=30; fi; \
     done; \
+    if [ "$ok" != "1" ]; then echo "ERROR: failed to download sing-box after 8 attempts" >&2; exit 1; fi; \
     tar -xzf /tmp/sing-box.tar.gz -C /tmp; \
     mv "/tmp/sing-box-${SINGBOX_VERSION}-linux-${sb_arch}/sing-box" /usr/local/bin/sing-box; \
     chmod +x /usr/local/bin/sing-box; \

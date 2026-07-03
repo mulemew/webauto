@@ -688,11 +688,15 @@ def mouse_click(sid):
         import subprocess
         # Prefer xdotool for OS-level physical clicks (undetectable by CF)
         try:
-            subprocess.run(
-                ["xdotool", "mousemove", "--sync", str(int(x)), str(int(y))],
-                timeout=3, capture_output=True,
-            )
-            subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
+            # Serialise behind the shared GUI lock — concurrent sessions share
+            # ONE Xvfb :99 pointer/focus; interleaved mousemove+click across
+            # sessions would land clicks in the wrong window. See _gui_lock.
+            with _gui_lock:
+                subprocess.run(
+                    ["xdotool", "mousemove", "--sync", str(int(x)), str(int(y))],
+                    timeout=3, capture_output=True,
+                )
+                subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
             return
         except Exception:
             pass
@@ -951,12 +955,15 @@ def click_turnstile(sid):
                           f"win=({win_x},{win_y}) title_bar={title_bar} "
                           f"rect=({rect['x']},{rect['y']})", flush=True)
                     try:
-                        subprocess.run(
-                            ["xdotool", "mousemove", "--sync", str(abs_x), str(abs_y)],
-                            timeout=3, capture_output=True,
-                        )
-                        subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
-                        time.sleep(4)
+                        # Serialise the physical pointer move+click behind the
+                        # shared GUI lock — see _gui_lock docstring.
+                        with _gui_lock:
+                            subprocess.run(
+                                ["xdotool", "mousemove", "--sync", str(abs_x), str(abs_y)],
+                                timeout=3, capture_output=True,
+                            )
+                            subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
+                            time.sleep(4)
                     except Exception:
                         pass
 

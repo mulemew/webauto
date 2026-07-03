@@ -21,6 +21,25 @@ function isXdotoolAvailable(): boolean {
   return _xdotoolAvailable;
 }
 
+// ── Process-level GUI lock ───────────────────────────────────────────────────
+// The "local"/patchright browser provider runs every concurrent task's Chromium
+// on ONE shared Xvfb virtual display (:99), which means they all share a single
+// mouse cursor and keyboard focus. xdotool moves that shared pointer and raises
+// a window, so if two tasks physically click a Turnstile at the same time they
+// fight over the cursor/focus and both clicks land in the wrong window. This is
+// the TS-side counterpart to cf-proxy's `_gui_lock`: serialize every OS-level
+// xdotool interaction so each task gets an uninterrupted turn at the display.
+let _guiLockChain: Promise<void> = Promise.resolve();
+function withGuiLock<T>(fn: () => Promise<T> | T): Promise<T> {
+  const run = _guiLockChain.then(() => fn());
+  // Keep the chain alive regardless of whether `fn` resolves or rejects.
+  _guiLockChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
 // ── Turnstile iframe expansion script ───────────────────────────────────────
 // Ported from the JustRunMy.App reference project.
 // Forcefully expands hidden/overflow:hidden containers around the Turnstile
@@ -152,37 +171,41 @@ async function physicalClickTurnstile(page: PageAdapter): Promise<boolean> {
   }
 
   if (isXdotoolAvailable()) {
-    // Get browser window position to compute absolute screen coordinates
-    // Prefer xdotool getwindowgeometry (accurate in Xvfb) over window.screenX/Y
-    const wid = xdotoolActivateChrome();
-    let winX = 0, winY = 0;
-    if (wid) {
-      const geo = xdotoolGetWindowGeometry(wid);
-      if (geo) {
-        winX = geo.x;
-        winY = geo.y;
+    // Serialize the whole activate→geometry→click sequence on the shared
+    // Xvfb :99 pointer/focus so concurrent tasks don't fight over the cursor.
+    return withGuiLock(async () => {
+      // Get browser window position to compute absolute screen coordinates
+      // Prefer xdotool getwindowgeometry (accurate in Xvfb) over window.screenX/Y
+      const wid = xdotoolActivateChrome();
+      let winX = 0, winY = 0;
+      if (wid) {
+        const geo = xdotoolGetWindowGeometry(wid);
+        if (geo) {
+          winX = geo.x;
+          winY = geo.y;
+        }
       }
-    }
 
-    const winInfo = await page.evaluate(() => ({
-      sx: (window as any).screenX || 0,
-      sy: (window as any).screenY || 0,
-      oh: window.outerHeight,
-      ih: window.innerHeight,
-    })) as { sx: number; sy: number; oh: number; ih: number };
+      const winInfo = await page.evaluate(() => ({
+        sx: (window as any).screenX || 0,
+        sy: (window as any).screenY || 0,
+        oh: window.outerHeight,
+        ih: window.innerHeight,
+      })) as { sx: number; sy: number; oh: number; ih: number };
 
-    // Use xdotool geometry if available, fall back to JS values
-    if (winX === 0 && winY === 0) {
-      winX = winInfo.sx;
-      winY = winInfo.sy;
-    }
-    const titleBarHeight = Math.max(0, winInfo.oh - winInfo.ih);
-    const absX = coords.cx + winX;
-    const absY = coords.cy + winY + titleBarHeight;
+      // Use xdotool geometry if available, fall back to JS values
+      if (winX === 0 && winY === 0) {
+        winX = winInfo.sx;
+        winY = winInfo.sy;
+      }
+      const titleBarHeight = Math.max(0, winInfo.oh - winInfo.ih);
+      const absX = coords.cx + winX;
+      const absY = coords.cy + winY + titleBarHeight;
 
-    logger.info({ absX, absY, coords, winX, winY, titleBarHeight }, "Attempting xdotool physical click on Turnstile");
-    xdotoolClick(absX, absY);
-    return true;
+      logger.info({ absX, absY, coords, winX, winY, titleBarHeight }, "Attempting xdotool physical click on Turnstile");
+      xdotoolClick(absX, absY);
+      return true;
+    });
   }
 
   // Fallback: CDP click (less effective but better than nothing)

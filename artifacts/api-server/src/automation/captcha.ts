@@ -368,9 +368,11 @@ const CLICK_CAPTCHA_PROVIDERS: ClickCaptchaDetection[] = [
     buttonSelector: ".dx-captcha-btn, .dx-btn",
     successSelector: ".dx-captcha-btn-success",
   },
-  // Generic click-to-verify — covers custom captcha buttons on Chinese sites
-  // (e.g. ikuuu.fyi and others that use a simple "click to verify" button
-  // within the login form that doesn't match known provider selectors).
+  // Generic click-to-verify — covers custom captcha buttons on sites that use
+  // a simple "click to verify" button within the login form that doesn't match
+  // any known provider selectors above.
+  // NOTE: ikuuu.fyi is NOT handled here — it uses GeeTest v4 (initGeetest4 with
+  // nativeButton mode), which is matched by the "GeeTest v4" provider above.
   {
     name: "Generic click-to-verify",
     containerSelector: ".verify-btn, .captcha-btn, [class*='verify-btn'], [class*='captcha-btn'], [id*='captcha-btn']",
