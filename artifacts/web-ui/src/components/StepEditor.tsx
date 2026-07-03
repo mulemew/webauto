@@ -1,13 +1,13 @@
 import { useLang } from "@/contexts/lang-context";
 import type { Translations } from "@/i18n/translations";
-import { Plus, Trash2, ChevronUp, ChevronDown, MousePointer, Navigation, Keyboard, Clock, Eye, Camera, ExternalLink, ListFilter, ArrowDown, Hand, Command, LogIn, GitBranch, Eraser } from "lucide-react";
+import { Plus, Trash2, ChevronUp, ChevronDown, MousePointer, Navigation, Keyboard, Clock, Eye, Camera, ExternalLink, ListFilter, ArrowDown, Hand, Command, LogIn, GitBranch, Eraser, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
-export type StepType = "navigate" | "click" | "fill" | "select" | "scroll" | "hover" | "wait" | "waitFor" | "screenshot" | "dismissPopups" | "switchToNewPage" | "keypress" | "login" | "condition";
+export type StepType = "navigate" | "click" | "fill" | "select" | "scroll" | "hover" | "wait" | "waitFor" | "screenshot" | "dismissPopups" | "switchToNewPage" | "keypress" | "login" | "condition" | "cfVerify";
 
 export type ConditionType = "text_contains" | "text_not_contains" | "element_visible" | "element_not_visible" | "url_contains";
 export type ThenActionType = "click" | "fill" | "navigate" | "wait" | "keypress" | "screenshot" | "scroll";
@@ -32,6 +32,7 @@ export interface WorkflowStep {
   value?: string;
   ms?: number;
   timeout?: number;
+  maxReloads?: number;
   x?: number;
   y?: number;
   key?: string;
@@ -82,6 +83,7 @@ function getStepMeta(t: Translations): Record<StepType, { label: string; icon: R
   switchToNewPage: { label: t.stepSwitchTab, icon: <ExternalLink className="h-3.5 w-3.5" />,  description: t.stepSwitchTabDesc },
   keypress:        { label: t.stepKeyPress,         icon: <Command className="h-3.5 w-3.5" />,        description: t.stepKeyPressDesc },
   condition:       { label: t.stepCondition,         icon: <GitBranch className="h-3.5 w-3.5" />,     description: t.stepConditionDesc },
+  cfVerify:        { label: t.stepCfVerify,           icon: <ShieldCheck className="h-3.5 w-3.5" />,   description: t.stepCfVerifyDesc },
 };
 }
 
@@ -116,6 +118,7 @@ function defaultStep(type: StepType, taskTargetUrl = ""): WorkflowStep {
     case "keypress":        return { type, key: "Enter" };
     case "condition":       return { type, conditionType: "text_contains", conditionValue: "", thenAction: { type: "click", selector: "", selectorType: "text" } };
     case "dismissPopups":   return { type };
+    case "cfVerify":        return { type, maxReloads: 2 };
   }
 }
 
@@ -459,7 +462,7 @@ function StepCard({
         </div>
       )}
 
-      {step.type !== "screenshot" && step.type !== "switchToNewPage" && step.type !== "login" && step.type !== "condition" && (
+      {step.type !== "screenshot" && step.type !== "switchToNewPage" && step.type !== "login" && step.type !== "condition" && step.type !== "dismissPopups" && step.type !== "cfVerify" && (
         <div className="p-3 space-y-3">
           {step.type === "navigate" && (
             <>
@@ -677,6 +680,22 @@ function StepCard({
 
       {step.type === "dismissPopups" && (
         <div className="px-3 py-2 text-xs text-muted-foreground font-mono">关闭 cookie 弹窗、遮罩层和广告浮层，避免它们遮挡后续操作。无需任何参数。</div>
+      )}
+
+      {step.type === "cfVerify" && (
+        <div className="p-3 space-y-3">
+          <div className="space-y-1">
+            <Label className="text-xs">{t.stepCfVerifyUrl} <span className="font-normal text-muted-foreground">(optional)</span></Label>
+            <Input className="font-mono text-xs h-8" placeholder="https://example.com/dashboard"
+              value={step.url ?? ""} onChange={(e) => set({ url: e.target.value || undefined })} />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">{t.stepCfVerifyReloads}</Label>
+            <Input type="number" className="font-mono text-xs h-8 w-24" min={0} max={5}
+              value={step.maxReloads ?? 2} onChange={(e) => set({ maxReloads: Math.max(0, Math.min(5, parseInt(e.target.value, 10) || 0)) })} />
+          </div>
+          <p className="text-xs text-muted-foreground">{t.stepCfVerifyHint}</p>
+        </div>
       )}
 
       {step.type === "switchToNewPage" && (

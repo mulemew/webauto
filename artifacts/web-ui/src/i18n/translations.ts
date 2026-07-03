@@ -306,6 +306,11 @@ export interface Translations {
       stepKeyPressDesc: string;
       stepCondition: string;
       stepConditionDesc: string;
+      stepCfVerify: string;
+      stepCfVerifyDesc: string;
+      stepCfVerifyUrl: string;
+      stepCfVerifyReloads: string;
+      stepCfVerifyHint: string;
       // StepEditor - UI labels
       loginMethod: string;
       standardForm: string;
@@ -619,6 +624,11 @@ export interface Translations {
       stepKeyPressDesc: "发送键盘快捷键或按键",
       stepCondition: "条件",
       stepConditionDesc: "条件成立时执行操作",
+      stepCfVerify: "CF 人机验证",
+      stepCfVerifyDesc: "处理 Cloudflare 5秒盾 / Turnstile 验证，通过后再继续",
+      stepCfVerifyUrl: "目标网址",
+      stepCfVerifyReloads: "最大重载次数",
+      stepCfVerifyHint: "在点击/填写目标只有通过 Cloudflare 验证后才可交互时使用。留空网址则对当前页面执行；验证仍未通过时会刷新页面并重试。",
       loginMethod: "登录方式",
       standardForm: "标准表单",
       loginPageUrl: "登录页 URL",
@@ -930,6 +940,11 @@ export interface Translations {
       stepKeyPressDesc: "Send a keyboard shortcut or key",
       stepCondition: "Condition",
       stepConditionDesc: "If condition is met, execute an action",
+      stepCfVerify: "CF Verify",
+      stepCfVerifyDesc: "Clear a Cloudflare / Turnstile challenge before continuing",
+      stepCfVerifyUrl: "Target URL",
+      stepCfVerifyReloads: "Max reloads",
+      stepCfVerifyHint: "Use before a click/fill whose target only becomes interactive once a Cloudflare / Turnstile challenge is passed. Leave URL blank to run on the current page; if the challenge is not cleared, the page is reloaded and retried.",
       loginMethod: "Login Method",
       standardForm: "Standard Form",
       loginPageUrl: "Login Page URL",

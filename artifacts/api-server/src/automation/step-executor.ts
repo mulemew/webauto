@@ -3,7 +3,7 @@ import fs from "fs";
 import type { PageAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
 import { dismissPopups } from "./popup-handler";
-import { clearCloudflareInterstitial } from "./cloudflare-bypass";
+import { clearCloudflareInterstitial, bypassCloudflareChallenge } from "./cloudflare-bypass";
 import { formLogin } from "./form-login";
 import { githubLogin } from "./github-login";
 import { googleLogin } from "./google-login";
@@ -37,6 +37,7 @@ export type WorkflowStep =
   | { type: "waitFor"; selector: string; selectorType?: "css" | "text"; timeout?: number }
   | { type: "screenshot" }
   | { type: "dismissPopups" }
+  | { type: "cfVerify"; url?: string; maxReloads?: number }
   | { type: "switchToNewPage"; timeout?: number }
   | { type: "keypress"; key: string }
   | { type: "login"; loginMethod: "form" | "github" | "google"; loginUrl: string; inlineUsername?: string; inlinePassword?: string; inlineTotp?: string; successSelector?: string; successText?: string; cookieMode?: boolean; sessionKey?: string }
@@ -211,7 +212,14 @@ async function executeStep(
       const urlBefore = page.url();
 
       if (step.selectorType === "text") {
-        const found = await clickByText(page, step.selector);
+        let found = await clickByText(page, step.selector);
+        if (!found) {
+          // The target may be gated behind a Cloudflare challenge/Turnstile that
+          // only clears once passed. Clear it and retry the click once.
+          if (await clearCloudflareIfPresent(page)) {
+            found = await clickByText(page, step.selector);
+          }
+        }
         if (!found) throw new Error(`No visible element with text "${step.selector}" found`);
         await settleAfterClick(page, urlBefore);
         return { message: `Clicked element matching text "${step.selector}"` };
@@ -219,13 +227,13 @@ async function executeStep(
 
       if (step.selectorType === "xpath") {
         const xpathSel = `xpath=${step.selector}`;
-        await page.waitForSelector(xpathSel, { timeout: 5000 });
+        await waitForSelectorWithCf(page, xpathSel, 5000);
         await page.click(xpathSel);
         await settleAfterClick(page, urlBefore);
         return { message: `Clicked XPath "${step.selector}"` };
       }
 
-      await page.waitForSelector(step.selector, { timeout: 5000 });
+      await waitForSelectorWithCf(page, step.selector, 5000);
       await page.click(step.selector);
       await settleAfterClick(page, urlBefore);
       return { message: `Clicked CSS "${step.selector}"` };
@@ -371,6 +379,22 @@ async function executeStep(
         message: result.dismissed > 0
           ? `Dismissed ${result.dismissed} popup/overlay item(s): ${result.details.join(", ")}`
           : "No popups or overlays found to dismiss",
+      };
+    }
+
+    case "cfVerify": {
+      // Explicitly clear a Cloudflare challenge / click a Turnstile checkbox
+      // that is gating the current page (or a freshly-navigated URL). Use this
+      // before a click/fill step whose target only becomes interactive once the
+      // CF "Verifying you are human" / Turnstile widget has passed.
+      const cleared = await clearCloudflareInterstitial(page, {
+        url: step.url || page.url(),
+        maxReloads: step.maxReloads ?? 2,
+      });
+      return {
+        message: cleared
+          ? "Cloudflare verification cleared (or none present)"
+          : "Cloudflare verification could not be confirmed cleared — continuing",
       };
     }
 
@@ -617,6 +641,49 @@ async function isSessionAuthenticated(
   }
   const bodyText = (await page.evaluate(() => document.body?.innerText).catch(() => "")) as string;
   return /logout|sign out|sign-out|dashboard|account|profile|welcome/i.test(bodyText);
+}
+
+/**
+ * Clear a Cloudflare challenge / Turnstile widget if one is currently blocking
+ * the page. Returns true when a challenge was detected AND cleared (so the
+ * caller should retry its action), false when there was nothing to clear or it
+ * could not be cleared. Safe to call unconditionally.
+ */
+async function clearCloudflareIfPresent(page: PageAdapter): Promise<boolean> {
+  try {
+    const result = await bypassCloudflareChallenge(page);
+    if (result === "passed") {
+      logger.info("Cloudflare challenge cleared before continuing step");
+      return true;
+    }
+    return false;
+  } catch (err) {
+    logger.debug({ err }, "clearCloudflareIfPresent threw — ignoring");
+    return false;
+  }
+}
+
+/**
+ * waitForSelector that transparently clears a Cloudflare challenge/Turnstile if
+ * the selector does not appear in time. Some flows (e.g. a renew/check-in
+ * button) only become clickable after a CF interstitial or Turnstile widget is
+ * passed. If the first wait times out, we attempt to clear the challenge and
+ * wait once more before surfacing the original error.
+ */
+async function waitForSelectorWithCf(
+  page: PageAdapter,
+  selector: string,
+  timeout: number,
+): Promise<void> {
+  try {
+    await page.waitForSelector(selector, { timeout });
+    return;
+  } catch (firstErr) {
+    if (page.isClosed()) throw firstErr;
+    const cleared = await clearCloudflareIfPresent(page);
+    if (!cleared) throw firstErr;
+    await page.waitForSelector(selector, { timeout });
+  }
 }
 
 async function clickByText(page: PageAdapter, text: string): Promise<boolean> {
