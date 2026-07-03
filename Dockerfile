@@ -41,6 +41,14 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @workspace/api-server run build
 
+# ─── Stage: sing-box binary source ───────────────────────────
+# SagerNet publishes an official multi-arch image on ghcr.io (the same registry
+# this workflow already authenticates to and caches against). Copying the binary
+# from it is far more reliable in CI than downloading the release tarball from
+# github.com, whose asset CDN intermittently times out and broke the build.
+# buildx resolves this FROM per target platform, so each arch gets its own binary.
+FROM ghcr.io/sagernet/sing-box:v1.11.4 AS singbox
+
 # ─── Stage 3: Production runtime ─────────────────────────────
 FROM node:20-bookworm-slim AS runner
 
@@ -65,36 +73,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # The proxy-manager starts sing-box on demand to expose a local SOCKS5 inbound
 # that Chromium can consume. Passthrough http/socks5 proxies do NOT need this.
 #
-# IMPORTANT: this step must FAIL THE BUILD if sing-box cannot be installed.
-# Previously a "|| echo WARN" swallowed download errors, so the image shipped
-# WITHOUT the binary and every advanced-proxy task failed at runtime with
-# "sing-box is not installed on this host". We now retry the download and then
-# verify the binary actually runs, so a broken build never reaches production.
-ARG SINGBOX_VERSION=1.11.4
+# The binary is copied from SagerNet's official multi-arch image (see the
+# "singbox" stage above) rather than downloaded at build time — the release
+# CDN on github.com intermittently times out and silently broke the image
+# (it shipped WITHOUT sing-box, so every advanced-proxy task failed at runtime
+# with "sing-box is not installed on this host"). We still verify the binary
+# actually runs so a broken build never reaches production.
+COPY --from=singbox /usr/local/bin/sing-box /usr/local/bin/sing-box
 RUN set -eux; \
-    arch="$(dpkg --print-architecture)"; \
-    case "$arch" in \
-      amd64) sb_arch=amd64 ;; \
-      arm64) sb_arch=arm64 ;; \
-      *) sb_arch="$arch" ;; \
-    esac; \
-    url="https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${sb_arch}.tar.gz"; \
-    delay=3; \
-    ok=0; \
-    for i in 1 2 3 4 5 6 7 8; do \
-      echo "Downloading sing-box (attempt $i): $url"; \
-      if wget -qO /tmp/sing-box.tar.gz "$url" || curl -fsSL -o /tmp/sing-box.tar.gz "$url"; then ok=1; break; fi; \
-      echo "attempt $i failed; retrying in ${delay}s"; \
-      sleep "$delay"; \
-      delay=$(( delay * 2 )); \
-      if [ "$delay" -gt 30 ]; then delay=30; fi; \
-    done; \
-    if [ "$ok" != "1" ]; then echo "ERROR: failed to download sing-box after 8 attempts" >&2; exit 1; fi; \
-    tar -xzf /tmp/sing-box.tar.gz -C /tmp; \
-    mv "/tmp/sing-box-${SINGBOX_VERSION}-linux-${sb_arch}/sing-box" /usr/local/bin/sing-box; \
     chmod +x /usr/local/bin/sing-box; \
-    rm -rf /tmp/sing-box*; \
-    # Verify the binary is present and runnable — fail the build otherwise.
     /usr/local/bin/sing-box version
 
 WORKDIR /app
