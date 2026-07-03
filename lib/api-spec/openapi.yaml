@@ -583,6 +583,24 @@ components:
           enum: [dismissPopups]
       required: [type]
 
+    CfVerifyStep:
+      type: object
+      description: >
+        Explicitly clear a Cloudflare challenge / click a Turnstile "verify you
+        are human" checkbox that is gating the current page. Use before a click
+        or fill step whose target only becomes interactive after CF passes.
+      properties:
+        type:
+          type: string
+          enum: [cfVerify]
+        url:
+          type: string
+          description: Optional URL to (re)navigate to before verifying — defaults to the current page
+        maxReloads:
+          type: integer
+          description: Max page reloads to attempt while clearing the challenge (default 2)
+      required: [type]
+
     SelectStep:
       type: object
       properties:
@@ -764,7 +782,7 @@ components:
           description: HTTP/SOCKS proxy URL (e.g. "http://user:pass@host:1080")
         proxyType:
           type: ["string", "null"]
-          enum: [http, socks5, warp, vless, vm]
+          enum: [http, socks5, warp, vless, vmess, trojan, hy2]
         headed:
           type: ["boolean", "null"]
         stealth:
@@ -785,6 +803,7 @@ components:
         - $ref: "#/components/schemas/WaitForStep"
         - $ref: "#/components/schemas/ScreenshotStep"
         - $ref: "#/components/schemas/DismissPopupsStep"
+        - $ref: "#/components/schemas/CfVerifyStep"
         - $ref: "#/components/schemas/SelectStep"
         - $ref: "#/components/schemas/HoverStep"
         - $ref: "#/components/schemas/ScrollStep"

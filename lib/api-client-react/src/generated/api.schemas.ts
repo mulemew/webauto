@@ -147,6 +147,19 @@ export interface DismissPopupsStep {
   type: DismissPopupsStepType;
 }
 
+export type CfVerifyStepType =
+  (typeof CfVerifyStepType)[keyof typeof CfVerifyStepType];
+
+export const CfVerifyStepType = {
+  cfVerify: "cfVerify",
+} as const;
+
+export interface CfVerifyStep {
+  type: CfVerifyStepType;
+  url?: string;
+  maxReloads?: number;
+}
+
 export type SelectStepType =
   (typeof SelectStepType)[keyof typeof SelectStepType];
 
@@ -378,7 +391,9 @@ export const TaskBrowserConfigProxyType = {
   socks5: "socks5",
   warp: "warp",
   vless: "vless",
-  vm: "vm",
+  vmess: "vmess",
+  trojan: "trojan",
+  hy2: "hy2",
 } as const;
 
 /**
@@ -423,6 +438,7 @@ export type WorkflowStep =
   | WaitForStep
   | ScreenshotStep
   | DismissPopupsStep
+  | CfVerifyStep
   | SelectStep
   | HoverStep
   | ScrollStep

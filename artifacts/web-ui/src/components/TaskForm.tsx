@@ -33,7 +33,7 @@ const thenActionSchema = z.object({
 }).optional();
 
 const stepSchema = z.object({
-  type: z.enum(["navigate", "click", "fill", "wait", "waitFor", "screenshot", "scroll", "hover", "keypress", "select", "switchToNewPage", "login", "condition", "dismissPopups"]),
+  type: z.enum(["navigate", "click", "fill", "wait", "waitFor", "screenshot", "scroll", "hover", "keypress", "select", "switchToNewPage", "login", "condition", "dismissPopups", "cfVerify"]),
   url: z.string().optional(),
   selector: z.string().optional(),
   selectorType: z.enum(["text", "css", "xpath"]).optional(),
@@ -57,6 +57,7 @@ const stepSchema = z.object({
   conditionType: z.enum(["text_contains", "text_not_contains", "element_visible", "element_not_visible", "url_contains"]).optional(),
   conditionValue: z.string().optional(),
   conditionSelector: z.string().optional(),
+  maxReloads: z.number().optional(),
   thenAction: thenActionSchema,
 });
 

@@ -100,6 +100,7 @@ const stepSchema = z.object({
     "login",
     "condition",
     "dismissPopups",
+    "cfVerify",
   ]),
   url: z.string().optional(),
   selector: z.string().optional(),
@@ -132,6 +133,7 @@ const stepSchema = z.object({
     .optional(),
   conditionValue: z.string().optional(),
   conditionSelector: z.string().optional(),
+  maxReloads: z.number().optional(),
   thenAction: thenActionSchema,
 });
 
@@ -324,6 +326,8 @@ export default function TaskForm() {
       provider: browserConfig.provider,
       wsEndpoint: browserConfig.wsEndpoint || null,
       proxyUrl: browserConfig.proxyUrl || null,
+      proxyType: browserConfig.proxyType || null,
+      headed: browserConfig.headed || null,
       stealth: browserConfig.stealth || null,
       blockAds: browserConfig.blockAds || null,
       ignoreHTTPS: browserConfig.ignoreHTTPS || null,

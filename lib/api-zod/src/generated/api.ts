@@ -103,6 +103,11 @@ export const ListTasksResponseItem = zod.object({
           type: zod.enum(["dismissPopups"]),
         }),
         zod.object({
+          type: zod.enum(["cfVerify"]),
+          url: zod.string().optional(),
+          maxReloads: zod.number().optional(),
+        }),
+        zod.object({
           type: zod.enum(["select"]),
           selector: zod
             .string()
@@ -280,7 +285,7 @@ export const ListTasksResponseItem = zod.object({
               'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
             ),
           proxyType: zod
-            .enum(["http", "socks5", "warp", "vless", "vm"])
+            .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2"])
             .nullish(),
           headed: zod.boolean().nullish(),
           stealth: zod.boolean().nullish(),
@@ -360,6 +365,11 @@ export const CreateTaskBody = zod.object({
         }),
         zod.object({
           type: zod.enum(["dismissPopups"]),
+        }),
+        zod.object({
+          type: zod.enum(["cfVerify"]),
+          url: zod.string().optional(),
+          maxReloads: zod.number().optional(),
         }),
         zod.object({
           type: zod.enum(["select"]),
@@ -521,7 +531,7 @@ export const CreateTaskBody = zod.object({
               'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
             ),
           proxyType: zod
-            .enum(["http", "socks5", "warp", "vless", "vm"])
+            .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2"])
             .nullish(),
           headed: zod.boolean().nullish(),
           stealth: zod.boolean().nullish(),
@@ -604,6 +614,11 @@ export const GetTaskResponse = zod
           }),
           zod.object({
             type: zod.enum(["dismissPopups"]),
+          }),
+          zod.object({
+            type: zod.enum(["cfVerify"]),
+            url: zod.string().optional(),
+            maxReloads: zod.number().optional(),
           }),
           zod.object({
             type: zod.enum(["select"]),
@@ -787,7 +802,7 @@ export const GetTaskResponse = zod
                 'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
               ),
             proxyType: zod
-              .enum(["http", "socks5", "warp", "vless", "vm"])
+              .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2"])
               .nullish(),
             headed: zod.boolean().nullish(),
             stealth: zod.boolean().nullish(),
@@ -884,6 +899,11 @@ export const UpdateTaskBody = zod.object({
         }),
         zod.object({
           type: zod.enum(["dismissPopups"]),
+        }),
+        zod.object({
+          type: zod.enum(["cfVerify"]),
+          url: zod.string().optional(),
+          maxReloads: zod.number().optional(),
         }),
         zod.object({
           type: zod.enum(["select"]),
@@ -1045,7 +1065,7 @@ export const UpdateTaskBody = zod.object({
               'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
             ),
           proxyType: zod
-            .enum(["http", "socks5", "warp", "vless", "vm"])
+            .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2"])
             .nullish(),
           headed: zod.boolean().nullish(),
           stealth: zod.boolean().nullish(),
@@ -1120,6 +1140,11 @@ export const UpdateTaskResponse = zod.object({
         }),
         zod.object({
           type: zod.enum(["dismissPopups"]),
+        }),
+        zod.object({
+          type: zod.enum(["cfVerify"]),
+          url: zod.string().optional(),
+          maxReloads: zod.number().optional(),
         }),
         zod.object({
           type: zod.enum(["select"]),
@@ -1299,7 +1324,7 @@ export const UpdateTaskResponse = zod.object({
               'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
             ),
           proxyType: zod
-            .enum(["http", "socks5", "warp", "vless", "vm"])
+            .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2"])
             .nullish(),
           headed: zod.boolean().nullish(),
           stealth: zod.boolean().nullish(),
