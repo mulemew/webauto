@@ -199,6 +199,25 @@ export async function dismissPopups(page: PageAdapter): Promise<PopupCleanupResu
       let count = 0;
       const vw = window.innerWidth;
       const vh = window.innerHeight;
+      // Never remove captcha widgets/containers — deleting them (or their
+      // wrappers) breaks login on sites that require the captcha to be present
+      // and solved before submit (e.g. GeeTest v4 on ikuuu, Turnstile/hCaptcha
+      // on renew dialogs). A captcha layer frequently overlaps the viewport as a
+      // fixed/high-z element and would otherwise match the backdrop heuristic.
+      const CAPTCHA_SEL =
+        ".cf-turnstile, [data-sitekey], input[name='cf-turnstile-response'], " +
+        "iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile'], " +
+        "iframe[src*='recaptcha'], .g-recaptcha, iframe[src*='hcaptcha'], .h-captcha, " +
+        "[class*='geetest'], [class*='captcha'], [id*='captcha'], .embed-captcha, " +
+        "iframe[src*='geetest'], iframe[src*='captcha']";
+      const isCaptchaRelated = (el: HTMLElement): boolean => {
+        try {
+          if (el.matches(CAPTCHA_SEL)) return true;
+          if (el.querySelector(CAPTCHA_SEL)) return true;
+          if (el.closest(CAPTCHA_SEL)) return true;
+        } catch { /* ignore */ }
+        return false;
+      };
       const candidates = Array.from(document.querySelectorAll<HTMLElement>("body *"));
       for (const el of candidates) {
         const s = window.getComputedStyle(el);
@@ -206,11 +225,13 @@ export async function dismissPopups(page: PageAdapter): Promise<PopupCleanupResu
         const z = parseInt(s.zIndex || "0", 10);
         const r = el.getBoundingClientRect();
         const coversViewport = r.width >= vw * 0.9 && r.height >= vh * 0.9;
+        const cls = (el.className && typeof el.className === "string" ? el.className : "") + " " + (el.id || "");
         const isBackdrop =
           /(backdrop|overlay|modal|mask|dimmer|scrim|gdpr|consent|cookie|popup|paywall|subscribe)/i.test(
-            (el.className && typeof el.className === "string" ? el.className : "") + " " + (el.id || ""),
+            cls,
           );
         if (coversViewport && (z >= 1000 || isBackdrop) && s.pointerEvents !== "none") {
+          if (isCaptchaRelated(el)) continue;
           el.remove();
           count++;
         }
