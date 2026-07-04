@@ -46,7 +46,7 @@ async function detectAltchaCaptcha(page: PageAdapter): Promise<AltchaDetection |
       const widget = document.querySelector<any>(sel);
       if (!widget) return "";
       const lightDomInput =
-        widget.querySelector<HTMLInputElement>("input[name='altcha']") ||
+        (widget.querySelector("input[name='altcha']") as HTMLInputElement | null) ||
         document.querySelector<HTMLInputElement>("input[name='altcha']");
       return lightDomInput ? "input[name='altcha']" : "";
     }, selector as never) as string;
@@ -72,7 +72,7 @@ async function waitForAltchaVerification(page: PageAdapter, timeoutMs = 30_000):
         if (widget) {
           const state = typeof widget.getState === "function" ? widget.getState() : "";
           if (state === "verified") return true;
-          const shadowCheckbox = widget.shadowRoot?.querySelector<HTMLInputElement>("input[type='checkbox']");
+          const shadowCheckbox = widget.shadowRoot?.querySelector("input[type='checkbox']") as HTMLInputElement | null;
           if (shadowCheckbox?.checked) return true;
         }
         return false;
@@ -91,7 +91,7 @@ async function clickAltchaWidget(page: PageAdapter): Promise<boolean> {
     const directClick = await page.evaluate(() => {
       const widget = document.querySelector<any>("altcha-widget, [name='altcha'], [data-altcha]");
       if (!widget) return false;
-      const checkbox = widget.shadowRoot?.querySelector<HTMLInputElement>("input[type='checkbox']");
+      const checkbox = widget.shadowRoot?.querySelector("input[type='checkbox']") as HTMLInputElement | null;
       if (checkbox) {
         checkbox.click();
         return true;
