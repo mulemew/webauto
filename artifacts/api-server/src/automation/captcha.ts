@@ -492,7 +492,16 @@ async function detectAndBypassClickCaptcha(page: PageAdapter): Promise<CaptchaRe
               // No success signal detected — fall back to a brief wait
               await new Promise((r) => setTimeout(r, 1500 + Math.random() * 500));
             } else {
-              logger.info({ provider: provider.name }, "Captcha verification succeeded — result is populated");
+              // Result is populated (e.g. GeeTest v4 onSuccess fired and the
+              // Captcha.getResponse() token / lot_number is set). This IS success.
+              // GeeTest v4 in nativeButton mode does NOT add a success CSS class,
+              // change the tip text to "success", or hide the widget container —
+              // so the success-class / success-text / container-disappeared checks
+              // below would all miss it and we'd wrongly fall through to the
+              // "pause for attention" branch (the ikuuu.fyi NEEDS ATTENTION bug).
+              // Return success here now that we've confirmed the token exists.
+              logger.info({ provider: provider.name }, "Captcha verification succeeded — result token is populated");
+              return { detected: true, solved: true, message: `${provider.name} click captcha solved (token populated)` };
             }
           }
 

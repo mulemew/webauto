@@ -492,19 +492,54 @@ async function startSingBox(
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "singbox-"));
   const cfgFile = path.join(dir, "config.json");
+  const logFile = path.join(dir, "stderr.log");
   fs.writeFileSync(cfgFile, JSON.stringify(config));
 
-  const child: ChildProcess = spawn(singBoxBin, ["run", "-c", cfgFile], {
-    stdio: "ignore",
+  const child = spawn(singBoxBin, ["run", "-c", cfgFile], {
+    stdio: ["ignore", "ignore", "pipe"],
   });
+  const stderr = fs.createWriteStream(logFile, { flags: "a" });
+  child.stderr?.pipe(stderr);
   child.on("error", (err) => logger.error({ err }, "sing-box process error"));
+
+  const cleanup = async () => {
+    try { child.kill("SIGKILL"); } catch { /* ignore */ }
+    await new Promise<void>((resolve) => stderr.end(() => resolve()));
+  };
 
   try {
     await waitForPort(port);
   } catch (err) {
-    child.kill("SIGKILL");
+    await cleanup();
+    const logText = fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8").trim() : "";
     fs.rmSync(dir, { recursive: true, force: true });
-    throw err;
+    throw new Error(
+      `sing-box started for proxy type "${type}" but did not open the SOCKS port on ${listenHost}:${port}. ` +
+        (logText ? `sing-box stderr: ${logText}` : `Last error: ${(err as Error).message}`),
+    );
+  }
+
+  // One more quick probe so we don't hand back a dead port if sing-box dies
+  // immediately after binding.
+  const healthy = await new Promise<boolean>((resolve) => {
+    const sock = net.connect({ host: "127.0.0.1", port }, () => {
+      sock.destroy();
+      resolve(true);
+    });
+    sock.once("error", () => resolve(false));
+    sock.setTimeout(1000, () => {
+      sock.destroy();
+      resolve(false);
+    });
+  });
+  if (!healthy) {
+    await cleanup();
+    const logText = fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8").trim() : "";
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw new Error(
+      `sing-box for proxy type "${type}" exited or stopped responding immediately after startup. ` +
+        (logText ? `sing-box stderr: ${logText}` : `proxy port ${port} closed`),
+    );
   }
 
   logger.info({ type, listenHost, publicHost, localPort: port }, "Local sing-box proxy started");
@@ -514,6 +549,11 @@ async function startSingBox(
     stop: async () => {
       try {
         child.kill("SIGKILL");
+      } catch {
+        /* ignore */
+      }
+      try {
+        stderr.end();
       } catch {
         /* ignore */
       }
