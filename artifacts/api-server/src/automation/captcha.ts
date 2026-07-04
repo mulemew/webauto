@@ -748,10 +748,23 @@ export async function detectAndHandleCaptcha(
     // "Verify you are human" even though the token is already populated — a single
     // click on the iframe body flips the UI to "Success!" and the form is ready.
     if (type === "Turnstile" && !solver) {
+      // Turnstile writes its solved token into `cf-turnstile-response` in native
+      // mode, but into `g-recaptcha-response` when embedded in reCAPTCHA-
+      // compatibility mode (a `.g-recaptcha` container — e.g. betadash.lunes.host
+      // / the "Renew your Free plan" bot-check dialog). Check BOTH so an
+      // auto-solve in compat mode isn't missed, which would otherwise leave the
+      // widget stuck on "Verifying..." until we wrongly report needsAttention.
       const checkTurnstileToken = () =>
         page.evaluate(() => {
-          const input = document.querySelector<HTMLInputElement>("input[name='cf-turnstile-response']");
-          return input ? input.value.length > 0 : false;
+          const fields = document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+            "input[name='cf-turnstile-response'], textarea[name='cf-turnstile-response'], " +
+              "textarea[name='g-recaptcha-response'], textarea#g-recaptcha-response, " +
+              "input[name='g-recaptcha-response']",
+          );
+          for (const f of Array.from(fields)) {
+            if (f.value && f.value.trim().length > 0) return true;
+          }
+          return false;
         }) as Promise<boolean>;
 
       /** Detect the current visual state of the Turnstile widget.
