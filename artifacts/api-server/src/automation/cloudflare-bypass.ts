@@ -61,7 +61,11 @@ const EXPAND_TURNSTILE_JS = `
     var s = window.getComputedStyle(el);
     if (s.overflow === 'hidden' || s.overflowX === 'hidden' || s.overflowY === 'hidden')
       el.style.overflow = 'visible';
-    el.style.minWidth = 'max-content';
+    // NOTE: do NOT set minWidth:'max-content' on ancestors. It forces
+    // long-text containers (e.g. the "Renew your Free plan" modal) to stop
+    // wrapping and stretch to the full viewport width, distorting the dialog.
+    // Relaxing overflow is enough to un-clip the widget; iframe sizing is
+    // handled explicitly below.
   }
   // Make Turnstile iframes visible and properly sized
   document.querySelectorAll('iframe').forEach(function(f){
