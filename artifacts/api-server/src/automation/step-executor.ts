@@ -406,9 +406,15 @@ async function executeStep(
         if (captchaResult.detected) {
           widgetMsg = captchaResult.solved
             ? ` Widget captcha handled: ${(captchaResult as { message: string }).message}`
-            : ` Widget captcha detected but not solved: ${(captchaResult as { message: string }).message}`;
+            : captchaResult.needsAttention
+              ? ` Widget captcha needs attention: ${(captchaResult as { message: string }).message}`
+              : ` Widget captcha detected but not solved: ${(captchaResult as { message: string }).message}`;
+          if (!captchaResult.solved && captchaResult.needsAttention) {
+            throw new CaptchaBlockedError((captchaResult as { message: string }).message);
+          }
         }
       } catch (err) {
+        if (err instanceof CaptchaBlockedError) throw err;
         logger.debug({ err }, "cfVerify widget captcha handling threw");
       }
 
