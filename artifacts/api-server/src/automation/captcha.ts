@@ -598,10 +598,14 @@ async function detectAndBypassClickCaptcha(page: PageAdapter): Promise<CaptchaRe
         logger.debug({ err, provider: provider.name }, "Click captcha bypass attempt error");
       }
 
-      // Click didn't solve it — pause for attention instead of wasting login retries
-      logger.warn({ provider: provider.name }, "Click captcha not bypassed — pausing for attention");
-      return { detected: true, solved: false, needsAttention: true,
-        message: `${provider.name} detected but click bypass failed — manual intervention or captcha solver required.` };
+      // Click didn't solve it — keep going unless we actually saw a complex challenge.
+      // Some widgets briefly miss the button target even though the underlying token
+      // is populated a moment later; treating every miss as "needs attention" is too
+      // aggressive for simple click-to-verify flows such as ikuuu.
+      const treatAsAttention = provider.name !== "GeeTest v4";
+      logger.warn({ provider: provider.name, treatAsAttention }, "Click captcha not bypassed — continuing without marking attention");
+      return { detected: true, solved: false, needsAttention: treatAsAttention,
+        message: `${provider.name} detected but click bypass failed — continuing to token/image detection.` };
     } catch (err) {
       logger.debug({ err, provider: provider.name }, "Click captcha detection error");
     }
