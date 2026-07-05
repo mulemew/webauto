@@ -455,93 +455,127 @@ async function detectAndBypassClickCaptcha(page: PageAdapter): Promise<CaptchaRe
         continue;
       }
 
-      // Single quick attempt: move to button, click, check result
-      try {
-        // Warm up a human-interaction signal first. GeeTest v4 scores the
-        // session's mouse behaviour; clicking cold (no prior movement) pushes
-        // the risk score up and makes it escalate to the picture-selection
-        // challenge instead of passing on the click. A short bezier-style
-        // wander before the click measurably lowers that escalation rate.
-        try { await simulateHumanMouseMovement(page); } catch { /* non-critical */ }
-        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-        await new Promise((r) => setTimeout(r, 150 + Math.random() * 200));
-        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-        logger.info({ provider: provider.name }, "Clicked captcha button");
+      // Helper: poll for a GeeTest/click-captcha success token for up to `ms`.
+      // GeeTest v4 in nativeButton mode fires onSuccess asynchronously and does
+      // NOT add a success CSS class / change tip text / hide the container, so
+      // the ONLY reliable success signal is the populated result token. We poll
+      // generously because on datacenter IPs the server-side validation round
+      // trip is slower.
+      const pollClickCaptchaSuccess = async (ms: number): Promise<"solved" | "escalated" | "pending"> => {
+        const deadline = Date.now() + ms;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 600));
+          let solved = false;
+          try {
+            solved = await page.evaluate(() => {
+              const cap = (window as unknown as Record<string, { isReady?: () => boolean }>)["Captcha"];
+              if (cap && typeof cap.isReady === "function" && cap.isReady()) return true;
+              const gtFields = document.querySelectorAll<HTMLInputElement>(
+                "input[name='lot_number'], input[name='captcha_output'], input[name='pass_token'], input[name='gen_time']"
+              );
+              if (gtFields.length > 0) {
+                const allFilled = Array.from(gtFields).every((f) => f.value.length > 0);
+                if (allFilled) return true;
+              }
+              const successBtn = document.querySelector("[class*='geetest_btn_click'][class*='geetest_success']");
+              if (successBtn) return true;
+              const holder = document.querySelector("[class*='geetest_holder']");
+              if (holder) {
+                const text = holder.textContent?.toLowerCase() ?? "";
+                if (text.includes("success") || text.includes("验证成功")) return true;
+              }
+              return false;
+            }) as boolean;
+          } catch { return "pending"; }
+          if (solved) return "solved";
 
-        // Wait for captcha result — for GeeTest v4 the onSuccess callback fires async
-          // after the server validates the click. Check multiple signals:
-          //   1. window.Captcha?.isReady() — custom API some sites implement
-          //   2. GeeTest v4 hidden form fields (lot_number, captcha_output, etc.)
-          //   3. Success CSS classes on the button
-          //   4. Challenge popup appearing (means click-to-verify failed)
-          {
-            const readyDeadline = Date.now() + 15_000;
-            let ready = false;
-            while (!ready && Date.now() < readyDeadline) {
-              await new Promise((r) => setTimeout(r, 600));
-              try {
-                ready = await page.evaluate(() => {
-                  // Check custom Captcha API
-                  const cap = (window as unknown as Record<string, { isReady?: () => boolean }>)["Captcha"];
-                  if (cap && typeof cap.isReady === "function" && cap.isReady()) return true;
-                  // Check GeeTest v4 result fields — these are populated when GeeTest
-                  // validation succeeds (lot_number, captcha_output, pass_token, gen_time)
-                  const gtFields = document.querySelectorAll<HTMLInputElement>(
-                    "input[name='lot_number'], input[name='captcha_output'], input[name='pass_token'], input[name='gen_time']"
-                  );
-                  if (gtFields.length > 0) {
-                    const allFilled = Array.from(gtFields).every((f) => f.value.length > 0);
-                    if (allFilled) return true;
-                  }
-                  // Check GeeTest v4 success class on the button
-                  const successBtn = document.querySelector("[class*='geetest_btn_click'][class*='geetest_success']");
-                  if (successBtn) return true;
-                  // Check GeeTest v4 success text
-                  const holder = document.querySelector("[class*='geetest_holder']");
-                  if (holder) {
-                    const text = holder.textContent?.toLowerCase() ?? "";
-                    if (text.includes("success") || text.includes("验证成功")) return true;
-                  }
-                  return false;
-                }) as boolean;
-              } catch { break; }
+          // A visible slider/image challenge popup means the click was rejected
+          // and the captcha escalated to an interactive challenge we cannot
+          // solve with a blind click.
+          try {
+            const challengeVisible = await page.evaluate(() => {
+              const sels = [
+                "[class*='geetest_box_wrap']", "[class*='geetest_panel']",
+                "[class*='geetest_window']", "[class*='geetest_canvas']",
+                "[class*='geetest_mask'][class*='geetest_show']",
+              ];
+              return sels.some((s) => {
+                const el = document.querySelector<HTMLElement>(s);
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                const st = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && st.display !== "none" && st.visibility !== "hidden";
+              });
+            }) as boolean;
+            if (challengeVisible) return "escalated";
+          } catch { /* ignore */ }
+        }
+        return "pending";
+      };
 
-              // Also check if a challenge popup appeared (means click failed, need manual solve)
-              try {
-                const challengeVisible = await page.evaluate(() => {
-                  const sels = ["[class*='geetest_box_wrap']", "[class*='geetest_panel']", "[class*='geetest_window']"];
-                  return sels.some((s) => {
-                    const el = document.querySelector<HTMLElement>(s);
-                    if (!el) return false;
-                    const r = el.getBoundingClientRect();
-                    const st = window.getComputedStyle(el);
-                    return r.width > 0 && r.height > 0 && st.display !== "none" && st.visibility !== "hidden";
-                  });
-                }) as boolean;
-                if (challengeVisible) {
-                  logger.info({ provider: provider.name }, "GeeTest challenge popup appeared — click verification failed");
-                  break; // Exit polling, escalation will be detected below
-                }
-              } catch { /* ignore */ }
-            }
-            if (!ready) {
-              // No success signal detected — fall back to a brief wait
-              await new Promise((r) => setTimeout(r, 1500 + Math.random() * 500));
-            } else {
-              // Result is populated (e.g. GeeTest v4 onSuccess fired and the
-              // Captcha.getResponse() token / lot_number is set). This IS success.
-              // GeeTest v4 in nativeButton mode does NOT add a success CSS class,
-              // change the tip text to "success", or hide the widget container —
-              // so the success-class / success-text / container-disappeared checks
-              // below would all miss it and we'd wrongly fall through to the
-              // "pause for attention" branch (the ikuuu.fyi NEEDS ATTENTION bug).
-              // Return success here now that we've confirmed the token exists.
-              logger.info({ provider: provider.name }, "Captcha verification succeeded — result token is populated");
-              return { detected: true, solved: true, message: `${provider.name} click captcha solved (token populated)` };
-            }
+      // Multi-attempt click bypass. GeeTest v4 scores mouse behaviour, so we
+      // warm up a human-interaction signal before every click and retry a few
+      // times (each retry re-warms) before giving up.
+      let escalatedToChallenge = false;
+      const MAX_CLICK_ATTEMPTS = 3;
+      for (let attempt = 1; attempt <= MAX_CLICK_ATTEMPTS; attempt++) {
+        try {
+          // Re-resolve the button box each attempt (it can move/re-render).
+          const freshBtn = (await page.$(provider.buttonSelector)) ?? btn;
+          const clickBox = (await freshBtn.boundingBox()) ?? box;
+          if (!clickBox) break;
+
+          // ── Fuller human-interaction warm-up ──────────────────────────────
+          // Clicking cold (no prior movement) inflates GeeTest's risk score and
+          // pushes it to the picture-selection challenge. Wander the pointer a
+          // few times and dwell near the button before committing the click.
+          for (let w = 0; w < (attempt === 1 ? 3 : 2); w++) {
+            try { await simulateHumanMouseMovement(page); } catch { /* non-critical */ }
+            await new Promise((r) => setTimeout(r, 200 + Math.random() * 300));
           }
+          // Approach the button in two hops, then dwell — a real cursor rarely
+          // teleports straight onto the target.
+          const targetX = clickBox.x + clickBox.width / 2 + (Math.random() * 6 - 3);
+          const targetY = clickBox.y + clickBox.height / 2 + (Math.random() * 4 - 2);
+          await page.mouse.move(clickBox.x + clickBox.width * 0.25, clickBox.y + clickBox.height * 0.4);
+          await new Promise((r) => setTimeout(r, 120 + Math.random() * 180));
+          await page.mouse.move(targetX, targetY);
+          await new Promise((r) => setTimeout(r, 180 + Math.random() * 260));
+          // Real-coordinate click. On the SeleniumBase/cf-proxy backend this is
+          // an OS-level xdotool click; on CDP backends it is a genuine synthetic
+          // pointer event at the widget coordinates (never an element.click()).
+          await page.mouse.click(targetX, targetY);
+          logger.info({ provider: provider.name, attempt }, "Clicked captcha button (real coordinates)");
 
-                  // Check success — CSS selector first, then text content
+          // Extended, relaxed token polling — longer on the first attempts.
+          const pollMs = attempt === 1 ? 20_000 : 14_000;
+          const outcome = await pollClickCaptchaSuccess(pollMs);
+          if (outcome === "solved") {
+            logger.info({ provider: provider.name, attempt }, "Captcha verification succeeded — result token is populated");
+            return { detected: true, solved: true, message: `${provider.name} click captcha solved (token populated)` };
+          }
+          if (outcome === "escalated") {
+            escalatedToChallenge = true;
+            logger.info({ provider: provider.name, attempt }, "GeeTest escalated to slider/image challenge");
+            break;
+          }
+          logger.debug({ provider: provider.name, attempt }, "Click captcha token not populated yet — retrying");
+
+          // Reset GeeTest so the next attempt gets a fresh challenge state.
+          try {
+            await page.evaluate(() => {
+              const cap = (window as unknown as Record<string, { reset?: () => void; destroy?: () => void }>)["Captcha"];
+              if (cap && typeof cap.reset === "function") cap.reset();
+            });
+          } catch { /* non-critical */ }
+          await new Promise((r) => setTimeout(r, 1200 + Math.random() * 800));
+        } catch (err) {
+          logger.debug({ err, provider: provider.name, attempt }, "Click captcha bypass attempt error");
+        }
+      }
+
+      try {
+        // Post-loop success checks — CSS selector / text / container gone.
         if (provider.successSelector) {
           const success = await page.$(provider.successSelector);
           if (success) {
@@ -574,44 +608,44 @@ async function detectAndBypassClickCaptcha(page: PageAdapter): Promise<CaptchaRe
           return { detected: true, solved: true, message: `${provider.name} click captcha bypassed` };
         }
 
-        // Check if escalated to complex challenge
-        const escalated = await page.evaluate(() => {
-          // GeeTest v3 selectors
-          const sels = [".geetest_window", ".geetest_panel_next", ".geetest_canvas_img",
-            ".yidun_slider", ".yidun_panel", ".tc-imgarea", "#tcaptcha_iframe",
-            ".vaptcha-panel", ".dx-captcha-slider"];
-          // GeeTest v4 selectors — use attribute selectors because v4 appends a hash
-          // suffix to class names (e.g. geetest_box_wrap_620847ba)
-          const attrSels = ["[class*='geetest_box_wrap']", "[class*='geetest_panel']",
-            "[class*='geetest_mask'][class*='geetest_show']",
-            "[class*='geetest_window']", "[class*='geetest_canvas']"];
-          const allSels = [...sels, ...attrSels];
-          return allSels.some((s) => {
-            const el = document.querySelector<HTMLElement>(s);
-            if (!el) return false;
-            const rect = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
-          });
-        }) as boolean;
-
-        if (escalated) {
-          logger.warn({ provider: provider.name }, "Click captcha escalated to complex challenge — cannot bypass");
-          return { detected: true, solved: false, needsAttention: true,
-            message: `${provider.name} escalated to slider/image challenge — manual intervention or captcha solver required.` };
+        // Re-confirm escalation state right now (popup may have appeared/closed).
+        if (!escalatedToChallenge) {
+          escalatedToChallenge = await page.evaluate(() => {
+            const sels = [".geetest_window", ".geetest_panel_next", ".geetest_canvas_img",
+              ".yidun_slider", ".yidun_panel", ".tc-imgarea", "#tcaptcha_iframe",
+              ".vaptcha-panel", ".dx-captcha-slider"];
+            const attrSels = ["[class*='geetest_box_wrap']", "[class*='geetest_panel']",
+              "[class*='geetest_mask'][class*='geetest_show']",
+              "[class*='geetest_window']", "[class*='geetest_canvas']"];
+            const allSels = [...sels, ...attrSels];
+            return allSels.some((s) => {
+              const el = document.querySelector<HTMLElement>(s);
+              if (!el) return false;
+              const rect = el.getBoundingClientRect();
+              const style = window.getComputedStyle(el);
+              return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+            });
+          }) as boolean;
         }
       } catch (err) {
-        logger.debug({ err, provider: provider.name }, "Click captcha bypass attempt error");
+        logger.debug({ err, provider: provider.name }, "Click captcha post-attempt check error");
       }
 
-      // Click didn't solve it. For GeeTest v4 / ikuuu this means the site
-      // escalated to the picture-selection challenge, which we cannot solve
-      // safely with a blind click. Mark it as needing attention so the caller
-      // stops instead of marching into a broken login step.
-      const needsAttention = provider.name === "GeeTest v4" || provider.name === "Generic click-to-verify";
-      logger.warn({ provider: provider.name, needsAttention }, "Click captcha not bypassed");
-      return { detected: true, solved: false, needsAttention,
-        message: `${provider.name} detected but click bypass failed${needsAttention ? " (escalated challenge)" : ""}.` };
+      // Decide the outcome. ONLY treat this as needs-attention when the captcha
+      // actually escalated to an interactive slider/image challenge that a blind
+      // click cannot solve. Otherwise return solved:false WITHOUT needsAttention
+      // so the caller proceeds with the login attempt — the click may have
+      // registered server-side even though we could not confirm the token in
+      // time, and hard-failing here is the ikuuu.fyi false-positive we are
+      // fixing. Detected-but-unconfirmed simple click flows should never block.
+      if (escalatedToChallenge) {
+        logger.warn({ provider: provider.name }, "Click captcha escalated to complex challenge — manual/solver required");
+        return { detected: true, solved: false, needsAttention: true,
+          message: `${provider.name} escalated to slider/image challenge — manual intervention or captcha solver required.` };
+      }
+      logger.warn({ provider: provider.name }, "Click captcha not confirmed solved — proceeding without blocking");
+      return { detected: true, solved: false, needsAttention: false,
+        message: `${provider.name} detected; click attempted but success token not confirmed — proceeding with login.` };
     } catch (err) {
       logger.debug({ err, provider: provider.name }, "Click captcha detection error");
     }

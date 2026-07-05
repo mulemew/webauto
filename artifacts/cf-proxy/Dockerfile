@@ -33,7 +33,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 RUN python -c "import seleniumbase; print('seleniumbase ready')" \
   && if [ "$TARGETARCH" = "amd64" ]; then \
-       python -m seleniumbase get uc_driver 2>/dev/null || true; \
+       CHROME_MAJOR="$(google-chrome --version 2>/dev/null | grep -oE '[0-9]+' | head -1)"; \
+       echo "Installed Chrome major version: ${CHROME_MAJOR:-unknown}"; \
+       if [ -n "$CHROME_MAJOR" ]; then \
+         python -m seleniumbase get uc_driver --version="$CHROME_MAJOR" 2>/dev/null \
+           || python -m seleniumbase get uc_driver 2>/dev/null || true; \
+       else \
+         python -m seleniumbase get uc_driver 2>/dev/null || true; \
+       fi; \
      else \
        apt-get update \
        && apt-get install -y --no-install-recommends chromium-driver \

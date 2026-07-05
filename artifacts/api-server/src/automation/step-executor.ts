@@ -393,6 +393,55 @@ async function executeStep(
       //   • Embedded widget captchas (ALTCHA, reCAPTCHA/hCaptcha/Turnstile,
       //     GeeTest, etc.) — e.g. the "Protected by ALTCHA" checkbox on the
       //     ikuuu renew dialog, which is NOT a Cloudflare challenge.
+
+      // ── cf-proxy (SeleniumBase) fast-path ────────────────────────────────
+      // Under the SeleniumBase backend the login step solves embedded Turnstile
+      // widgets through cf-proxy's NATIVE uc_gui_click_captcha clicker
+      // (POST /click-turnstile, exposed here as page.clickTurnstile). The
+      // generic clearCloudflareInterstitial → detectAndHandleCaptcha path below
+      // relies on frames()/CDP coordinate clicks that are NOT wired to that
+      // native clicker, so on cf-proxy those clicks land off-target and the
+      // widget verification fails even though the identical widget passes in the
+      // login step. Give cfVerify the SAME verification path as login: when the
+      // adapter exposes the native clicker AND a Turnstile widget is present,
+      // click it natively first and short-circuit on success.
+      if (
+        "clickTurnstile" in page &&
+        typeof (page as unknown as { clickTurnstile?: unknown }).clickTurnstile === "function"
+      ) {
+        try {
+          if ("fetchFrames" in page && typeof (page as any).fetchFrames === "function") {
+            await (page as any).fetchFrames();
+          }
+          const hasTurnstile = await page.evaluate(() => {
+            if (document.querySelector("input[name='cf-turnstile-response']")) return true;
+            if (document.querySelector(".cf-turnstile")) return true;
+            if (
+              document.querySelector(
+                "iframe[src*='turnstile'], iframe[src*='challenges.cloudflare.com']",
+              )
+            )
+              return true;
+            const host = document.querySelector<HTMLElement>("[data-sitekey]");
+            const key = host?.dataset.sitekey ?? host?.getAttribute("data-sitekey");
+            return !!key && /^0x/i.test(key);
+          }).catch(() => false) as boolean;
+
+          if (hasTurnstile) {
+            logger.info("cfVerify — Turnstile widget present; using cf-proxy native clickTurnstile (login-step parity)");
+            const solved = await (page as unknown as { clickTurnstile: (n?: number) => Promise<boolean> })
+              .clickTurnstile(3)
+              .catch(() => false);
+            if (solved) {
+              return { message: "Cloudflare verification cleared via cf-proxy native Turnstile click." };
+            }
+            logger.debug("cfVerify — native clickTurnstile did not confirm solve; falling back to standard clearing path");
+          }
+        } catch (err) {
+          logger.debug({ err }, "cfVerify native clickTurnstile fast-path threw — falling back");
+        }
+      }
+
       const cleared = await clearCloudflareInterstitial(page, {
         url: step.url || page.url(),
         maxReloads: step.maxReloads ?? 2,

@@ -12,6 +12,9 @@ background so that POST /sessions returns near-instantly instead of waiting
 """
 import os
 import queue
+import shutil
+import subprocess
+import socket
 import threading
 import time
 import uuid
@@ -66,6 +69,43 @@ def _find_chrome():
 _CHROME_BIN = _find_chrome()
 
 
+def _get_chrome_version(binary: str | None) -> str | None:
+    if not binary:
+        return None
+    try:
+        out = subprocess.run([binary, '--version'], capture_output=True, text=True, timeout=5).stdout.strip()
+        return out or None
+    except Exception:
+        return None
+
+
+def _get_uc_driver_version() -> str | None:
+    try:
+        import seleniumbase
+        drivers_dir = os.path.join(os.path.dirname(seleniumbase.__file__), 'drivers')
+        uc_driver = os.path.join(drivers_dir, 'uc_driver')
+        if not os.path.exists(uc_driver):
+            return None
+        out = subprocess.run([uc_driver, '--version'], capture_output=True, text=True, timeout=5).stdout.strip()
+        return out or None
+    except Exception:
+        return None
+
+
+def _is_proxy_reachable(proxy: str, timeout_s: float = 1.0) -> tuple[bool, str]:
+    from urllib.parse import urlparse
+    parsed = urlparse(proxy if '://' in proxy else f'socks5://{proxy}')
+    host = parsed.hostname or ''
+    port = parsed.port or 0
+    if not host or not port:
+        return False, f'invalid proxy address: {proxy}'
+    try:
+        with socket.create_connection((host, port), timeout=timeout_s):
+            return True, ''
+    except Exception as e:
+        return False, f'{host}:{port} unreachable from cf-proxy: {e}'
+
+
 def _resolve_selector(selector: str):
     from selenium.webdriver.common.by import By
     if selector.startswith("xpath="):
@@ -95,6 +135,19 @@ def _is_cf_challenge(sb) -> bool:
         return False
 
 
+def _classify_start_error(error_text: str) -> str:
+    text = (error_text or '').lower()
+    if 'proxy unreachable' in text or 'proxy' in text and 'unreachable' in text:
+        return f'Chrome failed to start because the configured proxy is unreachable from cf-proxy: {error_text}'
+    if 'cannot connect to chrome' in text or 'session not created' in text or 'chrome' in text and 'connect' in text:
+        return (
+            'Chrome/UC driver session could not be created. This usually means the Chrome binary '
+            'crashed on launch or the uc_driver version does not match the installed Chrome version. '
+            f'Details: {error_text}'
+        )
+    return f'Chrome failed to start: {error_text}'
+
+
 # ── SessionThread ────────────────────────────────────────────────────────────
 
 class SessionThread:
@@ -118,58 +171,77 @@ class SessionThread:
         self._seq_lock = threading.Lock()
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
-        init = self._res_q.get(timeout=180)
+        init = self._res_q.get(timeout=300)
         if not init.get("ok"):
             self._closed = True
             raise RuntimeError(init.get("error", "Chrome failed to start"))
 
     def _worker(self):
+        attempts = 3
+        last_error = None
+        chrome_version = _get_chrome_version(_CHROME_BIN)
+        uc_driver_version = _get_uc_driver_version()
+        if chrome_version or uc_driver_version:
+            print(f"[chrome] binary={chrome_version or 'unknown'} uc_driver={uc_driver_version or 'unknown'}", flush=True)
         try:
-            from seleniumbase import SB
-            _kw = dict(
-                uc=True,
-                headed=True,
-                xvfb=False,
-                chromium_arg=_CHROMIUM_ARGS,
-            )
-            if _CHROME_BIN:
-                _kw["binary_location"] = _CHROME_BIN
-            if self.proxy:
-                proxy = self.proxy
-                is_socks = proxy.startswith("socks5://") or proxy.startswith("socks4://") or proxy.startswith("socks://")
-                if proxy.startswith("socks://"):
-                    proxy = "socks5://" + proxy.split("//", 1)[1]
-                if is_socks:
-                    # UC mode + SeleniumBase's proxy= handling builds a proxy
-                    # *extension* for anything it treats as needing auth, and
-                    # that extension frequently breaks SOCKS session creation
-                    # under undetected-chromedriver (the browser never finishes
-                    # launching → "session creation failed"). Chromium speaks
-                    # SOCKS5 natively, so route it through --proxy-server, which
-                    # is applied at launch and does not disturb UC stealth.
-                    _kw["chromium_arg"] = _CHROMIUM_ARGS + ",--proxy-server=" + proxy
-                    print(f"[proxy] SOCKS proxy via --proxy-server={proxy}", flush=True)
-                else:
-                    # Plain HTTP/HTTPS proxy — strip the scheme to the host:port
-                    # form SeleniumBase expects.
-                    if proxy.startswith("http://") or proxy.startswith("https://"):
-                        proxy = proxy.split("//", 1)[1]
-                    _kw["proxy"] = proxy
-                    print(f"[proxy] HTTP proxy via SB(proxy={proxy})", flush=True)
-            with SB(**_kw) as sb:
-                self._res_q.put({"ok": True})
-                while True:
-                    item = self._cmd_q.get()
-                    if item is None:
-                        break
-                    seq, fn = item
-                    try:
-                        result = fn(sb)
-                        self._res_q.put({"ok": True, "result": result, "seq": seq})
-                    except Exception as e:
-                        self._res_q.put({"ok": False, "error": str(e), "seq": seq})
-        except Exception as e:
-            self._res_q.put({"ok": False, "error": str(e)})
+            for attempt in range(1, attempts + 1):
+                try:
+                    from seleniumbase import SB
+                    _kw = dict(
+                        uc=True,
+                        headed=True,
+                        xvfb=False,
+                        chromium_arg=_CHROMIUM_ARGS,
+                    )
+                    if _CHROME_BIN:
+                        _kw["binary_location"] = _CHROME_BIN
+                    if self.proxy:
+                        proxy = self.proxy
+                        is_socks = proxy.startswith("socks5://") or proxy.startswith("socks4://") or proxy.startswith("socks://")
+                        if proxy.startswith("socks://"):
+                            proxy = "socks5://" + proxy.split("//", 1)[1]
+                        if is_socks:
+                            ok, err = _is_proxy_reachable(proxy)
+                            if not ok:
+                                raise RuntimeError(f"Proxy unreachable before Chrome start: {err}")
+                            _kw["chromium_arg"] = _CHROMIUM_ARGS + ",--proxy-server=" + proxy
+                            print(f"[proxy] SOCKS proxy via --proxy-server={proxy}", flush=True)
+                        else:
+                            if proxy.startswith("http://") or proxy.startswith("https://"):
+                                proxy = proxy.split("//", 1)[1]
+                            ok, err = _is_proxy_reachable(proxy)
+                            if not ok:
+                                raise RuntimeError(f"Proxy unreachable before Chrome start: {err}")
+                            _kw["proxy"] = proxy
+                            print(f"[proxy] HTTP proxy via SB(proxy={proxy})", flush=True)
+                    with SB(**_kw) as sb:
+                        self._res_q.put({"ok": True})
+                        while True:
+                            item = self._cmd_q.get()
+                            if item is None:
+                                break
+                            seq, fn = item
+                            try:
+                                result = fn(sb)
+                                self._res_q.put({"ok": True, "result": result, "seq": seq})
+                            except Exception as e:
+                                self._res_q.put({"ok": False, "error": str(e), "seq": seq})
+                        return
+                except Exception as e:
+                    last_error = e
+                    err_text = str(e)
+                    print(f"[worker] Chrome start attempt {attempt} failed: {err_text}", flush=True)
+                    # A proxy that cannot be reached will never succeed on retry —
+                    # fail fast with a clear message instead of burning retries.
+                    if "Proxy unreachable" in err_text:
+                        self._res_q.put({"ok": False, "error": _classify_start_error(err_text)})
+                        return
+                    if attempt < attempts:
+                        time.sleep(2 * attempt)
+                        continue
+                    self._res_q.put({"ok": False, "error": _classify_start_error(err_text)})
+                    return
+            self._res_q.put({"ok": False, "error": _classify_start_error(str(last_error) if last_error else 'Chrome failed to start')})
         finally:
             self._closed = True
 
