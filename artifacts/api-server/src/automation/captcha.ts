@@ -364,13 +364,13 @@ const CLICK_CAPTCHA_PROVIDERS: ClickCaptchaDetection[] = [
     successTexts: ["Verification Success", "验证成功", "success"],
   },
   // GeeTest v4 — nativeButton click mode (loads async; wait for button before clicking)
-    {
-      name: "GeeTest v4",
-      containerSelector: ".embed-captcha, .geetest-onloading-placeholder, [class*='geetest_holder'], [class*='geetest_captcha'], .geetest_btn_click, .geetest_box_wrap",
-      buttonSelector: "[class*='geetest_btn_click']",
-      successSelector: "[class*='geetest_btn_click'][class*='geetest_success']",
-      successTexts: ["Verification Success", "验证成功", "success"],
-    },
+  {
+    name: "GeeTest v4",
+    containerSelector: ".embed-captcha, .geetest-onloading-placeholder, [class*='geetest_holder'], [class*='geetest_captcha'], .geetest_btn_click, .geetest_box_wrap",
+    buttonSelector: "[class*='geetest_btn_click']",
+    successSelector: "[class*='geetest_btn_click'][class*='geetest_success']",
+    successTexts: ["Verification Success", "验证成功", "success"],
+  },
   // Tencent Captcha (腾讯验证码) — usually a button that opens a popup
   {
     name: "Tencent Captcha",
@@ -457,6 +457,12 @@ async function detectAndBypassClickCaptcha(page: PageAdapter): Promise<CaptchaRe
 
       // Single quick attempt: move to button, click, check result
       try {
+        // Warm up a human-interaction signal first. GeeTest v4 scores the
+        // session's mouse behaviour; clicking cold (no prior movement) pushes
+        // the risk score up and makes it escalate to the picture-selection
+        // challenge instead of passing on the click. A short bezier-style
+        // wander before the click measurably lowers that escalation rate.
+        try { await simulateHumanMouseMovement(page); } catch { /* non-critical */ }
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
         await new Promise((r) => setTimeout(r, 150 + Math.random() * 200));
         await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
@@ -598,14 +604,14 @@ async function detectAndBypassClickCaptcha(page: PageAdapter): Promise<CaptchaRe
         logger.debug({ err, provider: provider.name }, "Click captcha bypass attempt error");
       }
 
-      // Click didn't solve it — keep going unless we actually saw a complex challenge.
-      // Some widgets briefly miss the button target even though the underlying token
-      // is populated a moment later; treating every miss as "needs attention" is too
-      // aggressive for simple click-to-verify flows such as ikuuu.
-      const treatAsAttention = provider.name !== "GeeTest v4";
-      logger.warn({ provider: provider.name, treatAsAttention }, "Click captcha not bypassed — continuing without marking attention");
-      return { detected: true, solved: false, needsAttention: treatAsAttention,
-        message: `${provider.name} detected but click bypass failed — continuing to token/image detection.` };
+      // Click didn't solve it. For GeeTest v4 / ikuuu this means the site
+      // escalated to the picture-selection challenge, which we cannot solve
+      // safely with a blind click. Mark it as needing attention so the caller
+      // stops instead of marching into a broken login step.
+      const needsAttention = provider.name === "GeeTest v4" || provider.name === "Generic click-to-verify";
+      logger.warn({ provider: provider.name, needsAttention }, "Click captcha not bypassed");
+      return { detected: true, solved: false, needsAttention,
+        message: `${provider.name} detected but click bypass failed${needsAttention ? " (escalated challenge)" : ""}.` };
     } catch (err) {
       logger.debug({ err, provider: provider.name }, "Click captcha detection error");
     }
