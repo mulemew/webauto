@@ -156,7 +156,7 @@ async function physicalClickTurnstile(page: PageAdapter): Promise<boolean> {
       if (src.includes("cloudflare") || src.includes("turnstile") || src.includes("challenges")) {
         const r = iframes[i].getBoundingClientRect();
         if (r.width > 0 && r.height > 0)
-          return { cx: Math.round(r.x + 30), cy: Math.round(r.y + r.height / 2) };
+          return { cx: Math.round(r.x + Math.max(14, Math.min(18, r.width * 0.06))), cy: Math.round(r.y + r.height / 2) };
       }
     }
     // Fallback: container element
@@ -164,7 +164,7 @@ async function physicalClickTurnstile(page: PageAdapter): Promise<boolean> {
     for (const container of containers) {
       const r = container.getBoundingClientRect();
       if (r.width > 0 && r.height > 0)
-        return { cx: Math.round(r.x + 30), cy: Math.round(r.y + r.height / 2) };
+        return { cx: Math.round(r.x + Math.max(14, Math.min(18, r.width * 0.06))), cy: Math.round(r.y + r.height / 2) };
     }
     return null;
   }) as { cx: number; cy: number } | null;
@@ -208,7 +208,8 @@ async function physicalClickTurnstile(page: PageAdapter): Promise<boolean> {
 
       logger.info({ absX, absY, coords, winX, winY, titleBarHeight }, "Attempting xdotool physical click on Turnstile");
       xdotoolClick(absX, absY);
-      return true;
+      await sleep(600);
+      return await isTurnstileSolved(page);
     });
   }
 
@@ -217,7 +218,8 @@ async function physicalClickTurnstile(page: PageAdapter): Promise<boolean> {
   await page.mouse.move(coords.cx, coords.cy);
   await sleep(150 + Math.random() * 200);
   await page.mouse.click(coords.cx, coords.cy);
-  return true;
+  await sleep(600);
+  return await isTurnstileSolved(page);
 }
 
 /** DOM selectors that indicate an active CF challenge overlay */
@@ -502,13 +504,16 @@ export async function clickTurnstileCheckbox(page: PageAdapter): Promise<boolean
       const wBox = await widget.boundingBox();
       if (!wBox || wBox.width === 0 || wBox.height === 0) continue;
 
-      const clickX = wBox.x + 26 + (Math.random() * 4 - 2);
+      const clickX = wBox.x + Math.max(14, Math.min(18, wBox.width * 0.06));
       const clickY = wBox.y + wBox.height / 2 + (Math.random() * 4 - 2);
       await page.mouse.move(clickX, clickY);
       await sleep(150 + Math.random() * 200);
       await page.mouse.click(clickX, clickY);
-      logger.info({ selector: wSel, x: clickX, y: clickY }, "Clicked Turnstile via widget coords");
-      return true;
+      await sleep(500);
+      if (await isTurnstileSolved(page)) {
+        logger.info({ selector: wSel, x: clickX, y: clickY }, "Clicked Turnstile via widget coords");
+        return true;
+      }
     }
 
     // ── Strategy 3: Cross-origin iframe element click (when available) ──
@@ -530,11 +535,16 @@ export async function clickTurnstileCheckbox(page: PageAdapter): Promise<boolean
     if (checkbox) {
       const box = await checkbox.boundingBox();
       if (box) {
-        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        const clickX = box.x + Math.max(6, Math.min(16, box.width * 0.3));
+        const clickY = box.y + box.height / 2;
+        await page.mouse.move(clickX, clickY);
         await sleep(200 + Math.random() * 200);
-        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-        logger.info("Clicked Turnstile checkbox via iframe element");
-        return true;
+        await page.mouse.click(clickX, clickY);
+        await sleep(500);
+        if (await isTurnstileSolved(page)) {
+          logger.info("Clicked Turnstile checkbox via iframe element");
+          return true;
+        }
       }
     }
 
@@ -543,13 +553,16 @@ export async function clickTurnstileCheckbox(page: PageAdapter): Promise<boolean
     if (body) {
       const box = await body.boundingBox();
       if (box) {
-        const cx = box.x + box.width / 2;
+        const cx = box.x + Math.max(14, Math.min(18, box.width * 0.06));
         const cy = box.y + box.height / 2;
         await page.mouse.move(cx, cy);
         await sleep(150);
         await page.mouse.click(cx, cy);
-        logger.info("Clicked CF iframe body (fallback)");
-        return true;
+        await sleep(500);
+        if (await isTurnstileSolved(page)) {
+          logger.info("Clicked CF iframe body (fallback)");
+          return true;
+        }
       }
     }
 
