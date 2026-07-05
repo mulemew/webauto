@@ -190,6 +190,48 @@ const PROVIDER_LABELS: Record<BrowserProvider, string> = {
   seleniumbase: "SeleniumBase (CF Bypass)",
 };
 
+/**
+ * A small numeric field for one unit of a duration (day / hour / minute).
+ * Fixes the old input's UX bugs: it accepts an empty value while editing,
+ * supports pasting/replacing without a sticky leading "1", and only clamps
+ * to a valid number on blur.
+ */
+function DurationField({
+  label,
+  value,
+  onChange,
+  max = 999,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  max?: number;
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      <input
+        type="number"
+        inputMode="numeric"
+        min={0}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={(e) => {
+          const raw = e.target.value.trim();
+          if (raw === "") {
+            onChange("0");
+            return;
+          }
+          const n = parseInt(raw, 10);
+          onChange(String(isNaN(n) ? 0 : Math.min(max, Math.max(0, n))));
+        }}
+        className="w-16 h-9 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring font-mono"
+      />
+      <span className="text-sm text-muted-foreground">{label}</span>
+    </div>
+  );
+}
+
 export default function TaskForm() {
   const { t } = useLang();
   const [, setLocation] = useLocation();
@@ -243,11 +285,17 @@ export default function TaskForm() {
   const [scheduleType, setScheduleType] = useState<
     "none" | "cron" | "random" | "after_completion"
   >("none");
-  const [afterCompletionMinutes, setAfterCompletionMinutes] = useState("60");
-  const [randomWindow, setRandomWindow] = useState("1440");
-  const [randomWindowUnit, setRandomWindowUnit] = useState<"hours" | "days">(
-    "days",
-  );
+  // Delay-after-completion, expressed as a free combination of days / hours /
+  // minutes. Stored as raw strings so the inputs can be cleared, pasted into,
+  // and edited freely (no forced "1" on every keystroke). Clamped only when the
+  // cron value is built in onSubmit.
+  const [acDays, setAcDays] = useState("0");
+  const [acHours, setAcHours] = useState("0");
+  const [acMinutes, setAcMinutes] = useState("60");
+  // Random-interval window, also a free d/h/m combination.
+  const [rwDays, setRwDays] = useState("1");
+  const [rwHours, setRwHours] = useState("0");
+  const [rwMinutes, setRwMinutes] = useState("0");
   const [randomCount, setRandomCount] = useState("1");
 
   // Load steps recorded by the Step Recorder (only in create mode)
@@ -268,21 +316,27 @@ export default function TaskForm() {
   useEffect(() => {
     if (isEditMode && task) {
       const cron = task.cronExpression || "";
+      const splitDHM = (totalMinutes: number) => ({
+        d: Math.floor(totalMinutes / 1440),
+        h: Math.floor((totalMinutes % 1440) / 60),
+        m: totalMinutes % 60,
+      });
       if (cron.startsWith("@random:")) {
         const parts = cron.split(":");
         setScheduleType("random");
-        const windowMinutes = parseInt(parts[1] ?? "1440", 10);
-        if (windowMinutes >= 1440 && windowMinutes % 1440 === 0) {
-          setRandomWindowUnit("days");
-          setRandomWindow(String(windowMinutes / 1440));
-        } else {
-          setRandomWindowUnit("hours");
-          setRandomWindow(String(windowMinutes / 60 || 1));
-        }
+        const windowMinutes = parseInt(parts[1] ?? "1440", 10) || 1440;
+        const { d, h, m } = splitDHM(windowMinutes);
+        setRwDays(String(d));
+        setRwHours(String(h));
+        setRwMinutes(String(m));
         setRandomCount(parts[2] ?? "1");
       } else if (cron.startsWith("@after_completion:")) {
         setScheduleType("after_completion");
-        setAfterCompletionMinutes(cron.split(":")[1] ?? "60");
+        const total = parseInt(cron.split(":")[1] ?? "60", 10) || 60;
+        const { d, h, m } = splitDHM(total);
+        setAcDays(String(d));
+        setAcHours(String(h));
+        setAcMinutes(String(m));
       } else if (cron) {
         setScheduleType("cron");
       } else {
@@ -338,14 +392,18 @@ export default function TaskForm() {
   };
 
   const onSubmit = (values: FormValues) => {
-    const randomWindowMinutes =
-      randomWindowUnit === "days"
-        ? String(parseInt(randomWindow, 10) * 1440)
-        : String(parseInt(randomWindow, 10) * 60);
+    const toMinutes = (d: string, h: string, m: string) =>
+      (parseInt(d || "0", 10) || 0) * 1440 +
+      (parseInt(h || "0", 10) || 0) * 60 +
+      (parseInt(m || "0", 10) || 0);
+
+    const randomWindowMinutes = Math.max(1, toMinutes(rwDays, rwHours, rwMinutes));
+    const afterCompletionMinutes = Math.max(1, toMinutes(acDays, acHours, acMinutes));
+    const randomCountN = Math.max(1, parseInt(randomCount || "1", 10) || 1);
 
     const cronValue =
       scheduleType === "random"
-        ? `@random:${randomWindowMinutes}:${randomCount}`
+        ? `@random:${randomWindowMinutes}:${randomCountN}`
         : scheduleType === "after_completion"
           ? `@after_completion:${afterCompletionMinutes}`
           : scheduleType === "cron"
@@ -541,32 +599,15 @@ export default function TaskForm() {
                           Delay after run finishes
                         </p>
                         <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            min={1}
-                            max={10080}
-                            value={afterCompletionMinutes}
-                            onChange={(e) =>
-                              setAfterCompletionMinutes(
-                                String(
-                                  Math.max(
-                                    1,
-                                    parseInt(e.target.value, 10) || 1,
-                                  ),
-                                ),
-                              )
-                            }
-                            className="w-28 h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring font-mono"
-                          />
-                          <span className="text-sm text-muted-foreground">
-                            minutes
-                          </span>
+                          <DurationField label="天" value={acDays} onChange={setAcDays} />
+                          <DurationField label="小时" value={acHours} onChange={setAcHours} />
+                          <DurationField label="分钟" value={acMinutes} onChange={setAcMinutes} />
                         </div>
                         <p className="text-[11px] text-muted-foreground leading-snug">
-                          Next run triggers automatically this many minutes
-                          after the previous run <strong>ends</strong>. Perfect
-                          when the target site has a cooldown timer that starts
-                          after each operation.
+                          Next run triggers automatically this long after the
+                          previous run <strong>ends</strong> (天 / 小时 / 分钟 can be
+                          combined freely). Perfect when the target site has a
+                          cooldown timer that starts after each operation.
                         </p>
                       </div>
                     </div>
@@ -602,47 +643,10 @@ export default function TaskForm() {
                           时间窗口 (在此周期内随机执行)
                         </p>
                         <div className="flex items-center gap-2">
-                          <span className="text-sm text-muted-foreground">
-                            每
-                          </span>
-                          <input
-                            type="number"
-                            min={1}
-                            max={randomWindowUnit === "days" ? 365 : 720}
-                            value={randomWindow}
-                            onChange={(e) =>
-                              setRandomWindow(
-                                String(
-                                  Math.max(
-                                    1,
-                                    parseInt(e.target.value, 10) || 1,
-                                  ),
-                                ),
-                              )
-                            }
-                            className="w-20 h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring font-mono"
-                          />
-                          <select
-                            value={randomWindowUnit}
-                            onChange={(e) => {
-                              const unit = e.target.value as "hours" | "days";
-                              setRandomWindowUnit(unit);
-                              if (
-                                unit === "days" &&
-                                parseInt(randomWindow, 10) > 365
-                              )
-                                setRandomWindow("365");
-                              if (
-                                unit === "hours" &&
-                                parseInt(randomWindow, 10) > 720
-                              )
-                                setRandomWindow("720");
-                            }}
-                            className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
-                          >
-                            <option value="hours">小时</option>
-                            <option value="days">天</option>
-                          </select>
+                          <span className="text-sm text-muted-foreground">每</span>
+                          <DurationField label="天" value={rwDays} onChange={setRwDays} />
+                          <DurationField label="小时" value={rwHours} onChange={setRwHours} />
+                          <DurationField label="分钟" value={rwMinutes} onChange={setRwMinutes} />
                         </div>
                       </div>
                       <div className="space-y-1.5 col-span-2">
@@ -655,33 +659,26 @@ export default function TaskForm() {
                             min={1}
                             max={100}
                             value={randomCount}
-                            onChange={(e) =>
+                            onChange={(e) => setRandomCount(e.target.value)}
+                            onBlur={(e) =>
                               setRandomCount(
                                 String(
-                                  Math.max(
-                                    1,
-                                    parseInt(e.target.value, 10) || 1,
+                                  Math.min(
+                                    100,
+                                    Math.max(1, parseInt(e.target.value, 10) || 1),
                                   ),
                                 ),
                               )
                             }
                             className="w-20 h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring font-mono"
                           />
-                          <span className="text-sm text-muted-foreground">
-                            次
-                          </span>
+                          <span className="text-sm text-muted-foreground">次</span>
                         </div>
                       </div>
                       <p className="col-span-2 text-xs text-muted-foreground leading-relaxed">
-                        每次运行后开始计算下一个{" "}
-                        <strong>
-                          {randomWindow}{" "}
-                          {randomWindowUnit === "days" ? "天" : "小时"}
-                        </strong>
-                        的窗口，在窗口内随机安排 <strong>{randomCount}</strong>{" "}
-                        次运行。 例如：设为 3 天 1
-                        次，上次运行完成后，下次运行将在 3
-                        天内的某个随机时刻执行。
+                        每次运行后开始计算下一个窗口，在窗口内随机安排{" "}
+                        <strong>{randomCount}</strong> 次运行。 例如：设为 3 天 1
+                        次，上次运行完成后，下次运行将在 3 天内的某个随机时刻执行。
                       </p>
                     </div>
                   )}
