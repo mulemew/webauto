@@ -305,7 +305,7 @@
             logger.info({ proxyServerUrl }, "SeleniumBase session will use resolved proxy");
           }
         } catch (err) {
-          logger.error({ err, proxyType: this.config.proxyType }, "Failed to resolve proxy for cf-proxy — proceeding without it");
+          logger.error({ err, proxyType: this.config.proxyType }, "Failed to resolve proxy for cf-proxy");
           throw err;
         }
       }

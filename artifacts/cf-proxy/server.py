@@ -105,10 +105,12 @@ class SessionThread:
         self.last_used = time.time()
         self.created_at = time.time()
         self._closed = False
-        # Optional upstream proxy (http://, https://, socks5://). When set, it is
-        # baked into Chrome at launch time via SB(proxy=...) — a proxy cannot be
-        # attached to an already-running browser, so proxied sessions are always
-        # cold-started (never taken from the warm pool).
+        # Optional upstream proxy. SeleniumBase is picky about proxy formats:
+        # - plain HTTP proxy:   host:port or http://host:port
+        # - authenticated HTTP: user:pass@host:port
+        # - SOCKS5:             socks5://host:port
+        # We normalize the incoming URL before passing it to SB so callers can
+        # send a full proxy URL without needing to know SeleniumBase's quirks.
         self.proxy = (proxy or "").strip() or None
         self._cmd_q: queue.Queue = queue.Queue()
         self._res_q: queue.Queue = queue.Queue()
@@ -133,10 +135,27 @@ class SessionThread:
             if _CHROME_BIN:
                 _kw["binary_location"] = _CHROME_BIN
             if self.proxy:
-                # SeleniumBase accepts proxy as "host:port", "user:pass@host:port",
-                # or "scheme://host:port". Chromium has native SOCKS5 support, so
-                # socks5://host:port works for sing-box-backed advanced proxies.
-                _kw["proxy"] = self.proxy
+                proxy = self.proxy
+                is_socks = proxy.startswith("socks5://") or proxy.startswith("socks4://") or proxy.startswith("socks://")
+                if proxy.startswith("socks://"):
+                    proxy = "socks5://" + proxy.split("//", 1)[1]
+                if is_socks:
+                    # UC mode + SeleniumBase's proxy= handling builds a proxy
+                    # *extension* for anything it treats as needing auth, and
+                    # that extension frequently breaks SOCKS session creation
+                    # under undetected-chromedriver (the browser never finishes
+                    # launching → "session creation failed"). Chromium speaks
+                    # SOCKS5 natively, so route it through --proxy-server, which
+                    # is applied at launch and does not disturb UC stealth.
+                    _kw["chromium_arg"] = _CHROMIUM_ARGS + ",--proxy-server=" + proxy
+                    print(f"[proxy] SOCKS proxy via --proxy-server={proxy}", flush=True)
+                else:
+                    # Plain HTTP/HTTPS proxy — strip the scheme to the host:port
+                    # form SeleniumBase expects.
+                    if proxy.startswith("http://") or proxy.startswith("https://"):
+                        proxy = proxy.split("//", 1)[1]
+                    _kw["proxy"] = proxy
+                    print(f"[proxy] HTTP proxy via SB(proxy={proxy})", flush=True)
             with SB(**_kw) as sb:
                 self._res_q.put({"ok": True})
                 while True:
