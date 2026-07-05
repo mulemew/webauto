@@ -75,16 +75,8 @@ function getSingBoxListenHost(): string {
 function getSingBoxPublicHost(remoteConsumer: boolean): string {
   const explicit = process.env.SINGBOX_PROXY_PUBLIC_HOST?.trim() || process.env.PROXY_PUBLIC_HOST?.trim();
   if (explicit) return explicit;
-  if (remoteConsumer) {
-    const ip = detectReachableIPv4();
-    if (ip) return ip;
-    logger.warn(
-      "Could not auto-detect a reachable IPv4 for the sing-box proxy while using a remote browser " +
-        "container. The browser may not be able to reach 127.0.0.1. Set SINGBOX_PROXY_PUBLIC_HOST to " +
-        "an address the browser container can reach (e.g. the app's service name or host IP).",
-    );
-  }
-  return "127.0.0.1";
+  if (!remoteConsumer) return "127.0.0.1";
+  return detectReachableIPv4() || "127.0.0.1";
 }
 
 /** First non-internal IPv4 address of this host/container, or null. */
@@ -96,6 +88,21 @@ function detectReachableIPv4(): string | null {
     }
   }
   return null;
+}
+
+/** Attempt a TCP connection to verify that a host can reach the SOCKS port. */
+function canConnectToHost(host: string, port: number, timeoutMs = 800): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = net.connect({ host, port }, () => {
+      sock.destroy();
+      resolve(true);
+    });
+    sock.once("error", () => resolve(false));
+    sock.setTimeout(timeoutMs, () => {
+      sock.destroy();
+      resolve(false);
+    });
+  });
 }
 
 /** Per-task proxy configuration, stored inside browserConfig. */
@@ -481,7 +488,6 @@ async function startSingBox(
   }
   const port = await getFreePort();
   const listenHost = getSingBoxListenHost();
-  const publicHost = getSingBoxPublicHost(remoteConsumer);
   const config = {
     log: { level: "warn" },
     inbounds: [
@@ -519,27 +525,22 @@ async function startSingBox(
     );
   }
 
-  // One more quick probe so we don't hand back a dead port if sing-box dies
-  // immediately after binding.
-  const healthy = await new Promise<boolean>((resolve) => {
-    const sock = net.connect({ host: "127.0.0.1", port }, () => {
-      sock.destroy();
-      resolve(true);
-    });
-    sock.once("error", () => resolve(false));
-    sock.setTimeout(1000, () => {
-      sock.destroy();
-      resolve(false);
-    });
-  });
-  if (!healthy) {
-    await cleanup();
-    const logText = fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8").trim() : "";
-    fs.rmSync(dir, { recursive: true, force: true });
-    throw new Error(
-      `sing-box for proxy type "${type}" exited or stopped responding immediately after startup. ` +
-        (logText ? `sing-box stderr: ${logText}` : `proxy port ${port} closed`),
-    );
+  const candidates = remoteConsumer
+    ? Array.from(new Set([
+        process.env.SINGBOX_PROXY_PUBLIC_HOST?.trim(),
+        process.env.PROXY_PUBLIC_HOST?.trim(),
+        "app",
+        detectReachableIPv4(),
+        "127.0.0.1",
+      ].filter((v): v is string => !!v && v.length > 0)))
+    : ["127.0.0.1"];
+
+  let publicHost = "127.0.0.1";
+  for (const candidate of candidates) {
+    if (await canConnectToHost(candidate, port)) {
+      publicHost = candidate;
+      break;
+    }
   }
 
   logger.info({ type, listenHost, publicHost, localPort: port }, "Local sing-box proxy started");
