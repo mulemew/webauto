@@ -834,8 +834,8 @@ components:
           type: ["string", "null"]
         status:
           type: string
-          enum: [idle, running, success, failed, needs_attention]
-          description: "idle=not yet run, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution"
+          enum: [idle, queued, running, success, failed, needs_attention]
+          description: "idle=not yet run, queued=waiting for a concurrency slot, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution"
         lastRunAt:
           type: ["string", "null"]
           format: date-time

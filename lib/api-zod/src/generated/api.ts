@@ -247,7 +247,7 @@ export const ListTasksResponseItem = zod.object({
     .nullish(),
   cronExpression: zod.string().nullish(),
   status: zod
-    .enum(["idle", "running", "success", "failed", "needs_attention"])
+    .enum(["idle", "queued", "running", "success", "failed", "needs_attention"])
     .describe(
       "idle=not yet run, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution",
     ),
@@ -764,7 +764,7 @@ export const GetTaskResponse = zod
       .nullish(),
     cronExpression: zod.string().nullish(),
     status: zod
-      .enum(["idle", "running", "success", "failed", "needs_attention"])
+      .enum(["idle", "queued", "running", "success", "failed", "needs_attention"])
       .describe(
         "idle=not yet run, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution",
       ),
@@ -1286,7 +1286,7 @@ export const UpdateTaskResponse = zod.object({
     .nullish(),
   cronExpression: zod.string().nullish(),
   status: zod
-    .enum(["idle", "running", "success", "failed", "needs_attention"])
+    .enum(["idle", "queued", "running", "success", "failed", "needs_attention"])
     .describe(
       "idle=not yet run, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution",
     ),

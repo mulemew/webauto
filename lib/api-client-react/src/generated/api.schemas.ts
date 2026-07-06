@@ -448,12 +448,13 @@ export type WorkflowStep =
   | LoginStep;
 
 /**
- * idle=not yet run, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution
+ * idle=not yet run, queued=waiting for a concurrency slot, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution
  */
 export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
 
 export const TaskStatus = {
   idle: "idle",
+  queued: "queued",
   running: "running",
   success: "success",
   failed: "failed",
@@ -473,7 +474,7 @@ export interface Task {
   steps?: WorkflowStep[] | null;
   /** @nullable */
   cronExpression?: string | null;
-  /** idle=not yet run, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution */
+  /** idle=not yet run, queued=waiting for a concurrency slot, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution */
   status: TaskStatus;
   /** @nullable */
   lastRunAt?: string | null;
