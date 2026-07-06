@@ -45,6 +45,37 @@ import net from "net";
   // never exposed to unauthenticated callers.
   router.get("/healthz/browser", requireAuth, async (_req, res): Promise<void> => {
     const config = await loadBrowserConfig();
+
+    // ── SeleniumBase: health is about the cf-proxy sidecar, not a ws endpoint ──
+    // Mirror the provider's resolution: CF_PROXY_URL is primary; wsEndpoint is
+    // honored only when it is an http(s) URL. This keeps the health readout in
+    // sync with what tasks actually connect to.
+    if (config.provider === "seleniumbase") {
+      const endpoint = config.wsEndpoint?.trim();
+      const override =
+        endpoint && /^https?:\/\//i.test(endpoint) ? endpoint.replace(/\/$/, "") : undefined;
+      const cfProxyUrl = (override ?? process.env.CF_PROXY_URL ?? "http://cf-proxy:7317").replace(/\/$/, "");
+      const safeCfUrl = cfProxyUrl.replace(/([?&]token=)[^&]*/g, "$1***");
+      let host: string;
+      let port: number;
+      try {
+        const parsed = new URL(cfProxyUrl);
+        host = parsed.hostname;
+        port = parsed.port ? parseInt(parsed.port, 10) : parsed.protocol === "https:" ? 443 : 80;
+      } catch {
+        res.json(BrowserHealthCheckResponse.parse({ status: "unreachable", url: safeCfUrl }));
+        return;
+      }
+      const reachable = await probeTcp(host, port, 4000);
+      res.json(
+        BrowserHealthCheckResponse.parse({
+          status: reachable ? "connected" : "unreachable",
+          url: safeCfUrl,
+        }),
+      );
+      return;
+    }
+
     const wsEndpoint = config.wsEndpoint;
 
     if (!wsEndpoint) {

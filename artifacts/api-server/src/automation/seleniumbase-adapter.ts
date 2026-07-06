@@ -275,16 +275,87 @@
   // ── Provider ──────────────────────────────────────────────────────────────────
 
   export class SeleniumBaseProvider implements BrowserProvider {
-    private readonly baseUrl: string;
+    private readonly envBaseUrl: string;
+    private readonly overrideCandidate: string | undefined;
     private readonly config: BrowserProviderConfig | null;
+    /** Resolved effective cf-proxy base URL, memoized after first probe. */
+    private resolvedBaseUrl: string | null = null;
+    private resolving: Promise<string> | null = null;
 
-    constructor(baseUrl: string = DEFAULT_CF_PROXY_URL, config: BrowserProviderConfig | null = null) {
-      this.baseUrl = baseUrl;
+    constructor(
+      baseUrl: string = DEFAULT_CF_PROXY_URL,
+      config: BrowserProviderConfig | null = null,
+      overrideCandidate?: string,
+    ) {
+      this.envBaseUrl = (baseUrl || DEFAULT_CF_PROXY_URL).replace(/\/$/, "");
+      this.overrideCandidate = overrideCandidate?.replace(/\/$/, "") || undefined;
       this.config = config;
     }
 
+    /**
+     * Probe a candidate URL's cf-proxy /health endpoint. A genuine cf-proxy
+     * responds 200 with a JSON body shaped like `{ ok: true, sessions, pool }`.
+     * Anything else (browserless, a ws-only endpoint, an unreachable host, or a
+     * non-cf-proxy HTTP service) is rejected so we never point sessions at it.
+     */
+    private static async isReachableCfProxy(baseUrl: string): Promise<boolean> {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 3_000);
+        let res: Response;
+        try {
+          res = await fetch(`${baseUrl}/health`, { signal: controller.signal });
+        } finally {
+          clearTimeout(timer);
+        }
+        if (!res.ok) return false;
+        const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+        // cf-proxy /health always returns `ok: true` and a `pool` object.
+        return !!data && data["ok"] === true && "pool" in data;
+      } catch {
+        return false;
+      }
+    }
+
+    /**
+     * Resolve the effective cf-proxy base URL exactly once. The explicit
+     * wsEndpoint override is honored ONLY when it passes a live cf-proxy
+     * /health probe; otherwise we fall back to the env-configured CF_PROXY_URL.
+     * This stops a wrong/stale value in settings from failing every task with
+     * "fetch failed".
+     */
+    private async resolveBaseUrl(): Promise<string> {
+      if (this.resolvedBaseUrl) return this.resolvedBaseUrl;
+      if (this.resolving) return this.resolving;
+      this.resolving = (async () => {
+        if (this.overrideCandidate && this.overrideCandidate !== this.envBaseUrl) {
+          const ok = await SeleniumBaseProvider.isReachableCfProxy(this.overrideCandidate);
+          if (ok) {
+            logger.info(
+              { baseUrl: this.overrideCandidate },
+              "Using explicit cf-proxy override endpoint (passed /health probe)",
+            );
+            this.resolvedBaseUrl = this.overrideCandidate;
+            return this.resolvedBaseUrl;
+          }
+          logger.warn(
+            { candidate: this.overrideCandidate, fallback: this.envBaseUrl },
+            "Configured seleniumbase endpoint is not a reachable cf-proxy — ignoring override and using CF_PROXY_URL",
+          );
+        }
+        this.resolvedBaseUrl = this.envBaseUrl;
+        return this.resolvedBaseUrl;
+      })();
+      try {
+        return await this.resolving;
+      } finally {
+        this.resolving = null;
+      }
+    }
+
     async newPage(): Promise<SeleniumBasePageAdapter> {
-      logger.info({ cfProxyUrl: this.baseUrl }, "Creating SeleniumBase UC session...");
+      const baseUrl = await this.resolveBaseUrl();
+      logger.info({ cfProxyUrl: baseUrl }, "Creating SeleniumBase UC session...");
 
       // ── Resolve the per-task proxy so cf-proxy's Chrome routes through it ──
       // cf-proxy runs in a SEPARATE container, so 127.0.0.1 there is itself.
@@ -313,7 +384,7 @@
       const body = proxyServerUrl ? { proxy: proxyServerUrl } : undefined;
       let res: Response;
       try {
-        res = await fetch(`${this.baseUrl}/sessions`, {
+        res = await fetch(`${baseUrl}/sessions`, {
           method: "POST",
           headers: body ? { "Content-Type": "application/json" } : undefined,
           body: body ? JSON.stringify(body) : undefined,
@@ -331,7 +402,7 @@
       }
       const sid = data["session_id"] as string;
       logger.info({ sid, proxied: !!proxyServerUrl }, "SeleniumBase UC session ready");
-      return new SeleniumBasePageAdapter(this.baseUrl, sid, resolvedProxy);
+      return new SeleniumBasePageAdapter(baseUrl, sid, resolvedProxy);
     }
 
     async close(): Promise<void> {

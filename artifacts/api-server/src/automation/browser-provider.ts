@@ -929,12 +929,20 @@ class PlaywrightLocalProvider implements BrowserProvider {
   }
 
   if (p === "seleniumbase") {
-      const cfProxyUrl = (() => {
-        const endpoint = config.wsEndpoint?.trim();
-        if (endpoint && /^https?:\/\//i.test(endpoint)) return endpoint;
-        return process.env.CF_PROXY_URL ?? "http://cf-proxy:7317";
-      })().replace(/\/$/, "");
-      return new SeleniumBaseProvider(cfProxyUrl, config);
+      // ── cf-proxy base URL resolution ──────────────────────────────────────
+      // Primary source is always CF_PROXY_URL (env), which points at the
+      // cf-proxy sidecar container. config.wsEndpoint is treated ONLY as an
+      // explicit override candidate: it must be an http(s) URL AND must pass a
+      // live cf-proxy /health probe (done lazily inside SeleniumBaseProvider)
+      // before it is used. This prevents a wrong value accidentally stored in
+      // settings (e.g. a leftover browserless ws:// / http:// endpoint) from
+      // pointing every session at a non-cf-proxy host and failing the whole
+      // batch with "fetch failed".
+      const envBaseUrl = (process.env.CF_PROXY_URL ?? "http://cf-proxy:7317").replace(/\/$/, "");
+      const endpoint = config.wsEndpoint?.trim();
+      const overrideCandidate =
+        endpoint && /^https?:\/\//i.test(endpoint) ? endpoint.replace(/\/$/, "") : undefined;
+      return new SeleniumBaseProvider(envBaseUrl, config, overrideCandidate);
     }
 
     if (!config.wsEndpoint) {
