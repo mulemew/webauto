@@ -929,7 +929,11 @@ class PlaywrightLocalProvider implements BrowserProvider {
   }
 
   if (p === "seleniumbase") {
-      const cfProxyUrl = process.env.CF_PROXY_URL ?? "http://cf-proxy:7317";
+      const cfProxyUrl = (() => {
+        const endpoint = config.wsEndpoint?.trim();
+        if (endpoint && /^https?:\/\//i.test(endpoint)) return endpoint;
+        return process.env.CF_PROXY_URL ?? "http://cf-proxy:7317";
+      })().replace(/\/$/, "");
       return new SeleniumBaseProvider(cfProxyUrl, config);
     }
 
