@@ -1,4 +1,8 @@
 Flask==3.1.0
-seleniumbase==4.35.0
+# seleniumbase 4.35.0 pre-dates Chrome 130+ and its UC-mode Chrome launcher
+# fails to bring up recent Chromium builds ("session not created: cannot
+# connect to chrome"). Bumped to a version whose bundled undetected module
+# knows how to talk to current Chrome/Chromium.
+seleniumbase>=4.44.0,<5
 requests==2.32.3
 PyAutoGUI==0.9.54
