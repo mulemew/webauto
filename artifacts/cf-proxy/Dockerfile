@@ -52,8 +52,21 @@ RUN python -c "import seleniumbase; print('seleniumbase ready')" \
 
 COPY server.py .
 
+# Run as a non-root user so Chrome/Chromium can launch without --no-sandbox.
+# Recent SeleniumBase UC-mode paths strip or override --no-sandbox from
+# chromium_arg, which caused Chrome to crash on root ("Running as root
+# without --no-sandbox is not supported") and made uc_driver report
+# "session not created: cannot connect to chrome". Switching to a normal
+# user sidesteps the sandbox restriction entirely.
+RUN useradd -m -u 1000 app \
+    && mkdir -p /tmp/.X11-unix \
+    && chown -R app:app /app /tmp/.X11-unix
+
+USER app
+
 ENV DISPLAY=:99
 ENV PYTHONUNBUFFERED=1
+ENV HOME=/home/app
 
 EXPOSE 7317
 
