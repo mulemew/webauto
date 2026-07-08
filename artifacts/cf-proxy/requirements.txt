@@ -4,5 +4,5 @@ Flask==3.1.0
 # connect to chrome"). Bumped to a version whose bundled undetected module
 # knows how to talk to current Chrome/Chromium.
 seleniumbase>=4.44.0,<5
-requests==2.32.3
+requests>=2.32.5,<3
 PyAutoGUI==0.9.54
