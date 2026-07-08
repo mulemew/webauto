@@ -17,6 +17,7 @@ import subprocess
 import socket
 import threading
 import time
+import traceback
 import uuid
 from flask import Flask, request, jsonify
 
@@ -171,7 +172,18 @@ class SessionThread:
         self._seq_lock = threading.Lock()
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
-        init = self._res_q.get(timeout=300)
+        # 120s is enough for a legitimate cold UC-Chrome start on a slow box.
+        # If we haven't heard back by then, the worker is stuck (e.g. Chrome
+        # hung on Xvfb / uc_driver deadlock) and no amount of extra waiting
+        # will change that — surface it as an actionable error.
+        try:
+            init = self._res_q.get(timeout=120)
+        except queue.Empty:
+            self._closed = True
+            raise RuntimeError(
+                "SessionThread init timed out after 120s waiting for Chrome/UC driver startup "
+                "(worker did not return a result). Check container logs for [worker] lines."
+            )
         if not init.get("ok"):
             self._closed = True
             raise RuntimeError(init.get("error", "Chrome failed to start"))
@@ -229,8 +241,13 @@ class SessionThread:
                         return
                 except Exception as e:
                     last_error = e
-                    err_text = str(e)
-                    print(f"[worker] Chrome start attempt {attempt} failed: {err_text}", flush=True)
+                    # Some UC / Selenium exceptions have str(e) == "" — always
+                    # fall back to repr / class name so /health.last_error is
+                    # never a blank string.
+                    err_text = str(e).strip() or repr(e) or type(e).__name__
+                    err_text = f"{type(e).__name__}: {err_text}"
+                    tb = traceback.format_exc()
+                    print(f"[worker] Chrome start attempt {attempt} failed: {err_text}\n{tb}", flush=True)
                     # A proxy that cannot be reached will never succeed on retry —
                     # fail fast with a clear message instead of burning retries.
                     if "Proxy unreachable" in err_text:
@@ -241,7 +258,11 @@ class SessionThread:
                         continue
                     self._res_q.put({"ok": False, "error": _classify_start_error(err_text)})
                     return
-            self._res_q.put({"ok": False, "error": _classify_start_error(str(last_error) if last_error else 'Chrome failed to start')})
+            fallback = 'Chrome failed to start'
+            if last_error is not None:
+                le = str(last_error).strip() or repr(last_error) or type(last_error).__name__
+                fallback = f"{type(last_error).__name__}: {le}"
+            self._res_q.put({"ok": False, "error": _classify_start_error(fallback)})
         finally:
             self._closed = True
 
@@ -322,14 +343,19 @@ class SessionPool:
                 self._last_error = None
             print(f"[pool] Session pre-warmed: {s.session_id} (pool size: {self._pool.qsize()})", flush=True)
         except Exception as e:
-            err_text = str(e)
+            # Build a message that's never empty — some Selenium / UC driver
+            # exceptions have str(e) == "" which hid the root cause and made
+            # /health show last_error="".
+            err_text = str(e).strip() or repr(e) or type(e).__name__
+            err_text = f"{type(e).__name__}: {err_text}"
+            tb = traceback.format_exc()
             with self._warming_lock:
                 self._warm_failures += 1
                 self._consecutive_failures += 1
                 self._last_error = err_text
                 self._last_error_at = time.time()
                 consecutive = self._consecutive_failures
-            print(f"[pool] Failed to pre-warm session (consecutive={consecutive}): {err_text}", flush=True)
+            print(f"[pool] Failed to pre-warm session (consecutive={consecutive}): {err_text}\n{tb}", flush=True)
             # Retry with capped exponential backoff so a transient failure
             # (e.g. Chrome momentarily unavailable) doesn't leave the pool
             # permanently drained. Bounded so we don't hot-loop forever when
