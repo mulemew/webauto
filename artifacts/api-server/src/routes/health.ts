@@ -87,6 +87,11 @@ import net from "net";
       return;
     }
 
+    if (config.provider === "local") {
+      res.json(BrowserHealthCheckResponse.parse({ status: "connected", url: "local" }));
+      return;
+    }
+
     const wsEndpoint = config.wsEndpoint;
 
     if (!wsEndpoint) {
@@ -136,6 +141,77 @@ import net from "net";
 
   router.get("/healthz/scheduler", requireAuth, (_req, res): void => {
     res.json({ status: "ok", scheduledJobs: getScheduledJobsCount() });
+  });
+
+  // ── GET /status ──────────────────────────────────────────────────────────────
+  // Backwards-compatible aggregate endpoint consumed by the current Status page.
+  router.get("/status", requireAuth, async (_req, res): Promise<void> => {
+    let dbStatus: "ok" | "error" = "ok";
+    let dbError: string | undefined;
+    try {
+      await db.execute(sql.raw("SELECT 1"));
+    } catch (err) {
+      dbStatus = "error";
+      dbError = err instanceof Error ? err.message : String(err);
+    }
+
+    let schedulerStatus: "ok" | "error" = "ok";
+    let schedulerError: string | undefined;
+    try {
+      getScheduledJobsCount();
+    } catch (err) {
+      schedulerStatus = "error";
+      schedulerError = err instanceof Error ? err.message : String(err);
+    }
+
+    let browserStatus: "ok" | "error" = "ok";
+    let browserError: string | undefined;
+    try {
+      const config = await loadBrowserConfig();
+      if (config.provider === "seleniumbase") {
+        const envBaseUrl = (process.env.CF_PROXY_URL ?? "http://cf-proxy:7317").replace(/\/$/, "");
+        const endpoint = config.wsEndpoint?.trim();
+        const override =
+          endpoint && /^https?:\/\//i.test(endpoint) ? endpoint.replace(/\/$/, "") : undefined;
+        const cfProxyUrl =
+          override && override !== envBaseUrl && (await probeCfProxyHealth(override))
+            ? override
+            : envBaseUrl;
+        if (!(await probeCfProxyHealth(cfProxyUrl))) {
+          browserStatus = "error";
+          browserError = `cf-proxy unreachable at ${cfProxyUrl.replace(/([?&]token=)[^&]*/g, "$1***")}`;
+        }
+      } else if (config.provider === "local") {
+        // Local browser availability is validated by the Settings test route;
+        // no remote endpoint needs to be reachable for this provider.
+      } else if (!config.wsEndpoint) {
+        browserStatus = "error";
+        browserError = "Browser endpoint is not configured";
+      } else {
+        const parsed = new URL(
+          config.wsEndpoint.replace(/^wss:\/\//, "https://").replace(/^ws:\/\//, "http://"),
+        );
+        const port = parsed.port
+          ? parseInt(parsed.port, 10)
+          : parsed.protocol === "https:" ? 443 : 80;
+        if (!(await probeTcp(parsed.hostname, port, 4000))) {
+          browserStatus = "error";
+          browserError = `Browser endpoint unreachable at ${config.wsEndpoint.replace(/([?&]token=)[^&]*/g, "$1***")}`;
+        }
+      }
+    } catch (err) {
+      browserStatus = "error";
+      browserError = err instanceof Error ? err.message : String(err);
+    }
+
+    res.json({
+      scheduler: schedulerStatus,
+      browser: browserStatus,
+      db: dbStatus,
+      schedulerError,
+      browserError,
+      dbError,
+    });
   });
 
   export default router;

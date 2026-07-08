@@ -86,9 +86,13 @@ import { Router, type IRouter } from "express";
   router.post("/settings/browser/test", async (req, res): Promise<void> => {
     const { provider, wsEndpoint, testUrl } = req.body as Partial<BrowserProviderConfig> & { testUrl?: string };
     const resolvedProvider: BrowserProviderType = provider && VALID_PROVIDERS.includes(provider) ? provider : "playwright";
-    if (resolvedProvider !== "seleniumbase" && !wsEndpoint?.trim()) { res.json({ ok: false, message: "WebSocket endpoint URL is required" }); return; }
+    if (resolvedProvider !== "seleniumbase" && resolvedProvider !== "local" && !wsEndpoint?.trim()) { res.json({ ok: false, message: "WebSocket endpoint URL is required" }); return; }
     const config: BrowserProviderConfig = { provider: resolvedProvider, wsEndpoint: wsEndpoint?.trim() ?? "" };
-    const connectTimeout = 20_000;
+    // SeleniumBase sessions are created through the cf-proxy sidecar. On a
+    // freshly pulled image, cf-proxy may still be warming its first UC Chrome
+    // session, so the old 20s race produced a false "Connection timed out"
+    // even though the sidecar was healthy and would return a session shortly.
+    const connectTimeout = resolvedProvider === "seleniumbase" ? 240_000 : 20_000;
     const navTimeout = 30_000;
     const targetUrl = testUrl?.trim() || "https://example.com";
     let pageAdapter = null as Awaited<ReturnType<ReturnType<typeof createBrowserProvider>["newPage"]>> | null;

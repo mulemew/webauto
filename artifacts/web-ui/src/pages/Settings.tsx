@@ -845,7 +845,7 @@ function BrowserProviderSection() {
   };
 
   const handleTest = async () => {
-    if (!config.wsEndpoint.trim()) {
+    if (config.provider !== "seleniumbase" && config.provider !== "local" && !config.wsEndpoint.trim()) {
       toast({ title: t.wsEndpoint, variant: "destructive" });
       return;
     }
