@@ -294,12 +294,20 @@ class SessionPool:
         self._warming_lock = threading.Lock()
         self._total_warmed = 0
         self._warm_failures = 0
+        self._consecutive_failures = 0
+        self._last_error: str | None = None
+        self._last_error_at: float = 0.0
         # Start initial warming
         for _ in range(self._size):
             self._start_warming()
 
     def _start_warming(self):
+        # Don't stack up warm threads beyond the target pool size — if we're
+        # already warming enough replacements, skip. Prevents runaway spawning
+        # when acquire() is called in tight loops after failures.
         with self._warming_lock:
+            if self._warming >= self._size:
+                return
             self._warming += 1
         t = threading.Thread(target=self._warm_one, daemon=True)
         t.start()
@@ -310,25 +318,79 @@ class SessionPool:
             self._pool.put(s)
             with self._warming_lock:
                 self._total_warmed += 1
+                self._consecutive_failures = 0
+                self._last_error = None
             print(f"[pool] Session pre-warmed: {s.session_id} (pool size: {self._pool.qsize()})", flush=True)
         except Exception as e:
+            err_text = str(e)
             with self._warming_lock:
                 self._warm_failures += 1
-            print(f"[pool] Failed to pre-warm session: {e}", flush=True)
+                self._consecutive_failures += 1
+                self._last_error = err_text
+                self._last_error_at = time.time()
+                consecutive = self._consecutive_failures
+            print(f"[pool] Failed to pre-warm session (consecutive={consecutive}): {err_text}", flush=True)
+            # Retry with capped exponential backoff so a transient failure
+            # (e.g. Chrome momentarily unavailable) doesn't leave the pool
+            # permanently drained. Bounded so we don't hot-loop forever when
+            # Chrome/uc_driver are actually broken — /health surfaces the
+            # sustained failure so operators can see it.
+            if consecutive <= 10:
+                backoff = min(2 ** min(consecutive, 6), 60)
+                threading.Timer(backoff, self._start_warming).start()
+                print(f"[pool] Scheduling retry in {backoff}s", flush=True)
         finally:
             with self._warming_lock:
                 self._warming -= 1
+
+    def _is_unhealthy(self) -> tuple[bool, str | None]:
+        """Return (unhealthy, reason). Unhealthy = several consecutive warm
+        failures with no successful warm since. Used by acquire() to fail
+        fast instead of blocking callers for the full timeout on a broken
+        Chrome/uc_driver setup."""
+        with self._warming_lock:
+            if self._consecutive_failures >= 3 and self._pool.qsize() == 0:
+                return True, self._last_error
+            return False, None
 
     def acquire(self, timeout: float = 180.0) -> SessionThread:
         """
         Get a pre-warmed session. If the pool is empty, blocks until one is
         ready (up to timeout seconds). After acquiring, triggers background
         replenishment.
+
+        Fails fast with the last warm error if the pool is currently in a
+        sustained failure state — otherwise callers would block for the full
+        timeout only to hit the same failure on the fallback cold-start.
         """
+        # Fail fast when pool is demonstrably broken
+        unhealthy, reason = self._is_unhealthy()
+        if unhealthy:
+            raise RuntimeError(
+                f"cf-proxy session pool is unhealthy (consecutive warm failures). "
+                f"Last error: {reason or 'unknown'}"
+            )
+
+        # Defensive: if the pool is empty and nothing is warming, kick a warm
+        # attempt now so we're not just waiting on a queue that will never
+        # receive anything.
+        with self._warming_lock:
+            need_kick = self._pool.qsize() == 0 and self._warming == 0
+        if need_kick:
+            self._start_warming()
+
         try:
             s = self._pool.get(timeout=timeout)
         except queue.Empty:
-            # Pool exhausted and warming timed out — create one directly
+            # Pool exhausted and warming timed out — bubble up the last real
+            # error if we have one, otherwise fall back to a direct cold start
+            # (this path handles the "first call ever, warming just slow" case).
+            _, reason = self._is_unhealthy()
+            if reason:
+                raise RuntimeError(
+                    f"cf-proxy session pool timed out after {timeout}s "
+                    f"(last warm error: {reason})"
+                )
             print("[pool] Pool empty, cold-starting a session", flush=True)
             s = SessionThread()
 
@@ -349,6 +411,9 @@ class SessionPool:
                 "target_size": self._size,
                 "total_warmed": self._total_warmed,
                 "warm_failures": self._warm_failures,
+                "consecutive_failures": self._consecutive_failures,
+                "last_error": self._last_error,
+                "last_error_at": self._last_error_at or None,
             }
 
 
