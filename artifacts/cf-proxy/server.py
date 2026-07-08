@@ -70,6 +70,30 @@ def _find_chrome():
 _CHROME_BIN = _find_chrome()
 
 
+def _join_chromium_args(*groups) -> str:
+    """Merge SeleniumBase comma-separated Chromium args without blanks."""
+    args: list[str] = []
+    for group in groups:
+        if not group:
+            continue
+        if isinstance(group, (list, tuple)):
+            candidates = group
+        else:
+            candidates = str(group).split(",")
+        for arg in candidates:
+            arg = str(arg).strip()
+            if arg:
+                args.append(arg)
+    return ",".join(args)
+
+
+def _free_tcp_port() -> int:
+    """Pick a currently free localhost TCP port for UC remote debugging."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
 def _get_chrome_version(binary: str | None) -> str | None:
     if not binary:
         return None
@@ -82,15 +106,48 @@ def _get_chrome_version(binary: str | None) -> str | None:
 
 def _get_uc_driver_version() -> str | None:
     try:
-        import seleniumbase
-        drivers_dir = os.path.join(os.path.dirname(seleniumbase.__file__), 'drivers')
-        uc_driver = os.path.join(drivers_dir, 'uc_driver')
+        uc_driver = _get_uc_driver_path()
         if not os.path.exists(uc_driver):
             return None
         out = subprocess.run([uc_driver, '--version'], capture_output=True, text=True, timeout=5).stdout.strip()
         return out or None
     except Exception:
         return None
+
+
+def _get_uc_driver_path() -> str:
+    import seleniumbase
+    drivers_dir = os.path.join(os.path.dirname(seleniumbase.__file__), 'drivers')
+    return os.path.join(drivers_dir, 'uc_driver')
+
+
+def _assert_uc_driver_accessible():
+    """Fail fast on the common root-owned uc_driver problem in Docker."""
+    try:
+        uc_driver = _get_uc_driver_path()
+    except Exception:
+        return
+    if not os.path.exists(uc_driver):
+        # Let SeleniumBase create/download it if needed.
+        return
+    missing = []
+    if not os.access(uc_driver, os.R_OK):
+        missing.append("read")
+    if not os.access(uc_driver, os.X_OK):
+        missing.append("execute")
+    # SeleniumBase UC may patch uc_driver at runtime. If the file or directory
+    # remains root-owned after USER app, startup can fail as PermissionError or
+    # hang until SessionThread init times out.
+    if not os.access(uc_driver, os.W_OK):
+        missing.append("write")
+    parent = os.path.dirname(uc_driver)
+    if not os.access(parent, os.W_OK):
+        missing.append("write-driver-dir")
+    if missing:
+        raise PermissionError(
+            f"uc_driver is not accessible to the runtime user "
+            f"({','.join(missing)} missing): {uc_driver}"
+        )
 
 
 def _is_proxy_reachable(proxy: str, timeout_s: float = 1.0) -> tuple[bool, str]:
@@ -166,6 +223,9 @@ class SessionThread:
         # We normalize the incoming URL before passing it to SB so callers can
         # send a full proxy URL without needing to know SeleniumBase's quirks.
         self.proxy = (proxy or "").strip() or None
+        self._profile_dir = os.path.join("/tmp/cf-proxy-profiles", self.session_id)
+        self._debug_port = _free_tcp_port()
+        os.makedirs(self._profile_dir, exist_ok=True)
         self._cmd_q: queue.Queue = queue.Queue()
         self._res_q: queue.Queue = queue.Queue()
         self._seq = 0          # monotonic command sequence number
@@ -194,16 +254,27 @@ class SessionThread:
         chrome_version = _get_chrome_version(_CHROME_BIN)
         uc_driver_version = _get_uc_driver_version()
         if chrome_version or uc_driver_version:
-            print(f"[chrome] binary={chrome_version or 'unknown'} uc_driver={uc_driver_version or 'unknown'}", flush=True)
+            print(
+                f"[chrome] binary={chrome_version or 'unknown'} "
+                f"uc_driver={uc_driver_version or 'unknown'} "
+                f"debug_port={self._debug_port}",
+                flush=True,
+            )
         try:
             for attempt in range(1, attempts + 1):
                 try:
                     from seleniumbase import SB
+                    _assert_uc_driver_accessible()
+                    chrome_args = _join_chromium_args(
+                        _CHROMIUM_ARGS,
+                        f"--remote-debugging-port={self._debug_port}",
+                    )
                     _kw = dict(
                         uc=True,
                         headed=True,
                         xvfb=False,
-                        chromium_arg=_CHROMIUM_ARGS,
+                        chromium_arg=chrome_args,
+                        user_data_dir=self._profile_dir,
                     )
                     if _CHROME_BIN:
                         _kw["binary_location"] = _CHROME_BIN
@@ -216,7 +287,10 @@ class SessionThread:
                             ok, err = _is_proxy_reachable(proxy)
                             if not ok:
                                 raise RuntimeError(f"Proxy unreachable before Chrome start: {err}")
-                            _kw["chromium_arg"] = _CHROMIUM_ARGS + ",--proxy-server=" + proxy
+                            _kw["chromium_arg"] = _join_chromium_args(
+                                chrome_args,
+                                "--proxy-server=" + proxy,
+                            )
                             print(f"[proxy] SOCKS proxy via --proxy-server={proxy}", flush=True)
                         else:
                             if proxy.startswith("http://") or proxy.startswith("https://"):
@@ -265,6 +339,21 @@ class SessionThread:
             self._res_q.put({"ok": False, "error": _classify_start_error(fallback)})
         finally:
             self._closed = True
+            self._cleanup_profile()
+
+    def _cleanup_profile(self):
+        profile_dir = getattr(self, "_profile_dir", None)
+        if not profile_dir:
+            return
+        # Safety guard: only delete profiles created by this service.
+        root = "/tmp/cf-proxy-profiles"
+        try:
+            profile_real = os.path.realpath(profile_dir)
+            root_real = os.path.realpath(root)
+            if profile_real.startswith(root_real + os.sep):
+                shutil.rmtree(profile_real, ignore_errors=True)
+        except Exception:
+            pass
 
     def run(self, fn, timeout: float = 60.0):
         if self._closed:
@@ -292,6 +381,8 @@ class SessionThread:
         try:
             self._cmd_q.put(None)
             self._thread.join(timeout=15)
+            if not self._thread.is_alive():
+                self._cleanup_profile()
         except Exception:
             pass
 

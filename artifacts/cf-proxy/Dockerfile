@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 ARG TARGETARCH
 
@@ -9,6 +9,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     scrot python3-tk python3-dev \
     fluxbox \
   && rm -rf /var/lib/apt/lists/*
+
+# Create the runtime user before installing SeleniumBase so root can prepare
+# driver/cache permissions explicitly. UC mode executes and may patch
+# seleniumbase/drivers/uc_driver at runtime; leaving that root-owned after
+# switching USER app produces:
+#   PermissionError: ... seleniumbase/drivers/uc_driver
+RUN useradd -m -u 1000 app
 
 # amd64: Google Chrome（官方包，自带所有依赖）
 # arm64: Chromium（Debian 官方包，同样自带所有依赖）
@@ -48,7 +55,11 @@ RUN python -c "import seleniumbase; print('seleniumbase ready')" \
        && SB_DRIVERS=$(python -c "import os, seleniumbase; print(os.path.join(os.path.dirname(seleniumbase.__file__), 'drivers'))") \
        && cp /usr/bin/chromedriver "$SB_DRIVERS/uc_driver" \
        && chmod +x "$SB_DRIVERS/uc_driver"; \
-     fi
+     fi \
+  && SB_DRIVERS="$(python -c 'import os, seleniumbase; print(os.path.join(os.path.dirname(seleniumbase.__file__), "drivers"))')" \
+  && chmod -R a+rX "$SB_DRIVERS" \
+  && find "$SB_DRIVERS" -maxdepth 1 -type f -name '*driver*' -exec chmod a+rx {} + \
+  && chown -R app:app "$SB_DRIVERS" /home/app
 
 COPY server.py .
 
@@ -58,9 +69,8 @@ COPY server.py .
 # without --no-sandbox is not supported") and made uc_driver report
 # "session not created: cannot connect to chrome". Switching to a normal
 # user sidesteps the sandbox restriction entirely.
-RUN useradd -m -u 1000 app \
-    && mkdir -p /tmp/.X11-unix \
-    && chown -R app:app /app /tmp/.X11-unix
+RUN mkdir -p /tmp/.X11-unix /tmp/cf-proxy-profiles \
+    && chown -R app:app /app /tmp/.X11-unix /tmp/cf-proxy-profiles
 
 USER app
 
