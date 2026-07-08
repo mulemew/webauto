@@ -69,8 +69,8 @@ COPY server.py .
 # without --no-sandbox is not supported") and made uc_driver report
 # "session not created: cannot connect to chrome". Switching to a normal
 # user sidesteps the sandbox restriction entirely.
-RUN mkdir -p /tmp/.X11-unix /tmp/cf-proxy-profiles \
-    && chown -R app:app /app /tmp/.X11-unix /tmp/cf-proxy-profiles
+RUN mkdir -p /tmp/.X11-unix /tmp/cf-proxy-profiles /tmp/cf-proxy-logs \
+    && chown -R app:app /app /tmp/.X11-unix /tmp/cf-proxy-profiles /tmp/cf-proxy-logs
 
 USER app
 

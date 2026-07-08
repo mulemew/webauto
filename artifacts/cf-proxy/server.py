@@ -38,13 +38,15 @@ _sessions_lock = threading.Lock()
 _gui_lock = threading.Lock()
 
 SESSION_TIMEOUT_S = int(os.getenv("SESSION_TIMEOUT_S", "1800"))
+SESSION_START_TIMEOUT_S = int(os.getenv("SESSION_START_TIMEOUT_S", "180"))
+CHROME_START_ATTEMPTS = int(os.getenv("CHROME_START_ATTEMPTS", "1"))
 DEFAULT_RECONNECT_TIME = int(os.getenv("CF_RECONNECT_TIME", "4"))
 DEFAULT_MAX_RETRIES = int(os.getenv("CF_MAX_RETRIES", "3"))
 POOL_SIZE = int(os.getenv("POOL_SIZE", "1"))
 PORT = int(os.getenv("PORT", "7317"))
 
 # Chrome flags shared by all sessions
-_CHROMIUM_ARGS = ",".join([
+_CHROMIUM_ARGS = [
     "--no-sandbox",
     "--disable-gpu",
     "--disable-dev-shm-usage",
@@ -56,7 +58,7 @@ _CHROMIUM_ARGS = ",".join([
     "--no-default-browser-check",
     "--disable-features=IsolateOrigins,site-per-process",
     "--disable-site-isolation-trials",
-])
+]
 
 # Resolve Chrome binary once at module level
 def _find_chrome():
@@ -68,10 +70,20 @@ def _find_chrome():
     )
 
 _CHROME_BIN = _find_chrome()
+_thread_local = threading.local()
+_popen_patch_lock = threading.Lock()
+_popen_patch_installed = False
+_orig_popen = subprocess.Popen
 
 
-def _join_chromium_args(*groups) -> str:
-    """Merge SeleniumBase comma-separated Chromium args without blanks."""
+def _join_chromium_args(*groups) -> list[str]:
+    """
+    Merge Chromium args as a list.
+
+    SeleniumBase accepts either a comma-separated string or a list. Use a list:
+    flags such as "--disable-features=IsolateOrigins,site-per-process" contain
+    a comma and are mis-split when passed as one string.
+    """
     args: list[str] = []
     for group in groups:
         if not group:
@@ -84,7 +96,98 @@ def _join_chromium_args(*groups) -> str:
             arg = str(arg).strip()
             if arg:
                 args.append(arg)
-    return ",".join(args)
+    return args
+
+
+def _is_chrome_browser_launch(cmd) -> bool:
+    try:
+        if isinstance(cmd, (list, tuple)):
+            exe = str(cmd[0])
+            cmd_args = [str(x) for x in cmd[1:]]
+        else:
+            parts = str(cmd).split()
+            exe = parts[0] if parts else ""
+            cmd_args = parts[1:]
+        base = os.path.basename(exe)
+        is_chrome = base in {
+            "chrome",
+            "google-chrome",
+            "google-chrome-stable",
+            "chromium",
+            "chromium-browser",
+        } or (_CHROME_BIN and os.path.realpath(exe) == os.path.realpath(_CHROME_BIN))
+        if not is_chrome:
+            return False
+        # Do not intercept probes such as "chromium --version". Only the real
+        # UC browser launch has a remote-debugging port / user data dir.
+        return any(
+            a.startswith("--remote-debugging-port=") or a.startswith("--user-data-dir=")
+            for a in cmd_args
+        )
+    except Exception:
+        return False
+
+
+def _install_chrome_popen_patch():
+    """
+    SeleniumBase UC launches Chrome with stdout/stderr=PIPE but does not consume
+    those streams. In noisy container/Xvfb environments Chromium can block on a
+    full stderr pipe before DevTools starts, which then surfaces only as:
+      session not created: cannot connect to chrome at 127.0.0.1:<port>
+
+    Redirect only Chrome's stdio to per-session files. Chromedriver/service
+    subprocesses are left untouched.
+    """
+    global _popen_patch_installed
+    with _popen_patch_lock:
+        if _popen_patch_installed:
+            return
+
+        def _patched_popen(cmd, *args, **kwargs):
+            if _is_chrome_browser_launch(cmd):
+                stdout_path = getattr(_thread_local, "chrome_stdout_path", None)
+                stderr_path = getattr(_thread_local, "chrome_stderr_path", None)
+                handles = []
+                try:
+                    if stdout_path:
+                        out_f = open(stdout_path, "ab", buffering=0)
+                        kwargs["stdout"] = out_f
+                        handles.append(out_f)
+                    elif kwargs.get("stdout") == subprocess.PIPE:
+                        kwargs["stdout"] = subprocess.DEVNULL
+                    if stderr_path:
+                        err_f = open(stderr_path, "ab", buffering=0)
+                        kwargs["stderr"] = err_f
+                        handles.append(err_f)
+                    elif kwargs.get("stderr") == subprocess.PIPE:
+                        kwargs["stderr"] = subprocess.DEVNULL
+                    if kwargs.get("stdin") == subprocess.PIPE:
+                        kwargs["stdin"] = subprocess.DEVNULL
+                    return _orig_popen(cmd, *args, **kwargs)
+                finally:
+                    for h in handles:
+                        try:
+                            h.close()
+                        except Exception:
+                            pass
+            return _orig_popen(cmd, *args, **kwargs)
+
+        subprocess.Popen = _patched_popen
+        _popen_patch_installed = True
+
+
+def _tail_file(path: str | None, max_bytes: int = 6000) -> str:
+    if not path or not os.path.exists(path):
+        return ""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            if size > max_bytes:
+                f.seek(size - max_bytes)
+            data = f.read(max_bytes)
+        return data.decode("utf-8", errors="replace").strip()
+    except Exception:
+        return ""
 
 
 def _free_tcp_port() -> int:
@@ -224,24 +327,33 @@ class SessionThread:
         # send a full proxy URL without needing to know SeleniumBase's quirks.
         self.proxy = (proxy or "").strip() or None
         self._profile_dir = os.path.join("/tmp/cf-proxy-profiles", self.session_id)
+        self._log_dir = os.path.join("/tmp/cf-proxy-logs", self.session_id)
         self._debug_port = _free_tcp_port()
         os.makedirs(self._profile_dir, exist_ok=True)
+        os.makedirs(self._log_dir, exist_ok=True)
+        self._chrome_stdout_path = os.path.join(self._log_dir, "chrome.stdout.log")
+        self._chrome_stderr_path = os.path.join(self._log_dir, "chrome.stderr.log")
         self._cmd_q: queue.Queue = queue.Queue()
         self._res_q: queue.Queue = queue.Queue()
         self._seq = 0          # monotonic command sequence number
         self._seq_lock = threading.Lock()
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
+        # This should be longer than SeleniumBase/UC's own startup wait so the
+        # worker can return the real Chrome/driver error instead of the parent
+        # racing it and surfacing a generic "worker did not return" timeout.
+        # Default is 180s; override with SESSION_START_TIMEOUT_S if needed.
+        #
         # 120s is enough for a legitimate cold UC-Chrome start on a slow box.
         # If we haven't heard back by then, the worker is stuck (e.g. Chrome
         # hung on Xvfb / uc_driver deadlock) and no amount of extra waiting
         # will change that — surface it as an actionable error.
         try:
-            init = self._res_q.get(timeout=120)
+            init = self._res_q.get(timeout=SESSION_START_TIMEOUT_S)
         except queue.Empty:
             self._closed = True
             raise RuntimeError(
-                "SessionThread init timed out after 120s waiting for Chrome/UC driver startup "
+                f"SessionThread init timed out after {SESSION_START_TIMEOUT_S}s waiting for Chrome/UC driver startup "
                 "(worker did not return a result). Check container logs for [worker] lines."
             )
         if not init.get("ok"):
@@ -249,7 +361,7 @@ class SessionThread:
             raise RuntimeError(init.get("error", "Chrome failed to start"))
 
     def _worker(self):
-        attempts = 3
+        attempts = max(CHROME_START_ATTEMPTS, 1)
         last_error = None
         chrome_version = _get_chrome_version(_CHROME_BIN)
         uc_driver_version = _get_uc_driver_version()
@@ -263,6 +375,9 @@ class SessionThread:
         try:
             for attempt in range(1, attempts + 1):
                 try:
+                    _install_chrome_popen_patch()
+                    _thread_local.chrome_stdout_path = self._chrome_stdout_path
+                    _thread_local.chrome_stderr_path = self._chrome_stderr_path
                     from seleniumbase import SB
                     _assert_uc_driver_accessible()
                     chrome_args = _join_chromium_args(
@@ -320,6 +435,9 @@ class SessionThread:
                     # never a blank string.
                     err_text = str(e).strip() or repr(e) or type(e).__name__
                     err_text = f"{type(e).__name__}: {err_text}"
+                    chrome_stderr_tail = _tail_file(self._chrome_stderr_path)
+                    if chrome_stderr_tail:
+                        err_text = f"{err_text}\n[chrome-stderr-tail]\n{chrome_stderr_tail}"
                     tb = traceback.format_exc()
                     print(f"[worker] Chrome start attempt {attempt} failed: {err_text}\n{tb}", flush=True)
                     # A proxy that cannot be reached will never succeed on retry —
@@ -332,6 +450,12 @@ class SessionThread:
                         continue
                     self._res_q.put({"ok": False, "error": _classify_start_error(err_text)})
                     return
+                finally:
+                    for attr in ("chrome_stdout_path", "chrome_stderr_path"):
+                        try:
+                            delattr(_thread_local, attr)
+                        except Exception:
+                            pass
             fallback = 'Chrome failed to start'
             if last_error is not None:
                 le = str(last_error).strip() or repr(last_error) or type(last_error).__name__
@@ -352,6 +476,15 @@ class SessionThread:
             root_real = os.path.realpath(root)
             if profile_real.startswith(root_real + os.sep):
                 shutil.rmtree(profile_real, ignore_errors=True)
+        except Exception:
+            pass
+        try:
+            log_dir = getattr(self, "_log_dir", None)
+            if log_dir:
+                log_real = os.path.realpath(log_dir)
+                log_root_real = os.path.realpath("/tmp/cf-proxy-logs")
+                if log_real.startswith(log_root_real + os.sep):
+                    shutil.rmtree(log_real, ignore_errors=True)
         except Exception:
             pass
 
