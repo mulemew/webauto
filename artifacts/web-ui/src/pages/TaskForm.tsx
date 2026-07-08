@@ -376,11 +376,12 @@ export default function TaskForm() {
 
   const buildBrowserConfigPayload = () => {
     if (!browserConfig.enabled) return null;
+    const proxyUrl = browserConfig.proxyUrl.trim();
     return {
       provider: browserConfig.provider,
       wsEndpoint: browserConfig.wsEndpoint || null,
-      proxyUrl: browserConfig.proxyUrl || null,
-      proxyType: browserConfig.proxyType || null,
+      proxyUrl: proxyUrl || null,
+      proxyType: proxyUrl || browserConfig.proxyType === "warp" ? browserConfig.proxyType : null,
       headed: browserConfig.headed || null,
       stealth: browserConfig.stealth || null,
       blockAds: browserConfig.blockAds || null,

@@ -589,17 +589,25 @@ export async function startLocalProxy(
 
   const url = (cfg.proxyUrl ?? "").trim();
 
-  // Passthrough: Chromium speaks http/socks directly.
-  if (type === "http" || type === "socks5") {
-    if (!url) return null;
-    return { serverUrl: url, stop: async () => {} };
+  // A proxy *type* by itself is not enough to mean "use a proxy". The UI keeps
+  // a default proxyType (usually "http") even when the address field is blank;
+  // treating that as an active proxy makes providers do unnecessary proxy
+  // resolution and, for WARP, can accidentally start sing-box for every task.
+  if (!url) {
+    const warpConfigPath = process.env.WARP_CONFIG_PATH?.trim();
+    if (type === "warp" && warpConfigPath) {
+      return startSingBox(type, url, remoteConsumer);
+    }
+    logger.warn(
+      { proxyType: type },
+      "Ignoring proxy type without proxy URL; no browser proxy will be used",
+    );
+    return null;
   }
 
-  // WARP with no link is allowed (uses WARP_CONFIG_PATH); others need a link.
-  if (type !== "warp" && !url) {
-    throw new Error(
-      `Proxy type "${type}" requires a node share link in the proxy address field.`,
-    );
+  // Passthrough: Chromium speaks http/socks directly.
+  if (type === "http" || type === "socks5") {
+    return { serverUrl: url, stop: async () => {} };
   }
 
   return startSingBox(type, url, remoteConsumer);

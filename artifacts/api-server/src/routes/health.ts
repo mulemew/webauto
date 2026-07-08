@@ -41,6 +41,24 @@ import net from "net";
     });
   }
 
+  async function probeCfProxyHealth(baseUrl: string, timeoutMs = 4000): Promise<boolean> {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      let response: Response;
+      try {
+        response = await fetch(`${baseUrl}/health`, { signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+      if (!response.ok) return false;
+      const data = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+      return !!data && data.ok === true && "pool" in data;
+    } catch {
+      return false;
+    }
+  }
+
   // #3 — requireAuth so the wsEndpoint URL (which may contain auth tokens) is
   // never exposed to unauthenticated callers.
   router.get("/healthz/browser", requireAuth, async (_req, res): Promise<void> => {
@@ -48,25 +66,18 @@ import net from "net";
 
     // ── SeleniumBase: health is about the cf-proxy sidecar, not a ws endpoint ──
     // Mirror the provider's resolution: CF_PROXY_URL is primary; wsEndpoint is
-    // honored only when it is an http(s) URL. This keeps the health readout in
-    // sync with what tasks actually connect to.
+    // honored only when it is an http(s) URL that responds like cf-proxy.
     if (config.provider === "seleniumbase") {
+      const envBaseUrl = (process.env.CF_PROXY_URL ?? "http://cf-proxy:7317").replace(/\/$/, "");
       const endpoint = config.wsEndpoint?.trim();
       const override =
         endpoint && /^https?:\/\//i.test(endpoint) ? endpoint.replace(/\/$/, "") : undefined;
-      const cfProxyUrl = (override ?? process.env.CF_PROXY_URL ?? "http://cf-proxy:7317").replace(/\/$/, "");
+      const cfProxyUrl =
+        override && override !== envBaseUrl && (await probeCfProxyHealth(override))
+          ? override
+          : envBaseUrl;
       const safeCfUrl = cfProxyUrl.replace(/([?&]token=)[^&]*/g, "$1***");
-      let host: string;
-      let port: number;
-      try {
-        const parsed = new URL(cfProxyUrl);
-        host = parsed.hostname;
-        port = parsed.port ? parseInt(parsed.port, 10) : parsed.protocol === "https:" ? 443 : 80;
-      } catch {
-        res.json(BrowserHealthCheckResponse.parse({ status: "unreachable", url: safeCfUrl }));
-        return;
-      }
-      const reachable = await probeTcp(host, port, 4000);
+      const reachable = await probeCfProxyHealth(cfProxyUrl);
       res.json(
         BrowserHealthCheckResponse.parse({
           status: reachable ? "connected" : "unreachable",

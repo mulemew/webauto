@@ -52,6 +52,11 @@ import { Router, type IRouter } from "express";
       const { provider, wsEndpoint, testUrl } = body;
       const resolvedProvider: BrowserProviderType = provider && VALID_PROVIDERS.includes(provider) ? provider : "playwright";
       if (resolvedProvider !== "local" && resolvedProvider !== "seleniumbase" && !wsEndpoint?.trim()) { res.status(400).json({ error: "WebSocket endpoint URL is required" }); return; }
+      const proxyUrl = typeof body.proxyUrl === "string" ? body.proxyUrl.trim() : "";
+      const proxyType =
+        typeof body.proxyType === "string" && body.proxyType.trim()
+          ? body.proxyType.trim() as BrowserProviderConfig["proxyType"]
+          : undefined;
       const config: BrowserProviderConfig = {
         provider: resolvedProvider,
         wsEndpoint: wsEndpoint?.trim() ?? "",
@@ -59,9 +64,11 @@ import { Router, type IRouter } from "express";
         sessionTimeoutMs: Number.isFinite(Number(body.sessionTimeoutMs)) && Number(body.sessionTimeoutMs) > 0 ? Number(body.sessionTimeoutMs) : 1_800_000,
         stealth: body.stealth === true,
         blockAds: body.blockAds === true,
-        proxyUrl: typeof body.proxyUrl === "string" ? body.proxyUrl.trim() : "",
+        proxyUrl,
         ignoreHTTPS: body.ignoreHTTPS === true,
-        proxyType: typeof body.proxyType === "string" && body.proxyType.trim() ? body.proxyType.trim() as BrowserProviderConfig["proxyType"] : undefined,
+        // Do not persist the UI's default proxyType by itself. A blank proxy
+        // address means "no proxy" unless WARP is explicitly selected.
+        proxyType: proxyUrl || proxyType === "warp" ? proxyType : undefined,
         headed: body.headed === true,
         viewportWidth: Number.isFinite(Number(body.viewportWidth)) && Number(body.viewportWidth) >= 320 ? Math.floor(Number(body.viewportWidth)) : undefined,
         viewportHeight: Number.isFinite(Number(body.viewportHeight)) && Number(body.viewportHeight) >= 240 ? Math.floor(Number(body.viewportHeight)) : undefined,

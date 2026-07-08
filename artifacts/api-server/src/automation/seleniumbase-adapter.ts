@@ -25,9 +25,22 @@
 
   // ── HTTP helpers ─────────────────────────────────────────────────────────────
 
+  function maskUrl(url: string): string {
+    return url.replace(/([?&]token=)[^&]*/g, "$1***");
+  }
+
   async function cfFetch(url: string, init?: RequestInit): Promise<Record<string, unknown>> {
-    const res = await fetch(url, init);
-    const data = (await res.json()) as Record<string, unknown>;
+    let res: Response;
+    try {
+      res = await fetch(url, init);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `cf-proxy request failed: ${init?.method ?? "GET"} ${maskUrl(url)} (${message}). ` +
+          `Check that the SeleniumBase cf-proxy sidecar is running and that CF_PROXY_URL is reachable from api-server.`,
+      );
+    }
+    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     if (!res.ok || data["error"]) {
       throw new Error(String(data["error"] ?? `HTTP ${res.status} ${res.statusText}`));
     }
@@ -391,9 +404,13 @@
         });
       } catch (err) {
         if (resolvedProxy) await resolvedProxy.stop().catch(() => {});
-        throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Cannot connect to SeleniumBase cf-proxy at ${maskUrl(baseUrl)} (${message}). ` +
+            `Verify the cf-proxy container is healthy and CF_PROXY_URL is correct for the current Docker network.`,
+        );
       }
-      const data = (await res.json()) as Record<string, unknown>;
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       if (!res.ok || !data["session_id"]) {
         if (resolvedProxy) await resolvedProxy.stop().catch(() => {});
         throw new Error(

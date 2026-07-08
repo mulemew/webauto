@@ -32,12 +32,12 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-    cf-proxy:
+  cf-proxy:
     image: ghcr.io/mulemew/webauto-cf-proxy:latest
     network_mode: host
     environment:
       PORT: "7317"
-      CF_RECONNECT_TIME: ${CF_RECONNECT_TIME:-4}
+      CF_RECONNECT_TIME: "${CF_RECONNECT_TIME:-4}"
       SESSION_TIMEOUT_S: "1800"
       POOL_SIZE: "${POOL_SIZE:-1}"
     shm_size: 2g
