@@ -52,7 +52,9 @@ async function transcribeViaWhisper(audio: Buffer): Promise<string | null> {
       res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/octet-stream" },
-        body: audio,
+        // Cast around the lib.dom `BodyInit` vs @types/node `Buffer<ArrayBufferLike>`
+        // mismatch — Node's fetch accepts a Buffer body at runtime.
+        body: audio as unknown as BodyInit,
         signal: controller.signal,
       });
     } finally {
@@ -88,7 +90,9 @@ async function transcribeViaWitAi(audio: Buffer): Promise<string | null> {
           // reCAPTCHA serves MPEG audio; wit.ai decodes it server-side.
           "Content-Type": "audio/mpeg3",
         },
-        body: audio,
+        // Cast around the lib.dom `BodyInit` vs @types/node `Buffer<ArrayBufferLike>`
+        // mismatch — Node's fetch accepts a Buffer body at runtime.
+        body: audio as unknown as BodyInit,
         signal: controller.signal,
       });
     } finally {
@@ -127,7 +131,9 @@ async function transcribeViaGoogle(audio: Buffer): Promise<string | null> {
       res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/octet-stream" },
-        body: audio,
+        // Cast around the lib.dom `BodyInit` vs @types/node `Buffer<ArrayBufferLike>`
+        // mismatch — Node's fetch accepts a Buffer body at runtime.
+        body: audio as unknown as BodyInit,
         signal: controller.signal,
       });
     } finally {
