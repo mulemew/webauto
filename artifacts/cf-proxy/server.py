@@ -190,13 +190,6 @@ def _tail_file(path: str | None, max_bytes: int = 6000) -> str:
         return ""
 
 
-def _free_tcp_port() -> int:
-    """Pick a currently free localhost TCP port for UC remote debugging."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
-
-
 def _get_chrome_version(binary: str | None) -> str | None:
     if not binary:
         return None
@@ -326,10 +319,7 @@ class SessionThread:
         # We normalize the incoming URL before passing it to SB so callers can
         # send a full proxy URL without needing to know SeleniumBase's quirks.
         self.proxy = (proxy or "").strip() or None
-        self._profile_dir = os.path.join("/tmp/cf-proxy-profiles", self.session_id)
         self._log_dir = os.path.join("/tmp/cf-proxy-logs", self.session_id)
-        self._debug_port = _free_tcp_port()
-        os.makedirs(self._profile_dir, exist_ok=True)
         os.makedirs(self._log_dir, exist_ok=True)
         self._chrome_stdout_path = os.path.join(self._log_dir, "chrome.stdout.log")
         self._chrome_stderr_path = os.path.join(self._log_dir, "chrome.stderr.log")
@@ -368,8 +358,7 @@ class SessionThread:
         if chrome_version or uc_driver_version:
             print(
                 f"[chrome] binary={chrome_version or 'unknown'} "
-                f"uc_driver={uc_driver_version or 'unknown'} "
-                f"debug_port={self._debug_port}",
+                f"uc_driver={uc_driver_version or 'unknown'}",
                 flush=True,
             )
         try:
@@ -380,16 +369,12 @@ class SessionThread:
                     _thread_local.chrome_stderr_path = self._chrome_stderr_path
                     from seleniumbase import SB
                     _assert_uc_driver_accessible()
-                    chrome_args = _join_chromium_args(
-                        _CHROMIUM_ARGS,
-                        f"--remote-debugging-port={self._debug_port}",
-                    )
+                    chrome_args = _join_chromium_args(_CHROMIUM_ARGS)
                     _kw = dict(
                         uc=True,
                         headed=True,
                         xvfb=False,
                         chromium_arg=chrome_args,
-                        user_data_dir=self._profile_dir,
                     )
                     if _CHROME_BIN:
                         _kw["binary_location"] = _CHROME_BIN
@@ -463,21 +448,9 @@ class SessionThread:
             self._res_q.put({"ok": False, "error": _classify_start_error(fallback)})
         finally:
             self._closed = True
-            self._cleanup_profile()
+            self._cleanup_logs()
 
-    def _cleanup_profile(self):
-        profile_dir = getattr(self, "_profile_dir", None)
-        if not profile_dir:
-            return
-        # Safety guard: only delete profiles created by this service.
-        root = "/tmp/cf-proxy-profiles"
-        try:
-            profile_real = os.path.realpath(profile_dir)
-            root_real = os.path.realpath(root)
-            if profile_real.startswith(root_real + os.sep):
-                shutil.rmtree(profile_real, ignore_errors=True)
-        except Exception:
-            pass
+    def _cleanup_logs(self):
         try:
             log_dir = getattr(self, "_log_dir", None)
             if log_dir:
@@ -515,7 +488,7 @@ class SessionThread:
             self._cmd_q.put(None)
             self._thread.join(timeout=15)
             if not self._thread.is_alive():
-                self._cleanup_profile()
+                self._cleanup_logs()
         except Exception:
             pass
 
