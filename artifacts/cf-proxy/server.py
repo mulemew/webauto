@@ -302,6 +302,66 @@ def _classify_start_error(error_text: str) -> str:
     return f'Chrome failed to start: {error_text}'
 
 
+# ── Speech-to-text (reCAPTCHA audio solver) ──────────────────────────────────
+# Local faster-whisper runs offline on CPU: no API key, no per-IP rate limit,
+# no future paywall. The model is loaded once and reused across sessions.
+
+_whisper_model = None
+_whisper_lock = threading.Lock()
+
+
+def _get_whisper():
+    global _whisper_model
+    if _whisper_model is None:
+        with _whisper_lock:
+            if _whisper_model is None:
+                from faster_whisper import WhisperModel
+                size = os.getenv("WHISPER_MODEL", "small")
+                _whisper_model = WhisperModel(size, device="cpu", compute_type="int8")
+                print(f"[whisper] model loaded: {size}", flush=True)
+    return _whisper_model
+
+
+def _normalize_answer(text: str) -> str:
+    # reCAPTCHA audio answers are lowercase words/digits separated by spaces.
+    cleaned = "".join(c if (c.isalnum() or c.isspace()) else " " for c in (text or "").lower())
+    return " ".join(cleaned.split())
+
+
+def _transcribe_bytes(data: bytes, engine: str = "whisper") -> str:
+    """Transcribe raw audio bytes (reCAPTCHA serves MP3) to text."""
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+        f.write(data)
+        path = f.name
+    try:
+        if engine == "google":
+            # Convert to 16 kHz mono WAV and use the free Google endpoint.
+            import speech_recognition as sr
+            from pydub import AudioSegment
+            wav_path = path + ".wav"
+            AudioSegment.from_file(path).set_channels(1).set_frame_rate(16000).export(wav_path, format="wav")
+            try:
+                r = sr.Recognizer()
+                with sr.AudioFile(wav_path) as source:
+                    audio = r.record(source)
+                return _normalize_answer(r.recognize_google(audio) or "")
+            finally:
+                try:
+                    os.unlink(wav_path)
+                except Exception:
+                    pass
+        # default: local faster-whisper
+        model = _get_whisper()
+        segments, _info = model.transcribe(path, language="en", beam_size=5)
+        return _normalize_answer(" ".join(seg.text for seg in segments))
+    finally:
+        try:
+            os.unlink(path)
+        except Exception:
+            pass
+
+
 # ── SessionThread ────────────────────────────────────────────────────────────
 
 class SessionThread:
@@ -1303,6 +1363,18 @@ def click_turnstile(sid):
                             except Exception:
                                 continue
                         if wid:
+                            # Raise + focus the Chrome window before clicking.
+                            # All sessions share ONE Xvfb :99; if fluxbox has a
+                            # different window focused, the physical click lands
+                            # in the wrong window and the checkbox is never hit
+                            # (reads as "verification failed" / unchecked box).
+                            try:
+                                subprocess.run(
+                                    ["xdotool", "windowactivate", "--sync", wid],
+                                    timeout=3, capture_output=True,
+                                )
+                            except Exception:
+                                pass
                             # xdotool getwindowgeometry gives accurate position
                             geo = subprocess.run(
                                 ["xdotool", "getwindowgeometry", "--shell", wid],
@@ -1415,6 +1487,178 @@ def open_pages(sid):
     try:
         count = s.run(_fn, timeout=10)
         return jsonify({"ok": True, "count": count})
+    except Exception as e:
+        return _err(str(e), 500)
+
+
+@app.route("/transcribe", methods=["POST"])
+def transcribe():
+    """Speech-to-text for the reCAPTCHA audio solver.
+
+    Accepts the audio either as a raw body (Content-Type audio/* or
+    application/octet-stream) or as JSON {"audio_b64": ...} / {"url": ...}.
+    Query/JSON `engine` selects "whisper" (default, local) or "google".
+    Shared by the Playwright backend (which downloads the mp3 itself and POSTs
+    it here) and the cf-proxy native solver.
+    """
+    engine = request.args.get("engine")
+    if not engine and request.is_json:
+        engine = (request.json or {}).get("engine")
+    engine = (engine or os.getenv("STT_ENGINE", "whisper")).lower()
+    data = None
+    try:
+        if request.is_json:
+            body = request.json or {}
+            if body.get("audio_b64"):
+                import base64
+                data = base64.b64decode(body["audio_b64"])
+            elif body.get("url"):
+                import requests as _rq
+                data = _rq.get(body["url"], timeout=30).content
+        else:
+            data = request.get_data()
+    except Exception as e:
+        return _err(f"failed to read audio: {e}", 400)
+    if not data:
+        return _err("no audio provided", 400)
+    try:
+        text = _transcribe_bytes(data, engine=engine)
+        return jsonify({"ok": True, "text": text, "engine": engine})
+    except Exception as e:
+        return _err(str(e), 500)
+
+
+@app.route("/sessions/<sid>/solve-recaptcha-audio", methods=["POST"])
+def solve_recaptcha_audio(sid):
+    """Solve a reCAPTCHA v2 checkbox via its audio challenge, natively in
+    Selenium (cross-origin frame switching) + local Whisper. Mirrors the
+    oyz8/Host2Play approach. Returns {solved, blocked, message}."""
+    s = _get(sid)
+    if not s:
+        return _err("Session not found")
+    body = request.json or {}
+    max_rounds = int(body.get("max_rounds", 4))
+    timeout = int(body.get("timeout", 120))
+    engine = (body.get("engine") or os.getenv("STT_ENGINE", "whisper")).lower()
+
+    def _fn(sb):
+        import requests as _rq
+        d = sb.driver
+
+        def token_present():
+            try:
+                return bool(sb.execute_script(
+                    "var t=document.querySelector(\"textarea#g-recaptcha-response, "
+                    "textarea[name='g-recaptcha-response']\");"
+                    "return !!(t && t.value && t.value.length>0);"
+                ))
+            except Exception:
+                return False
+
+        def find(css):
+            from selenium.webdriver.common.by import By
+            return d.find_element(By.CSS_SELECTOR, css)
+
+        if token_present():
+            return {"solved": True, "blocked": False, "message": "already solved"}
+
+        # 1. Click the anchor checkbox.
+        d.switch_to.default_content()
+        try:
+            anchor = find("iframe[src*='api2/anchor'], iframe[src*='recaptcha/api2/anchor'], iframe[src*='enterprise/anchor']")
+            d.switch_to.frame(anchor)
+            find("#recaptcha-anchor, .recaptcha-checkbox").click()
+        except Exception:
+            pass
+        finally:
+            d.switch_to.default_content()
+        time.sleep(2)
+        if token_present():
+            return {"solved": True, "blocked": False, "message": "passed on checkbox"}
+
+        # 2. Switch the challenge frame to audio mode.
+        try:
+            bframe = find("iframe[src*='api2/bframe'], iframe[src*='recaptcha/api2/bframe'], iframe[src*='enterprise/bframe']")
+            d.switch_to.frame(bframe)
+        except Exception:
+            d.switch_to.default_content()
+            return {"solved": False, "blocked": False, "message": "reCAPTCHA challenge frame (bframe) not found"}
+        try:
+            find("#recaptcha-audio-button, button.rc-button-audio").click()
+            time.sleep(1.5)
+        except Exception:
+            pass
+
+        # 3. Audio rounds.
+        for rnd in range(max_rounds):
+            # Blocked for this IP?
+            try:
+                blk = find(".rc-doscaptcha-header-text, .rc-audiochallenge-error-message").text or ""
+                if "try again later" in blk.lower() or "automated queries" in blk.lower():
+                    d.switch_to.default_content()
+                    return {"solved": False, "blocked": True,
+                            "message": "reCAPTCHA blocked the audio challenge for this IP (rotate proxy/WARP)"}
+            except Exception:
+                pass
+
+            audio_url = None
+            try:
+                audio_url = find(".rc-audiochallenge-tdownload-link").get_attribute("href")
+            except Exception:
+                pass
+            if not audio_url:
+                try:
+                    audio_url = find("#audio-source").get_attribute("src")
+                except Exception:
+                    pass
+            if not audio_url:
+                time.sleep(1.5)
+                continue
+
+            try:
+                data = _rq.get(audio_url, timeout=30).content
+            except Exception:
+                time.sleep(1)
+                continue
+            if not data:
+                time.sleep(1)
+                continue
+
+            try:
+                answer = _transcribe_bytes(data, engine=engine)
+            except Exception as e:
+                d.switch_to.default_content()
+                return {"solved": False, "blocked": False, "message": f"transcription failed: {e}"}
+            if not answer:
+                time.sleep(1)
+                continue
+
+            try:
+                inp = find("#audio-response, input.rc-audiochallenge-response-field")
+                inp.clear()
+                inp.send_keys(answer)
+                find("#recaptcha-verify-button, button.rc-audiochallenge-verify-button").click()
+            except Exception:
+                pass
+            time.sleep(2.5)
+
+            d.switch_to.default_content()
+            if token_present():
+                return {"solved": True, "blocked": False, "message": f"solved via audio (round {rnd + 1})"}
+            # Re-enter bframe for the next clip.
+            try:
+                bframe = find("iframe[src*='api2/bframe'], iframe[src*='recaptcha/api2/bframe'], iframe[src*='enterprise/bframe']")
+                d.switch_to.frame(bframe)
+            except Exception:
+                pass
+            time.sleep(1)
+
+        d.switch_to.default_content()
+        return {"solved": False, "blocked": False, "message": f"not solved after {max_rounds} audio rounds"}
+
+    try:
+        result = s.run(_fn, timeout=timeout + 15)
+        return jsonify({"ok": True, **result})
     except Exception as e:
         return _err(str(e), 500)
 

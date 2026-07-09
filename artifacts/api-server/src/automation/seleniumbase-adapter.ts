@@ -268,6 +268,28 @@
       }
     }
 
+    /**
+     * Solve a reCAPTCHA v2 checkbox via its audio challenge, natively in
+     * cf-proxy (Selenium cross-origin frame switching + local Whisper STT).
+     * Used by the backend-agnostic recaptcha-audio solver.
+     */
+    async solveRecaptchaAudio(): Promise<{ solved: boolean; blocked: boolean; message: string }> {
+      try {
+        const data = await cfPost(this.baseUrl, `/sessions/${this.sid}/solve-recaptcha-audio`, {
+          max_rounds: 4,
+          timeout: 120,
+        });
+        return {
+          solved: !!data["solved"],
+          blocked: !!data["blocked"],
+          message: (data["message"] as string) ?? "",
+        };
+      } catch (err) {
+        logger.debug({ err }, "solveRecaptchaAudio via cf-proxy failed");
+        return { solved: false, blocked: false, message: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
     async waitForNewPage(options?: { timeout?: number }): Promise<PageAdapter> {
       const timeout = options?.timeout ?? 30_000;
       const data = await cfPost(this.baseUrl, `/sessions/${this.sid}/wait-for-new-page`, { timeout });

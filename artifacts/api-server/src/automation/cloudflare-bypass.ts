@@ -149,6 +149,13 @@ function xdotoolClick(x: number, y: number): void {
 async function physicalClickTurnstile(page: PageAdapter): Promise<boolean> {
   // Get Turnstile iframe coordinates via JS injection
   const coords = await page.evaluate(() => {
+    // The Cloudflare Turnstile checkbox is a FIXED-size control (~24px) sitting
+    // after ~13px of left padding, so its centre is ~30px from the widget's left
+    // edge REGARDLESS of the widget's total width. A proportional offset
+    // (width * 0.06 → 14-18px) lands in the padding to the LEFT of the checkbox
+    // and misses it, which reads as "verification failed" / an unchecked box.
+    // Use a fixed ~30px offset (clamped for unusually narrow widgets).
+    const checkboxOffsetX = (r: DOMRect) => Math.round(Math.min(r.width - 8, 30));
     // First try iframes
     const iframes = document.querySelectorAll("iframe");
     for (let i = 0; i < iframes.length; i++) {
@@ -156,7 +163,7 @@ async function physicalClickTurnstile(page: PageAdapter): Promise<boolean> {
       if (src.includes("cloudflare") || src.includes("turnstile") || src.includes("challenges")) {
         const r = iframes[i].getBoundingClientRect();
         if (r.width > 0 && r.height > 0)
-          return { cx: Math.round(r.x + Math.max(14, Math.min(18, r.width * 0.06))), cy: Math.round(r.y + r.height / 2) };
+          return { cx: Math.round(r.x + checkboxOffsetX(r)), cy: Math.round(r.y + r.height / 2) };
       }
     }
     // Fallback: container element
@@ -164,7 +171,7 @@ async function physicalClickTurnstile(page: PageAdapter): Promise<boolean> {
     for (const container of containers) {
       const r = container.getBoundingClientRect();
       if (r.width > 0 && r.height > 0)
-        return { cx: Math.round(r.x + Math.max(14, Math.min(18, r.width * 0.06))), cy: Math.round(r.y + r.height / 2) };
+        return { cx: Math.round(r.x + checkboxOffsetX(r)), cy: Math.round(r.y + r.height / 2) };
     }
     return null;
   }) as { cx: number; cy: number } | null;
@@ -504,7 +511,9 @@ export async function clickTurnstileCheckbox(page: PageAdapter): Promise<boolean
       const wBox = await widget.boundingBox();
       if (!wBox || wBox.width === 0 || wBox.height === 0) continue;
 
-      const clickX = wBox.x + Math.max(14, Math.min(18, wBox.width * 0.06));
+      // Fixed ~30px offset lands on the checkbox itself (see checkboxOffsetX note
+      // in physicalClickTurnstile) — a proportional offset misses it to the left.
+      const clickX = wBox.x + Math.min(wBox.width - 8, 30) + (Math.random() * 4 - 2);
       const clickY = wBox.y + wBox.height / 2 + (Math.random() * 4 - 2);
       await page.mouse.move(clickX, clickY);
       await sleep(150 + Math.random() * 200);
@@ -553,7 +562,9 @@ export async function clickTurnstileCheckbox(page: PageAdapter): Promise<boolean
     if (body) {
       const box = await body.boundingBox();
       if (box) {
-        const cx = box.x + Math.max(14, Math.min(18, box.width * 0.06));
+        // Checkbox sits ~30px from the iframe's left edge (fixed control), not
+        // proportional to the iframe width.
+        const cx = box.x + Math.min(box.width - 8, 30);
         const cy = box.y + box.height / 2;
         await page.mouse.move(cx, cy);
         await sleep(150);

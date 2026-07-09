@@ -1,6 +1,7 @@
 import type { PageAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
 import { bypassCloudflareChallenge, simulateHumanMouseMovement, clickTurnstileCheckbox } from "./cloudflare-bypass";
+import { solveRecaptchaAudio } from "./recaptcha-audio";
 import type { CaptchaSolver, CaptchaTokenType } from "./captcha-solver";
 
 export type { CaptchaSolver } from "./captcha-solver";
@@ -520,6 +521,20 @@ async function detectAndBypassClickCaptcha(page: PageAdapter): Promise<CaptchaRe
       const MAX_CLICK_ATTEMPTS = 3;
       for (let attempt = 1; attempt <= MAX_CLICK_ATTEMPTS; attempt++) {
         try {
+          // On a retry, re-check success BEFORE clicking again. GeeTest v4
+          // nativeButton frequently confirms its token a beat after our poll
+          // window closes; re-clicking (or resetting) an already-passed widget
+          // is exactly what pushes a simple click flow into the picture-
+          // selection challenge. If it's already solved, take the win.
+          if (attempt > 1) {
+            const recheck = await pollClickCaptchaSuccess(1500);
+            if (recheck === "solved") {
+              logger.info({ provider: provider.name, attempt }, "Captcha already solved on retry re-check — token populated");
+              return { detected: true, solved: true, message: `${provider.name} click captcha solved (token populated)` };
+            }
+            if (recheck === "escalated") { escalatedToChallenge = true; break; }
+          }
+
           // Re-resolve the button box each attempt (it can move/re-render).
           const freshBtn = (await page.$(provider.buttonSelector)) ?? btn;
           const clickBox = (await freshBtn.boundingBox()) ?? box;
@@ -561,13 +576,13 @@ async function detectAndBypassClickCaptcha(page: PageAdapter): Promise<CaptchaRe
           }
           logger.debug({ provider: provider.name, attempt }, "Click captcha token not populated yet — retrying");
 
-          // Reset GeeTest so the next attempt gets a fresh challenge state.
-          try {
-            await page.evaluate(() => {
-              const cap = (window as unknown as Record<string, { reset?: () => void; destroy?: () => void }>)["Captcha"];
-              if (cap && typeof cap.reset === "function") cap.reset();
-            });
-          } catch { /* non-critical */ }
+          // NOTE: deliberately do NOT call Captcha.reset() between attempts.
+          // reset() discards a nativeButton verification that may have just
+          // succeeded server-side (the token often lands a moment after our
+          // poll window) and forces a fresh, higher-risk challenge — which is
+          // what regressed the simple ikuuu.fyi click flow into the picture-
+          // selection challenge. The top-of-loop re-check above catches a late
+          // token instead.
           await new Promise((r) => setTimeout(r, 1200 + Math.random() * 800));
         } catch (err) {
           logger.debug({ err, provider: provider.name, attempt }, "Click captcha bypass attempt error");
@@ -966,6 +981,34 @@ export async function detectAndHandleCaptcha(
             `No captcha solver configured. Set CAPTCHA_PROVIDER and the corresponding ` +
             `API key to enable automatic solving.`,
         };
+    }
+
+    // ── reCAPTCHA v2 — free audio-challenge self-solve ────────────────────────
+    // Try the audio challenge (download mp3 → speech-to-text → type answer)
+    // BEFORE any paid token solver. Works on both cf-proxy (native/local
+    // whisper) and Playwright backends. This is what makes cfVerify / login pass
+    // reCAPTCHA on sites like host2play.gratis without a paid solver.
+    if (type === "reCAPTCHA") {
+      const audio = await solveRecaptchaAudio(page);
+      if (audio.solved) {
+        return { detected: true, solved: true, message: audio.message };
+      }
+      if (audio.blocked) {
+        // IP-level block — no STT can fix this; surface for attention/rotation.
+        return { detected: true, solved: false, needsAttention: true, message: audio.message };
+      }
+      if (!solver) {
+        return {
+          detected: true,
+          solved: false,
+          needsAttention: true,
+          message:
+            `${audio.message} No paid captcha solver configured as fallback ` +
+            `(set CAPTCHA_PROVIDER + key, or configure RECAPTCHA_STT_ORDER / WIT_AI_TOKEN).`,
+        };
+      }
+      logger.info("reCAPTCHA audio solve did not succeed — falling back to configured token solver");
+      // fall through to the paid solver path below.
     }
 
     if (!solver) {

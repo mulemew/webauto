@@ -764,9 +764,11 @@ async function waitForSelectorWithCf(
 }
 
 async function clickByText(page: PageAdapter, text: string): Promise<boolean> {
-  const lower = text.toLowerCase().trim();
-  // #fix-clickByText — prefer exact match over partial match to avoid hitting
-  // the wrong element when the target text appears inside a longer label.
+  // #fix-clickByText — STRICT matching: exact text, case-sensitive.
+  // No lowercasing and no partial/`includes` fallback, so "Login" never matches
+  // "login" and "Log" never matches "Login". The click target must equal the
+  // element's trimmed text (or value / aria-label) exactly.
+  const target = text.trim();
   return page.evaluate((btnText: unknown) => {
     const candidates = Array.from(
       document.querySelectorAll<HTMLElement>(
@@ -786,12 +788,10 @@ async function clickByText(page: PageAdapter, text: string): Promise<boolean> {
         (el instanceof HTMLInputElement ? el.value : "") ||
         el.getAttribute("aria-label") ||
         ""
-      )
-        .toLowerCase()
-        .trim();
+      ).trim();
     }
 
-    // Pass 1: exact match
+    // Exact, case-sensitive match only.
     for (const el of candidates) {
       if (getElText(el) === (btnText as string) && isVisible(el)) {
         el.click();
@@ -799,14 +799,6 @@ async function clickByText(page: PageAdapter, text: string): Promise<boolean> {
       }
     }
 
-    // Pass 2: partial match fallback
-    for (const el of candidates) {
-      if (getElText(el).includes(btnText as string) && isVisible(el)) {
-        el.click();
-        return true;
-      }
-    }
-
     return false;
-  }, lower as never) as Promise<boolean>;
+  }, target as never) as Promise<boolean>;
 }

@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb xdotool x11-utils \
     scrot python3-tk python3-dev \
     fluxbox \
+    ffmpeg \
   && rm -rf /var/lib/apt/lists/*
 
 # Create the runtime user before installing SeleniumBase so root can prepare
@@ -85,6 +86,15 @@ USER app
 ENV DISPLAY=:99
 ENV PYTHONUNBUFFERED=1
 ENV HOME=/home/app
+# faster-whisper model used by the reCAPTCHA audio solver. "small" (int8) is a
+# good speed/accuracy balance on a few CPU cores; override to "base"/"tiny" for
+# lower RAM or "medium" for higher accuracy.
+ENV WHISPER_MODEL=small
+
+# Pre-download the Whisper model at build time (as the app user so the
+# ~/.cache/huggingface copy is readable at runtime). `|| true` so a transient
+# Hugging Face outage doesn't fail the build — it will lazy-download on first use.
+RUN python -c "from faster_whisper import WhisperModel; import os; WhisperModel(os.getenv('WHISPER_MODEL','small'), device='cpu', compute_type='int8')" || true
 
 EXPOSE 7317
 

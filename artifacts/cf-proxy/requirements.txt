@@ -6,3 +6,9 @@ Flask==3.1.0
 seleniumbase==4.44.17
 requests>=2.32.5,<3
 PyAutoGUI==0.9.54
+# reCAPTCHA audio-challenge solver: local speech-to-text (faster-whisper runs
+# offline on CPU — no API key, no per-IP limit) with a SpeechRecognition/pydub
+# fallback to the free Google endpoint. Needs ffmpeg (installed in the image).
+faster-whisper==1.0.3
+SpeechRecognition==3.10.4
+pydub==0.25.1
