@@ -19,7 +19,14 @@ RUN useradd -m -u 1000 app
 
 # amd64: Google Chrome（官方包，自带所有依赖）
 # arm64: Chromium（Debian 官方包，同样自带所有依赖）
-RUN if [ "$TARGETARCH" = "amd64" ]; then \
+#
+# Docker BuildKit sets TARGETARCH, but plain `docker compose build` may leave it
+# empty. If we only check TARGETARCH, amd64 local builds accidentally fall into
+# the arm64/Chromium branch. SeleniumBase UC is substantially more reliable with
+# Google Chrome than Debian Chromium on amd64, so infer the real dpkg arch when
+# TARGETARCH is unavailable.
+RUN ARCH="${TARGETARCH:-$(dpkg --print-architecture)}" \
+    && if [ "$ARCH" = "amd64" ] || [ "$ARCH" = "x86_64" ]; then \
       apt-get update \
       && wget -q -O - https://dl.google.com/linux/linux_signing_key.pub \
          | gpg --dearmor > /usr/share/keyrings/google-chrome.gpg \
@@ -39,7 +46,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 RUN python -c "import seleniumbase; print('seleniumbase ready')" \
-  && if [ "$TARGETARCH" = "amd64" ]; then \
+  && ARCH="${TARGETARCH:-$(dpkg --print-architecture)}" \
+  && if [ "$ARCH" = "amd64" ] || [ "$ARCH" = "x86_64" ]; then \
        CHROME_MAJOR="$(google-chrome --version 2>/dev/null | grep -oE '[0-9]+' | head -1)"; \
        echo "Installed Chrome major version: ${CHROME_MAJOR:-unknown}"; \
        if [ -n "$CHROME_MAJOR" ]; then \
