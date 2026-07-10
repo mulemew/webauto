@@ -1285,6 +1285,67 @@ def is_closed(sid):
     return jsonify({"closed": s is None or s._closed})
 
 
+def _find_session_window(sb):
+    """Return THIS session's Chrome window id on the shared Xvfb :99.
+
+    All sessions share one display, so a physical click hits whatever window is
+    stacked on top — often an idle warm-pool "New Tab" window rather than the
+    task's page. Pick the window whose name matches this session's current page
+    title (and is NOT "New Tab") so we raise/click the RIGHT one.
+    """
+    import subprocess
+    try:
+        target = (sb.driver.title or "").strip()
+    except Exception:
+        target = ""
+    wids = []
+    for cls in ["chrome", "chromium", "Chromium", "google-chrome"]:
+        try:
+            out = subprocess.run(
+                ["xdotool", "search", "--onlyvisible", "--class", cls],
+                capture_output=True, text=True, timeout=3,
+            ).stdout
+            wids = [w for w in out.split() if w.strip()]
+            if wids:
+                break
+        except Exception:
+            continue
+    if not wids:
+        return None
+    best = None
+    for w in wids:
+        try:
+            name = subprocess.run(
+                ["xdotool", "getwindowname", w],
+                capture_output=True, text=True, timeout=2,
+            ).stdout.strip()
+        except Exception:
+            name = ""
+        # Exact-ish match on the page title wins immediately.
+        if target and len(target) > 2 and target[:32] in name:
+            return w
+        # Otherwise remember the first window that has navigated somewhere
+        # (i.e. is not the pristine warm-pool "New Tab").
+        if name and "New Tab" not in name and best is None:
+            best = w
+    return best or wids[0]
+
+
+def _raise_window(wid):
+    """Bring a window to the front + give it focus (best-effort)."""
+    if not wid:
+        return
+    import subprocess
+    for args in (
+        ["xdotool", "windowactivate", "--sync", wid],
+        ["xdotool", "windowraise", wid],
+    ):
+        try:
+            subprocess.run(args, timeout=3, capture_output=True)
+        except Exception:
+            pass
+
+
 @app.route("/sessions/<sid>/click-turnstile", methods=["POST"])
 def click_turnstile(sid):
     """Click an embedded Turnstile widget using SB's uc_gui_click_captcha.
@@ -1314,9 +1375,14 @@ def click_turnstile(sid):
             except Exception:
                 pass
 
-            # Strategy 1: SB's built-in uc_gui_click_captcha (PyAutoGUI)
+            # Strategy 1: SB's built-in uc_gui_click_captcha (PyAutoGUI).
+            # Raise THIS session's window first so PyAutoGUI's OS-level click
+            # lands on the task page and not on an idle warm-pool "New Tab"
+            # window stacked on top of the shared Xvfb :99.
             try:
                 with _gui_lock:
+                    _raise_window(_find_session_window(sb))
+                    time.sleep(0.3)
                     sb.uc_gui_click_captcha()
                     time.sleep(3)
             except Exception:
@@ -1358,34 +1424,14 @@ def click_turnstile(sid):
                     # Get accurate window position via xdotool instead of
                     # window.screenX/screenY which are unreliable in Xvfb
                     win_x, win_y, title_bar = 0, 0, 0
+                    wid = None
                     try:
-                        # Find Chrome window ID
-                        wid = None
-                        for cls in ["chrome", "chromium", "Chrome", "Chromium", "google-chrome"]:
-                            try:
-                                out = subprocess.run(
-                                    ["xdotool", "search", "--onlyvisible", "--class", cls],
-                                    capture_output=True, text=True, timeout=3,
-                                ).stdout.strip()
-                                wids = [w for w in out.split("\n") if w.strip()]
-                                if wids:
-                                    wid = wids[0]
-                                    break
-                            except Exception:
-                                continue
+                        # Pick + raise THIS session's window (not an idle warm-pool
+                        # "New Tab" window stacked on top of the shared Xvfb :99).
+                        wid = _find_session_window(sb)
                         if wid:
-                            # Raise + focus the Chrome window before clicking.
-                            # All sessions share ONE Xvfb :99; if fluxbox has a
-                            # different window focused, the physical click lands
-                            # in the wrong window and the checkbox is never hit
-                            # (reads as "verification failed" / unchecked box).
-                            try:
-                                subprocess.run(
-                                    ["xdotool", "windowactivate", "--sync", wid],
-                                    timeout=3, capture_output=True,
-                                )
-                            except Exception:
-                                pass
+                            _raise_window(wid)
+                            time.sleep(0.3)
                             # xdotool getwindowgeometry gives accurate position
                             geo = subprocess.run(
                                 ["xdotool", "getwindowgeometry", "--shell", wid],
@@ -1420,6 +1466,9 @@ def click_turnstile(sid):
                         # Serialise the physical pointer move+click behind the
                         # shared GUI lock — see _gui_lock docstring.
                         with _gui_lock:
+                            # Re-raise inside the lock so a concurrent session
+                            # can't steal the top window between raise and click.
+                            _raise_window(wid)
                             subprocess.run(
                                 ["xdotool", "mousemove", "--sync", str(abs_x), str(abs_y)],
                                 timeout=3, capture_output=True,
