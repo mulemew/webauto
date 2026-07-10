@@ -78,12 +78,15 @@ _CHROMIUM_ARGS = [
     "--disable-gpu",
     "--disable-dev-shm-usage",
     "--disable-blink-features=AutomationControlled",
-    "--disable-features=AutomationControlled",
     "--disable-infobars",
     "--no-first-run",
     "--disable-component-extensions-with-background-pages",
     "--no-default-browser-check",
-    "--disable-features=IsolateOrigins,site-per-process",
+    # Chrome keeps only the LAST --disable-features on the command line, so all
+    # disabled features must live in ONE flag — splitting them (as two separate
+    # --disable-features=) silently dropped AutomationControlled, re-exposing the
+    # automation tell. Keep them merged.
+    "--disable-features=AutomationControlled,IsolateOrigins,site-per-process",
     "--disable-site-isolation-trials",
     # Stop WebRTC/STUN from leaking the real IP by bypassing the proxy (WebRTC
     # uses direct UDP). Keeps RTCPeerConnection present (so "no WebRTC" is not a
@@ -194,6 +197,15 @@ def _install_chrome_popen_patch():
                         kwargs["stderr"] = subprocess.DEVNULL
                     if kwargs.get("stdin") == subprocess.PIPE:
                         kwargs["stdin"] = subprocess.DEVNULL
+                    # Inject the per-session timezone into Chrome's OWN process
+                    # env (V8/ICU honour TZ). This is the RELIABLE way to spoof
+                    # the timezone — unlike CDP setTimezoneOverride it survives
+                    # uc_open_with_reconnect and every navigation.
+                    chrome_tz = getattr(_thread_local, "chrome_tz", None)
+                    if chrome_tz:
+                        env = dict(kwargs.get("env") or os.environ)
+                        env["TZ"] = chrome_tz
+                        kwargs["env"] = env
                     return _orig_popen(cmd, *args, **kwargs)
                 finally:
                     for h in handles:
@@ -430,7 +442,13 @@ def _apply_fingerprint(sb, proxy=None, fp=None):
         full = m.group(0) if m else "150.0.0.0"
         major = full.split(".")[0]
 
-        tz, locale = _resolve_tz_locale(proxy, man_tz, man_locale, auto_geo)
+        # Prefer values already resolved before launch (create_session) so we
+        # don't run geo detection twice; fall back to resolving here for the
+        # env-default warm-pool path.
+        if fp.get("_tz") is not None or fp.get("_locale") is not None:
+            tz, locale = fp.get("_tz") or "", fp.get("_locale") or ""
+        else:
+            tz, locale = _resolve_tz_locale(proxy, man_tz, man_locale, auto_geo)
         langs = FINGERPRINT_LANGS or (f"{locale},{locale.split('-')[0]},en" if locale else "en-US,en")
         lang_list = [x.strip() for x in langs.split(",") if x.strip()]
 
@@ -575,7 +593,7 @@ def _transcribe_bytes(data: bytes, engine: str = "whisper") -> str:
 class SessionThread:
     """One Chrome session running in a dedicated thread (Selenium is not thread-safe)."""
 
-    def __init__(self, proxy: str = None):
+    def __init__(self, proxy: str = None, fingerprint: dict = None):
         self.session_id = str(uuid.uuid4())
         self.last_used = time.time()
         self.created_at = time.time()
@@ -587,9 +605,11 @@ class SessionThread:
         # We normalize the incoming URL before passing it to SB so callers can
         # send a full proxy URL without needing to know SeleniumBase's quirks.
         self.proxy = (proxy or "").strip() or None
-        # Per-session fingerprint config ({os,timezone,locale,auto_geo}); set by
-        # create_session and re-applied after every uc_open_with_reconnect.
-        self.fingerprint = None
+        # Per-session fingerprint config; may carry pre-resolved "_tz"/"_locale"
+        # (computed in create_session before launch). timezone -> Chrome TZ env,
+        # locale -> --lang launch flag (both applied at launch in _worker), plus
+        # UA/UA-CH/platform/WebGL re-applied via CDP after uc_open_with_reconnect.
+        self.fingerprint = fingerprint if isinstance(fingerprint, dict) else None
         self._log_dir = os.path.join("/tmp/cf-proxy-logs", self.session_id)
         os.makedirs(self._log_dir, exist_ok=True)
         self._chrome_stdout_path = os.path.join(self._log_dir, "chrome.stdout.log")
@@ -640,7 +660,25 @@ class SessionThread:
                     _thread_local.chrome_stderr_path = self._chrome_stderr_path
                     from seleniumbase import SB
                     _assert_uc_driver_accessible()
-                    chrome_args = _join_chromium_args(_CHROMIUM_ARGS)
+                    args = list(_CHROMIUM_ARGS)
+                    # LAUNCH-LEVEL fingerprint: timezone via Chrome's TZ env
+                    # (injected in the popen patch) and language via --lang, both
+                    # of which survive uc_open_with_reconnect (CDP overrides do
+                    # not). Pre-resolved in create_session as _tz/_locale.
+                    _thread_local.chrome_tz = None
+                    _fp = self.fingerprint or {}
+                    _fp_tz = _fp.get("_tz")
+                    _fp_locale = _fp.get("_locale")
+                    if _fp_tz:
+                        _thread_local.chrome_tz = _fp_tz
+                    if _fp_locale:
+                        args.append(f"--lang={_fp_locale}")
+                        print(
+                            f"[fingerprint] launch flags tz={_fp_tz or '-'} "
+                            f"--lang={_fp_locale}",
+                            flush=True,
+                        )
+                    chrome_args = _join_chromium_args(args)
                     _kw = dict(
                         uc=True,
                         headed=True,
@@ -980,24 +1018,34 @@ def create_session():
     body = request.json if request.is_json else {}
     proxy = (body or {}).get("proxy") if isinstance(body, dict) else None
     fp = (body or {}).get("fingerprint") if isinstance(body, dict) else None
+    fp_on = isinstance(fp, dict) and (fp.get("os") or "").strip().lower() in ("windows", "mac")
+    if fp_on:
+        # Resolve timezone/locale NOW — through the same proxy the task will use
+        # — so they can be baked into the Chrome launch (TZ env + --lang). This
+        # is what makes the timezone/language reliable: the CDP overrides alone
+        # were racy across uc_open_with_reconnect (some geos stuck, some didn't).
+        man_tz = (fp.get("timezone") if fp.get("timezone") is not None else FINGERPRINT_TZ) or ""
+        man_locale = (fp.get("locale") if fp.get("locale") is not None else FINGERPRINT_LOCALE) or ""
+        auto_geo = fp.get("auto_geo") if fp.get("auto_geo") is not None else FINGERPRINT_AUTOGEO
+        try:
+            _tz, _locale = _resolve_tz_locale(proxy, man_tz, man_locale, auto_geo)
+        except Exception as e:
+            print(f"[fingerprint] tz/locale resolve failed: {e}", flush=True)
+            _tz, _locale = man_tz, man_locale
+        fp = {**fp, "_tz": _tz, "_locale": _locale}
     try:
-        if proxy:
-            # A proxy must be set at Chrome launch, so it cannot come from the
-            # warm pool (those are launched proxy-less). Cold-start a dedicated
-            # session bound to the requested proxy instead.
-            s = SessionThread(proxy=proxy)
+        if proxy or fp_on:
+            # A proxy AND launch-level fingerprint (TZ env + --lang) must be set
+            # at Chrome launch, so neither can come from the warm pool (those are
+            # launched proxy-less and fingerprint-less). Cold-start a dedicated
+            # session carrying both.
+            s = SessionThread(proxy=proxy, fingerprint=(fp if fp_on else None))
         else:
             s = _pool.acquire()
     except Exception as e:
         return _err(str(e), 500)
-    # Apply the per-session fingerprint (warm-pool sessions were launched without
-    # it, so apply it at runtime here — CDP overrides work on a live session).
-    if isinstance(fp, dict) and fp.get("os"):
-        s.fingerprint = fp
-        try:
-            s.run(lambda sb: _apply_fingerprint(sb, s.proxy, fp), timeout=40)
-        except Exception as e:
-            print(f"[fingerprint] apply-on-create failed: {e}", flush=True)
+    # Cold-started fingerprinted sessions already baked TZ/--lang in at launch
+    # and applied the CDP overlay in _worker, so nothing more to do here.
     with _sessions_lock:
         _sessions[s.session_id] = s
     return jsonify({"session_id": s.session_id}), 201
