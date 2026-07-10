@@ -782,7 +782,7 @@ components:
           description: HTTP/SOCKS proxy URL (e.g. "http://user:pass@host:1080")
         proxyType:
           type: ["string", "null"]
-          enum: [http, socks5, warp, vless, vmess, trojan, hy2]
+          enum: [http, socks5, warp, vless, vmess, trojan, hy2, tuic, ss]
         headed:
           type: ["boolean", "null"]
         stealth:

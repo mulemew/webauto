@@ -394,7 +394,7 @@
 
       // ── Resolve the per-task proxy so cf-proxy's Chrome routes through it ──
       // cf-proxy runs in a SEPARATE container, so 127.0.0.1 there is itself.
-      // For advanced protocols (vless/vmess/trojan/hy2/warp) we start a local
+      // For advanced protocols (vless/vmess/trojan/hy2/tuic/ss/warp) we start a local
       // sing-box helper bound to a cross-container-reachable address (remote
       // consumer) and hand cf-proxy the resulting socks5:// URL. Plain
       // http/socks5 proxies are passed straight through.

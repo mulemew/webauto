@@ -394,6 +394,8 @@ export const TaskBrowserConfigProxyType = {
   vmess: "vmess",
   trojan: "trojan",
   hy2: "hy2",
+  tuic: "tuic",
+  ss: "ss",
 } as const;
 
 /**

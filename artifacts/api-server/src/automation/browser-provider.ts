@@ -71,8 +71,8 @@ export interface BrowserProviderConfig {
     proxyUrl?: string;
     /**
      * Proxy protocol. When omitted it is inferred from proxyUrl's scheme.
-     * Values "warp" | "vless" | "vmess" | "trojan" | "hy2" are dialed through a
-     * local sing-box helper that exposes a plain SOCKS5 to Chromium.
+     * Values "warp" | "vless" | "vmess" | "trojan" | "hy2" | "tuic" | "ss" are
+     * dialed through a local sing-box helper that exposes a plain SOCKS5 to Chromium.
      */
     proxyType?: ProxyType;
     /**
@@ -480,7 +480,7 @@ const AD_BLOCK_RE = new RegExp(
 
 /**
  * Resolve the per-config proxy into a Chromium-usable server URL, starting a
- * local sing-box helper for advanced protocols (warp/vless/vmess/trojan/hy2).
+ * local sing-box helper for advanced protocols (warp/vless/vmess/trojan/hy2/tuic/ss).
  * Returns null when no proxy is configured. The caller is responsible for
  * calling `.stop()` on the returned helper when the browser closes.
  */

@@ -10,7 +10,7 @@ A self-hosted web automation platform — schedule form logins, OTP handling, CA
 - **Form & OTP login** — handles TOTP, email OTP, and standard password forms
 - **Cookie / session mode** — persist a logged-in session per task; the next run auto-detects a valid session and skips login, re-authenticating and re-persisting only when the session is gone
 - **Session isolation** — each run uses a fresh browser context, so a previous run's login state never leaks into the next task
-- **Per-task proxy** — HTTP, SOCKS5, and (via bundled sing-box) VLESS, VMess, Trojan, Hysteria2, and Cloudflare WARP, configured independently for each task
+- **Per-task proxy** — HTTP, SOCKS5, and (via bundled sing-box) VLESS, VMess, Trojan, Hysteria2, TUIC, Shadowsocks, and Cloudflare WARP, configured independently for each task
 - **Headed / headless toggle** — run any task with a visible browser (over Xvfb) for troubleshooting
 - **CAPTCHA support** — 2Captcha, Capsolver, Anti-Captcha (token + image)
 - **Cloudflare bypass** — full-page interstitial ("Just a moment…" managed / non-interactive challenges) cleared automatically before every login and navigation, plus JS-challenge and Turnstile click simulation
@@ -138,7 +138,7 @@ Each task has a **浏览器后端 (Browser Backend)** panel (collapsed by defaul
 
 - **Proxy type + address** — choose one of:
   - `HTTP/HTTPS` / `SOCKS5` — paste a normal proxy URL (`http://user:pass@host:8080`, `socks5://host:1080`). Chromium connects to it directly.
-  - `VLESS` / `VMess` / `Trojan` / `Hysteria2` — paste the node share link (`vless://…`, `vmess://…`, `trojan://…`, `hysteria2://…`). A per-run **sing-box** helper is started that dials the node and exposes a SOCKS5 the browser uses. Requires the `sing-box` binary (bundled in the Docker image). When the task's browser backend runs in a **separate container** (browserless / cf-proxy / remote CDP), the app binds sing-box to all interfaces (`0.0.0.0`) and advertises a cross-container-reachable address to the browser instead of `127.0.0.1` — auto-detected, or set `SINGBOX_PROXY_PUBLIC_HOST` to override. For the bundled `local` backend it stays on `127.0.0.1`.
+  - `VLESS` / `VMess` / `Trojan` / `Hysteria2` / `TUIC` / `Shadowsocks` — paste the node share link (`vless://…`, `vmess://…`, `trojan://…`, `hysteria2://…`, `tuic://…`, `ss://…`). A per-run **sing-box** helper is started that dials the node and exposes a SOCKS5 the browser uses. Requires the `sing-box` binary (bundled in the Docker image). When the task's browser backend runs in a **separate container** (browserless / cf-proxy / remote CDP), the app binds sing-box to all interfaces (`0.0.0.0`) and advertises a cross-container-reachable address to the browser instead of `127.0.0.1` — auto-detected, or set `SINGBOX_PROXY_PUBLIC_HOST` to override. For the bundled `local` backend it stays on `127.0.0.1`.
   - `Cloudflare WARP` — set `WARP_CONFIG_PATH` to a sing-box WireGuard outbound JSON; leave the address blank.
 - **Headed mode (有头模式)** — run the task with a visible browser window (rendered on the container's Xvfb display) instead of headless, which is useful for troubleshooting. The `seleniumbase` (cf-proxy) backend is always headed.
 

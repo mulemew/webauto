@@ -285,7 +285,7 @@ export const ListTasksResponseItem = zod.object({
               'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
             ),
           proxyType: zod
-            .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2"])
+            .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2", "tuic", "ss"])
             .nullish(),
           headed: zod.boolean().nullish(),
           stealth: zod.boolean().nullish(),
@@ -532,7 +532,7 @@ export const CreateTaskBody = zod.object({
               'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
             ),
           proxyType: zod
-            .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2"])
+            .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2", "tuic", "ss"])
             .nullish(),
           headed: zod.boolean().nullish(),
           stealth: zod.boolean().nullish(),
@@ -804,7 +804,7 @@ export const GetTaskResponse = zod
                 'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
               ),
             proxyType: zod
-              .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2"])
+              .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2", "tuic", "ss"])
               .nullish(),
             headed: zod.boolean().nullish(),
             stealth: zod.boolean().nullish(),
@@ -1068,7 +1068,7 @@ export const UpdateTaskBody = zod.object({
               'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
             ),
           proxyType: zod
-            .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2"])
+            .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2", "tuic", "ss"])
             .nullish(),
           headed: zod.boolean().nullish(),
           stealth: zod.boolean().nullish(),
@@ -1328,7 +1328,7 @@ export const UpdateTaskResponse = zod.object({
               'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
             ),
           proxyType: zod
-            .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2"])
+            .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2", "tuic", "ss"])
             .nullish(),
           headed: zod.boolean().nullish(),
           stealth: zod.boolean().nullish(),

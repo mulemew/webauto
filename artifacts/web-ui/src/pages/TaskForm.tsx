@@ -155,7 +155,9 @@ type ProxyType =
   | "vless"
   | "vmess"
   | "trojan"
-  | "hy2";
+  | "hy2"
+  | "tuic"
+  | "ss";
 
 interface BrowserConfigState {
   enabled: boolean;
@@ -866,6 +868,8 @@ export default function TaskForm() {
                             <SelectItem value="vmess">VMess</SelectItem>
                             <SelectItem value="trojan">Trojan</SelectItem>
                             <SelectItem value="hy2">Hysteria2</SelectItem>
+                            <SelectItem value="tuic">TUIC</SelectItem>
+                            <SelectItem value="ss">Shadowsocks</SelectItem>
                           </SelectContent>
                         </Select>
                         <Input
@@ -882,7 +886,11 @@ export default function TaskForm() {
                                       ? "vmess://base64..."
                                       : browserConfig.proxyType === "trojan"
                                         ? "trojan://pass@host:443?..."
-                                        : "hysteria2://pass@host:443?..."
+                                        : browserConfig.proxyType === "hy2"
+                                          ? "hysteria2://pass@host:443?..."
+                                          : browserConfig.proxyType === "tuic"
+                                            ? "tuic://uuid:pass@host:443?..."
+                                            : "ss://base64(method:pass)@host:port"
                           }
                           value={browserConfig.proxyUrl}
                           onChange={(e) =>

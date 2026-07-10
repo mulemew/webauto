@@ -264,7 +264,7 @@ interface BrowserConfig {
     sessionTimeoutMs?: number;
     stealth?: boolean;
     blockAds?: boolean;
-    proxyType?: "http" | "socks5" | "warp" | "vless" | "vmess" | "trojan" | "hy2";
+    proxyType?: "http" | "socks5" | "warp" | "vless" | "vmess" | "trojan" | "hy2" | "tuic" | "ss";
     headed?: boolean;
     proxyUrl?: string;
     ignoreHTTPS?: boolean;
@@ -1028,7 +1028,7 @@ function BrowserProviderSection() {
         <div className="space-y-2">
           <Label htmlFor="proxyType" className="text-sm">
             Proxy type
-            <span className="ml-2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">socks5 / warp / vless / vmess / trojan / hy2</span>
+            <span className="ml-2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">socks5 / warp / vless / vmess / trojan / hy2 / tuic / ss</span>
           </Label>
           <select
             id="proxyType"
@@ -1043,9 +1043,11 @@ function BrowserProviderSection() {
             <option value="vmess">VMess</option>
             <option value="trojan">Trojan</option>
             <option value="hy2">Hysteria2</option>
+            <option value="tuic">TUIC</option>
+            <option value="ss">Shadowsocks</option>
           </select>
           <p className="text-xs text-muted-foreground">
-            http/socks5 are used directly by the browser. warp/vless/vmess/trojan/hy2 are dialed through a bundled sing-box helper that exposes a local SOCKS5 to the browser (requires the sing-box binary in the image).
+            http/socks5 are used directly by the browser. warp/vless/vmess/trojan/hy2/tuic/ss are dialed through a bundled sing-box helper that exposes a local SOCKS5 to the browser (requires the sing-box binary in the image).
           </p>
         </div>
 
