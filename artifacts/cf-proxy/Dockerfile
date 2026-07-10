@@ -85,6 +85,19 @@ COPY server.py .
 RUN mkdir -p /tmp/.X11-unix /tmp/cf-proxy-logs \
     && chown -R app:app /app /tmp/.X11-unix /tmp/cf-proxy-logs
 
+# WebRTC IP-leak protection at the MOST reliable layer: a Chromium managed
+# policy read from disk at every launch. The --force-webrtc-ip-handling-policy
+# command-line flag can be dropped/overridden by SeleniumBase UC mode, but a
+# managed policy cannot be stripped and survives uc_open_with_reconnect. This
+# forces WebRTC to only use proxied UDP, so STUN can't leak the real IP via a
+# direct (non-proxied) UDP path — the leak that a SOCKS5 proxy does NOT prevent
+# on its own (Chrome never routes WebRTC UDP through --proxy-server).
+# Written to both policy dirs since amd64 uses google-chrome and arm64 chromium.
+RUN mkdir -p /etc/opt/chrome/policies/managed /etc/chromium/policies/managed \
+    && printf '{ "WebRtcIPHandling": "disable_non_proxied_udp" }\n' \
+       | tee /etc/opt/chrome/policies/managed/webrtc.json \
+             /etc/chromium/policies/managed/webrtc.json > /dev/null
+
 USER app
 
 ENV DISPLAY=:99
