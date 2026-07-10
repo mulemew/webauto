@@ -9,7 +9,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     scrot python3-tk python3-dev \
     fluxbox \
     ffmpeg \
+    fonts-liberation fonts-crosextra-carlito fonts-crosextra-caladea \
   && rm -rf /var/lib/apt/lists/*
+# fonts-liberation / carlito / caladea are free, metric-compatible substitutes
+# for Arial/Times New Roman/Courier New / Calibri / Cambria — so a Windows
+# fingerprint (FINGERPRINT_OS=windows) passes width-based font detection.
 
 # Create the runtime user before installing SeleniumBase so root can prepare
 # driver/cache permissions explicitly. UC mode executes and may patch

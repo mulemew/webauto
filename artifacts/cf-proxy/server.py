@@ -45,6 +45,33 @@ DEFAULT_MAX_RETRIES = int(os.getenv("CF_MAX_RETRIES", "3"))
 POOL_SIZE = int(os.getenv("POOL_SIZE", "1"))
 PORT = int(os.getenv("PORT", "7317"))
 
+# ── Browser fingerprint spoofing (OPT-IN, default OFF) ───────────────────────
+# FINGERPRINT_OS = "windows" | "mac" | "" (off). When set, each session is
+# overlaid with a consistent OS profile (UA + UA-CH + navigator.platform +
+# WebGL vendor/renderer strings + timezone/locale). Timezone/locale come from
+# FINGERPRINT_TZ / FINGERPRINT_LOCALE if set, else are auto-detected from the
+# session's EXIT IP (through its proxy) unless FINGERPRINT_AUTOGEO=0.
+# NOTE: a half-consistent spoof can HURT Cloudflare Turnstile — test before
+# relying on it, and prefer leaving it off for CF-heavy sites if it regresses.
+FINGERPRINT_OS = os.getenv("FINGERPRINT_OS", "").strip().lower()
+FINGERPRINT_TZ = os.getenv("FINGERPRINT_TZ", "").strip()
+FINGERPRINT_LOCALE = os.getenv("FINGERPRINT_LOCALE", "").strip()
+FINGERPRINT_LANGS = os.getenv("FINGERPRINT_LANGS", "").strip()
+FINGERPRINT_AUTOGEO = os.getenv("FINGERPRINT_AUTOGEO", "1").strip() not in ("0", "false", "no", "")
+
+# Minimal country-code → locale map for IP auto-detection (default en-US).
+_CC_LOCALE = {
+    "US": "en-US", "GB": "en-GB", "CA": "en-CA", "AU": "en-AU", "IE": "en-IE",
+    "DE": "de-DE", "FR": "fr-FR", "ES": "es-ES", "IT": "it-IT", "NL": "nl-NL",
+    "SE": "sv-SE", "NO": "nb-NO", "DK": "da-DK", "FI": "fi-FI", "PL": "pl-PL",
+    "PT": "pt-PT", "BR": "pt-BR", "RU": "ru-RU", "UA": "uk-UA", "TR": "tr-TR",
+    "JP": "ja-JP", "KR": "ko-KR", "CN": "zh-CN", "TW": "zh-TW", "HK": "zh-HK",
+    "SG": "en-SG", "IN": "en-IN", "MX": "es-MX", "AR": "es-AR",
+}
+
+_geo_cache: dict = {}
+_geo_lock = threading.Lock()
+
 # Chrome flags shared by all sessions
 _CHROMIUM_ARGS = [
     "--no-sandbox",
@@ -302,6 +329,145 @@ def _classify_start_error(error_text: str) -> str:
     return f'Chrome failed to start: {error_text}'
 
 
+# ── Fingerprint spoofing helpers ─────────────────────────────────────────────
+
+def _detect_geo(proxy):
+    """Best-effort: resolve (timezone, locale) for the session's EXIT IP.
+
+    Routes the lookup through the session's proxy when one is set, so the geo
+    matches what the target site sees. Cached per proxy. Returns (None, None)
+    on any failure — the caller falls back to manual env / defaults.
+    """
+    key = proxy or "direct"
+    with _geo_lock:
+        if key in _geo_cache:
+            return _geo_cache[key]
+    tz, locale = None, None
+    try:
+        import requests as _rq
+        proxies = None
+        if proxy:
+            p = proxy
+            if p.startswith("socks5h://") or p.startswith("socks4a://") or p.startswith("socks://"):
+                p = "socks5://" + p.split("//", 1)[1]
+            proxies = {"http": p, "https": p}
+        r = _rq.get(
+            "http://ip-api.com/json/?fields=timezone,countryCode",
+            proxies=proxies, timeout=8,
+        )
+        d = r.json() if r is not None else {}
+        tz = d.get("timezone") or None
+        cc = (d.get("countryCode") or "").upper()
+        locale = _CC_LOCALE.get(cc)
+    except Exception as e:
+        print(f"[fingerprint] geo detect failed: {e}", flush=True)
+    with _geo_lock:
+        _geo_cache[key] = (tz, locale)
+    return tz, locale
+
+
+def _resolve_tz_locale(proxy):
+    """Manual env wins; otherwise auto-detect from the exit IP if enabled."""
+    tz = FINGERPRINT_TZ or None
+    locale = FINGERPRINT_LOCALE or None
+    if (not tz or not locale) and FINGERPRINT_AUTOGEO:
+        auto_tz, auto_locale = _detect_geo(proxy)
+        tz = tz or auto_tz
+        locale = locale or auto_locale
+    return tz, (locale or "en-US")
+
+
+def _apply_fingerprint(sb, proxy=None):
+    """Overlay a consistent OS fingerprint on this session via CDP (opt-in)."""
+    if FINGERPRINT_OS not in ("windows", "mac"):
+        return
+    try:
+        import re as _re
+        ver = _get_chrome_version(_CHROME_BIN) or ""
+        m = _re.search(r"(\d+)\.\d+\.\d+\.\d+", ver)
+        full = m.group(0) if m else "150.0.0.0"
+        major = full.split(".")[0]
+
+        tz, locale = _resolve_tz_locale(proxy)
+        langs = FINGERPRINT_LANGS or (f"{locale},{locale.split('-')[0]},en" if locale else "en-US,en")
+        lang_list = [x.strip() for x in langs.split(",") if x.strip()]
+
+        if FINGERPRINT_OS == "windows":
+            ua = (f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36")
+            platform = "Win32"
+            meta_platform, meta_platform_version, meta_arch = "Windows", "15.0.0", "x86"
+            webgl_vendor = "Google Inc. (Intel)"
+            webgl_renderer = ("ANGLE (Intel, Intel(R) UHD Graphics 630 (0x00003E9B) "
+                              "Direct3D11 vs_5_0 ps_5_0, D3D11)")
+        else:  # mac
+            ua = (f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                  f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36")
+            platform = "MacIntel"
+            meta_platform, meta_platform_version, meta_arch = "macOS", "14.5.0", "arm"
+            webgl_vendor = "Google Inc. (Apple)"
+            webgl_renderer = "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)"
+
+        brands = [
+            {"brand": "Chromium", "version": major},
+            {"brand": "Google Chrome", "version": major},
+            {"brand": "Not.A/Brand", "version": "99"},
+        ]
+        full_versions = [
+            {"brand": "Chromium", "version": full},
+            {"brand": "Google Chrome", "version": full},
+            {"brand": "Not.A/Brand", "version": "99.0.0.0"},
+        ]
+        meta = {
+            "brands": brands, "fullVersionList": full_versions,
+            "platform": meta_platform, "platformVersion": meta_platform_version,
+            "architecture": meta_arch, "bitness": "64", "model": "",
+            "mobile": False, "wow64": False,
+        }
+
+        sb.driver.execute_cdp_cmd("Network.setUserAgentOverride", {
+            "userAgent": ua,
+            "platform": platform,
+            "acceptLanguage": ",".join(lang_list) or "en-US,en",
+            "userAgentMetadata": meta,
+        })
+        if tz:
+            try:
+                sb.driver.execute_cdp_cmd("Emulation.setTimezoneOverride", {"timezoneId": tz})
+            except Exception:
+                pass
+        if locale:
+            try:
+                sb.driver.execute_cdp_cmd("Emulation.setLocaleOverride", {"locale": locale})
+            except Exception:
+                pass
+
+        init_js = (
+            "(function(){"
+            "try{Object.defineProperty(navigator,'platform',{get:function(){return %s;}});}catch(e){}"
+            "try{Object.defineProperty(navigator,'vendor',{get:function(){return 'Google Inc.';}});}catch(e){}"
+            "try{var L=%s;Object.defineProperty(navigator,'languages',{get:function(){return L;}});}catch(e){}"
+            "function P(p){if(!p)return;var g=p.getParameter;p.getParameter=function(x){"
+            "if(x===37445)return %s;if(x===37446)return %s;return g.call(this,x);};}"
+            "try{P(window.WebGLRenderingContext&&WebGLRenderingContext.prototype);}catch(e){}"
+            "try{P(window.WebGL2RenderingContext&&WebGL2RenderingContext.prototype);}catch(e){}"
+            "})();"
+        ) % (
+            repr(platform),
+            "[" + ",".join(repr(x) for x in lang_list) + "]",
+            repr(webgl_vendor),
+            repr(webgl_renderer),
+        )
+        sb.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": init_js})
+        print(
+            f"[fingerprint] applied {FINGERPRINT_OS} profile "
+            f"(Chrome {major}, tz={tz or 'default'}, locale={locale})",
+            flush=True,
+        )
+    except Exception as e:
+        print(f"[fingerprint] failed to apply: {e}", flush=True)
+
+
 # ── Speech-to-text (reCAPTCHA audio solver) ──────────────────────────────────
 # Local faster-whisper runs offline on CPU: no API key, no per-IP rate limit,
 # no future paywall. The model is loaded once and reused across sessions.
@@ -472,6 +638,9 @@ class SessionThread:
                             _kw["proxy"] = proxy
                             print(f"[proxy] HTTP proxy via SB(proxy={proxy})", flush=True)
                     with SB(**_kw) as sb:
+                        # Overlay an OS fingerprint (opt-in; no-op unless
+                        # FINGERPRINT_OS is set) before the session serves goto.
+                        _apply_fingerprint(sb, self.proxy)
                         self._res_q.put({"ok": True})
                         while True:
                             item = self._cmd_q.get()
