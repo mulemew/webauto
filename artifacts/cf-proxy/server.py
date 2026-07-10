@@ -1710,9 +1710,20 @@ def click_turnstile(sid):
         if tok and len(tok) > 20:
             return {"solved": True, "method": "auto", "attempt": 0}
 
-        # ONE click per attempt, then WAIT for CF to validate — do NOT combine
-        # uc_gui + xdotool in the same pass or loop fast. Rapid repeated clicks
-        # on the checkbox make Turnstile report "Verification failed".
+        # Non-interactive Turnstile (the "Verifying..." spinner with no checkbox)
+        # issues a token ON ITS OWN — clicking it does nothing, or disturbs and
+        # resets it. It just needs TIME, and our Linux/datacenter-ish environment
+        # makes CF take longer than a real desktop. So FIRST wait patiently and
+        # quietly for the auto-verify to finish before deciding to click.
+        tok = _poll_turnstile_token(sb, 16)
+        if tok and len(tok) > 20:
+            return {"solved": True, "method": "auto-wait", "attempt": 0}
+
+        # Still no token -> treat it as an INTERACTIVE widget that needs a
+        # checkbox click. ONE click per attempt, then WAIT for CF to validate —
+        # do NOT combine uc_gui + xdotool in the same pass or loop fast. Rapid
+        # repeated clicks on the checkbox make Turnstile report "Verification
+        # failed".
         for attempt in range(max_retries):
             method = "uc_gui" if attempt == 0 else "xdotool"
 
@@ -1727,7 +1738,7 @@ def click_turnstile(sid):
                         sb.uc_gui_click_captcha()
                 except Exception:
                     pass
-                tok = _poll_turnstile_token(sb, 6)
+                tok = _poll_turnstile_token(sb, 10)
                 if tok and len(tok) > 20:
                     return {"solved": True, "method": "uc_gui", "attempt": attempt + 1}
                 continue
@@ -1834,7 +1845,7 @@ def click_turnstile(sid):
 
             # Give CF time to validate this SINGLE xdotool click before giving up
             # or retrying — no fast re-clicks.
-            tok = _poll_turnstile_token(sb, 6)
+            tok = _poll_turnstile_token(sb, 10)
             if tok and len(tok) > 20:
                 return {"solved": True, "method": "xdotool", "attempt": attempt + 1}
 
