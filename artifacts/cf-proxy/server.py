@@ -1425,7 +1425,27 @@ def click_turnstile(sid):
                                 timeout=3, capture_output=True,
                             )
                             subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
-                            time.sleep(4)
+                            time.sleep(1)
+                            # ── Diagnostic ────────────────────────────────────
+                            # Grab the WHOLE Xvfb :99 screen WITH the pointer
+                            # (scrot -p) so we can see exactly where the physical
+                            # click landed relative to the Turnstile checkbox —
+                            # the definitive way to tell a coordinate miss from a
+                            # CF rejection. Retrieve after a run with:
+                            #   docker compose cp cf-proxy:/tmp/cf-turnstile-last.png ./
+                            try:
+                                subprocess.run(
+                                    ["scrot", "-p", "-o", "/tmp/cf-turnstile-last.png"],
+                                    timeout=5, capture_output=True,
+                                )
+                                print(
+                                    "[turnstile] saved screen diagnostic to "
+                                    f"/tmp/cf-turnstile-last.png (cursor aimed at {abs_x},{abs_y})",
+                                    flush=True,
+                                )
+                            except Exception:
+                                pass
+                            time.sleep(3)
                     except Exception:
                         pass
 
