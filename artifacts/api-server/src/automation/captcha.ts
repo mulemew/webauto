@@ -540,27 +540,35 @@ async function detectAndBypassClickCaptcha(page: PageAdapter): Promise<CaptchaRe
           const clickBox = (await freshBtn.boundingBox()) ?? box;
           if (!clickBox) break;
 
-          // ── Fuller human-interaction warm-up ──────────────────────────────
-          // Clicking cold (no prior movement) inflates GeeTest's risk score and
-          // pushes it to the picture-selection challenge. Wander the pointer a
-          // few times and dwell near the button before committing the click.
-          for (let w = 0; w < (attempt === 1 ? 3 : 2); w++) {
-            try { await simulateHumanMouseMovement(page); } catch { /* non-critical */ }
-            await new Promise((r) => setTimeout(r, 200 + Math.random() * 300));
+          // ── Light human-interaction warm-up ───────────────────────────────
+          // A little pointer movement lowers GeeTest's risk score. Keep it brief —
+          // the actual click below is a real ELEMENT click, not a coordinate one.
+          try { await simulateHumanMouseMovement(page); } catch { /* non-critical */ }
+          await new Promise((r) => setTimeout(r, 250 + Math.random() * 350));
+
+          // ── Click the button ELEMENT (reliable on BOTH backends) ──────────
+          // Prefer a real element click: Playwright -> locator.click() (trusted,
+          // auto-scrolls, hits the element centre); cf-proxy -> Selenium
+          // element.click(). This sidesteps the viewport->screen coordinate
+          // mapping that made page.mouse.click() land just ABOVE the small
+          // GeeTest button — the generic cf-proxy /mouse/click, unlike
+          // /click-turnstile, does not add the window/title-bar offset, so the
+          // coordinate click missed and the widget stayed on "Click to verify".
+          let didClick = false;
+          try {
+            await freshBtn.click();
+            didClick = true;
+          } catch (clickErr) {
+            logger.debug({ clickErr, provider: provider.name, attempt }, "Element click failed — falling back to coordinate click");
           }
-          // Approach the button in two hops, then dwell — a real cursor rarely
-          // teleports straight onto the target.
-          const targetX = clickBox.x + clickBox.width / 2 + (Math.random() * 6 - 3);
-          const targetY = clickBox.y + clickBox.height / 2 + (Math.random() * 4 - 2);
-          await page.mouse.move(clickBox.x + clickBox.width * 0.25, clickBox.y + clickBox.height * 0.4);
-          await new Promise((r) => setTimeout(r, 120 + Math.random() * 180));
-          await page.mouse.move(targetX, targetY);
-          await new Promise((r) => setTimeout(r, 180 + Math.random() * 260));
-          // Real-coordinate click. On the SeleniumBase/cf-proxy backend this is
-          // an OS-level xdotool click; on CDP backends it is a genuine synthetic
-          // pointer event at the widget coordinates (never an element.click()).
-          await page.mouse.click(targetX, targetY);
-          logger.info({ provider: provider.name, attempt }, "Clicked captcha button (real coordinates)");
+          if (!didClick) {
+            const tx = clickBox.x + clickBox.width / 2;
+            const ty = clickBox.y + clickBox.height / 2;
+            await page.mouse.move(tx, ty).catch(() => {});
+            await new Promise((r) => setTimeout(r, 120 + Math.random() * 180));
+            await page.mouse.click(tx, ty);
+          }
+          logger.info({ provider: provider.name, attempt, method: didClick ? "element" : "coordinate" }, "Clicked captcha button");
 
           // Extended, relaxed token polling — longer on the first attempts.
           const pollMs = attempt === 1 ? 20_000 : 14_000;
@@ -574,15 +582,29 @@ async function detectAndBypassClickCaptcha(page: PageAdapter): Promise<CaptchaRe
             logger.info({ provider: provider.name, attempt }, "GeeTest escalated to slider/image challenge");
             break;
           }
-          logger.debug({ provider: provider.name, attempt }, "Click captcha token not populated yet — retrying");
+          // Only re-click if the widget is STILL showing its pristine
+          // "click to verify" prompt — i.e. the click genuinely did not register.
+          // If the prompt is gone, the click DID land and GeeTest is verifying /
+          // has passed (many sites, incl. ikuuu.fyi, read the result via the
+          // onSuccess callback and expose NO DOM token). Re-clicking a passed
+          // widget re-triggers GeeTest and escalates it to the picture challenge,
+          // so we stop and let the login submit carry the token the site captured.
+          const stillPristine = await page.evaluate((sel: unknown) => {
+            const root = document.querySelector<HTMLElement>(sel as string);
+            const txt = (root?.textContent ?? "").toLowerCase();
+            const prompts = ["click to verify", "点击按钮进行验证", "点击验证", "点击完成验证", "click to complete"];
+            return prompts.some((p) => txt.includes(p));
+          }, provider.containerSelector as never).catch(() => true) as boolean;
 
-          // NOTE: deliberately do NOT call Captcha.reset() between attempts.
-          // reset() discards a nativeButton verification that may have just
-          // succeeded server-side (the token often lands a moment after our
-          // poll window) and forces a fresh, higher-risk challenge — which is
-          // what regressed the simple ikuuu.fyi click flow into the picture-
-          // selection challenge. The top-of-loop re-check above catches a late
-          // token instead.
+          if (!stillPristine) {
+            logger.info({ provider: provider.name, attempt }, "Click registered (prompt gone) but token not visible — proceeding without re-click");
+            break;
+          }
+
+          logger.debug({ provider: provider.name, attempt }, "Widget still pristine — click did not register, retrying");
+          // NOTE: deliberately do NOT call Captcha.reset() between attempts —
+          // it discards a verification that may have just succeeded and forces a
+          // fresh, higher-risk challenge.
           await new Promise((r) => setTimeout(r, 1200 + Math.random() * 800));
         } catch (err) {
           logger.debug({ err, provider: provider.name, attempt }, "Click captcha bypass attempt error");
