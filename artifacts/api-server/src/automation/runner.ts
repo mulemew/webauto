@@ -252,7 +252,16 @@ import path from "path";
 
       const stepCount = effectiveStepsWithCreds.length;
 
-      // Pre-flight URL check
+      // Pre-flight URL check — PURELY INFORMATIONAL, never fatal.
+      //
+      // This is a plain server-side fetch: it does NOT go through the task's
+      // proxy and is not a browser, so it dials the target from the server's
+      // (datacenter) IP with non-browser headers. Cloudflare-protected or
+      // geo-restricted sites routinely answer that with 403/503 even though the
+      // real browser+proxy run would succeed. Treating a non-2xx here as fatal
+      // therefore killed perfectly runnable tasks before the browser even tried.
+      // We keep the check only as an early reachability hint and let the browser
+      // step be the actual verdict.
       if (task.targetUrl && stepCount > 0) {
         try {
           emitTaskProgress(taskId, `Pre-checking URL: ${task.targetUrl}-¦`);
@@ -261,14 +270,16 @@ import path from "path";
           let _preRes = await fetch(task.targetUrl, { method: "HEAD", redirect: "follow", signal: _ctrl.signal })
             .catch(() => fetch(task.targetUrl, { method: "GET", redirect: "follow", signal: _ctrl.signal }));
           clearTimeout(_urlTimer);
-          emitTaskProgress(taskId, `URL check: HTTP ${_preRes.status}-¦`);
-          getTaskEmitter(taskId).emit("event", { type: "screenshot", message: `Precheck: HTTP ${_preRes.status}` });
-            collectedStepLogs.unshift({ stepIndex: -1, type: "precheck", success: true, message: `Precheck: HTTP ${_preRes.status}` });
-          if (_preRes.status < 200 || _preRes.status >= 400) throw new Error(`Target URL returned HTTP ${_preRes.status} (expected 2xx)`);
+          const _ok = _preRes.status >= 200 && _preRes.status < 400;
+          const _note = _ok
+            ? `Precheck: HTTP ${_preRes.status}`
+            : `Precheck: HTTP ${_preRes.status} (non-2xx from server IP; browser will retry via proxy)`;
+          emitTaskProgress(taskId, `URL check: ${_note}-¦`);
+          getTaskEmitter(taskId).emit("event", { type: "screenshot", message: _note });
+          collectedStepLogs.unshift({ stepIndex: -1, type: "precheck", success: true, message: _note });
         } catch (urlErr) {
           const _urlMsg = urlErr instanceof Error ? urlErr.message : String(urlErr);
-          if (_urlMsg.startsWith("Target URL returned HTTP")) throw urlErr as Error;
-          emitTaskProgress(taskId, `⚠️ URL pre-check: ${_urlMsg}`);
+          emitTaskProgress(taskId, `⚠️ URL pre-check: ${_urlMsg} — proceeding`);
           logger.warn({ taskId, targetUrl: task.targetUrl, err: _urlMsg }, "URL pre-check failed — proceeding");
         }
       }
