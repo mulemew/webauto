@@ -420,6 +420,22 @@ def _resolve_tz_locale(proxy, man_tz, man_locale, auto_geo):
     return tz, (locale or "en-US")
 
 
+def _fp_ua(os_name: str, major: str) -> str:
+    """Build the User-Agent string for a spoofed OS profile.
+
+    Used both as a LAUNCH flag (--user-agent, survives uc_open_with_reconnect —
+    this is what stops sites from reading the real "X11; Linux" UA) and by the
+    CDP overlay so the two always agree. Note Windows 10 AND 11 both report
+    "Windows NT 10.0" in the UA — the OS version is only distinguishable via
+    UA Client Hints (platformVersion), set separately in the CDP metadata.
+    """
+    if os_name == "mac":
+        return (f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36")
+    return (f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36")
+
+
 def _apply_fingerprint(sb, proxy=None, fp=None):
     """Overlay a consistent OS fingerprint on this session via CDP.
 
@@ -452,17 +468,14 @@ def _apply_fingerprint(sb, proxy=None, fp=None):
         langs = FINGERPRINT_LANGS or (f"{locale},{locale.split('-')[0]},en" if locale else "en-US,en")
         lang_list = [x.strip() for x in langs.split(",") if x.strip()]
 
+        ua = fp.get("_ua") or _fp_ua(os_name, major)
         if os_name == "windows":
-            ua = (f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36")
             platform = "Win32"
             meta_platform, meta_platform_version, meta_arch = "Windows", "15.0.0", "x86"
             webgl_vendor = "Google Inc. (Intel)"
             webgl_renderer = ("ANGLE (Intel, Intel(R) UHD Graphics 630 (0x00003E9B) "
                               "Direct3D11 vs_5_0 ps_5_0, D3D11)")
         else:  # mac
-            ua = (f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-                  f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36")
             platform = "MacIntel"
             meta_platform, meta_platform_version, meta_arch = "macOS", "14.5.0", "arm"
             webgl_vendor = "Google Inc. (Apple)"
@@ -669,13 +682,20 @@ class SessionThread:
                     _fp = self.fingerprint or {}
                     _fp_tz = _fp.get("_tz")
                     _fp_locale = _fp.get("_locale")
+                    _fp_ua_str = _fp.get("_ua")
                     if _fp_tz:
                         _thread_local.chrome_tz = _fp_tz
                     if _fp_locale:
                         args.append(f"--lang={_fp_locale}")
+                    if _fp_ua_str:
+                        # Launch-level UA: survives uc_open_with_reconnect, so the
+                        # real "X11; Linux" UA is never exposed on the landing
+                        # page (the CDP override alone re-applied too late).
+                        args.append(f"--user-agent={_fp_ua_str}")
+                    if _fp_tz or _fp_locale or _fp_ua_str:
                         print(
                             f"[fingerprint] launch flags tz={_fp_tz or '-'} "
-                            f"--lang={_fp_locale}",
+                            f"lang={_fp_locale or '-'} ua={'set' if _fp_ua_str else '-'}",
                             flush=True,
                         )
                     chrome_args = _join_chromium_args(args)
@@ -1018,12 +1038,14 @@ def create_session():
     body = request.json if request.is_json else {}
     proxy = (body or {}).get("proxy") if isinstance(body, dict) else None
     fp = (body or {}).get("fingerprint") if isinstance(body, dict) else None
-    fp_on = isinstance(fp, dict) and (fp.get("os") or "").strip().lower() in ("windows", "mac")
+    _fp_os = (fp.get("os") or "").strip().lower() if isinstance(fp, dict) else ""
+    fp_on = _fp_os in ("windows", "mac")
     if fp_on:
-        # Resolve timezone/locale NOW — through the same proxy the task will use
-        # — so they can be baked into the Chrome launch (TZ env + --lang). This
-        # is what makes the timezone/language reliable: the CDP overrides alone
-        # were racy across uc_open_with_reconnect (some geos stuck, some didn't).
+        # Resolve timezone/locale + UA NOW so they can be baked into the Chrome
+        # launch (TZ env + --lang + --user-agent). This is what makes them
+        # reliable: the CDP overrides alone were racy across
+        # uc_open_with_reconnect (some geos stuck, UA/platform sometimes fell
+        # back to the real Linux values).
         man_tz = (fp.get("timezone") if fp.get("timezone") is not None else FINGERPRINT_TZ) or ""
         man_locale = (fp.get("locale") if fp.get("locale") is not None else FINGERPRINT_LOCALE) or ""
         auto_geo = fp.get("auto_geo") if fp.get("auto_geo") is not None else FINGERPRINT_AUTOGEO
@@ -1032,7 +1054,11 @@ def create_session():
         except Exception as e:
             print(f"[fingerprint] tz/locale resolve failed: {e}", flush=True)
             _tz, _locale = man_tz, man_locale
-        fp = {**fp, "_tz": _tz, "_locale": _locale}
+        import re as _re
+        _ver = _get_chrome_version(_CHROME_BIN) or ""
+        _m = _re.search(r"(\d+)\.\d+\.\d+\.\d+", _ver)
+        _major = _m.group(1) if _m else "150"
+        fp = {**fp, "_tz": _tz, "_locale": _locale, "_ua": _fp_ua(_fp_os, _major)}
     try:
         if proxy or fp_on:
             # A proxy AND launch-level fingerprint (TZ env + --lang) must be set
