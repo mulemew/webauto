@@ -430,12 +430,22 @@ async function executeStep(
           if (hasTurnstile) {
             logger.info("cfVerify — Turnstile widget present; using cf-proxy native clickTurnstile (login-step parity)");
             const solved = await (page as unknown as { clickTurnstile: (n?: number) => Promise<boolean> })
-              .clickTurnstile(3)
+              .clickTurnstile(2)
               .catch(() => false);
             if (solved) {
               return { message: "Cloudflare verification cleared via cf-proxy native Turnstile click." };
             }
-            logger.debug("cfVerify — native clickTurnstile did not confirm solve; falling back to standard clearing path");
+            // The native clicker already clicked (and, with the window fix, landed
+            // on the widget). Do NOT fall through to clearCloudflareInterstitial +
+            // detectAndHandleCaptcha — those would re-click the SAME Turnstile and
+            // mash it into "Verification failed". A Turnstile the native clicker
+            // can't pass is an IP/fingerprint wall, not a click problem.
+            logger.warn("cfVerify — native clickTurnstile did not solve the Turnstile; not re-clicking (avoids mashing). Likely an IP/fingerprint wall.");
+            return {
+              message:
+                "Turnstile widget present but not solved by the native clicker — not re-clicking to avoid a 'Verification failed' from mashing. " +
+                "If it used to pass, try enabling FINGERPRINT_OS=windows or a residential proxy.",
+            };
           }
         } catch (err) {
           logger.debug({ err }, "cfVerify native clickTurnstile fast-path threw — falling back");
