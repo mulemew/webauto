@@ -468,13 +468,25 @@ function parseTuic(link: string): Record<string, unknown> {
   tls.alpn = alpn
     ? alpn.split(",").map((s) => s.trim()).filter(Boolean)
     : ["h3"];
+  // TUIC carries "uuid:password" in the userinfo. That colon is commonly
+  // percent-encoded (%3A), in which case new URL() puts the whole string in
+  // username and leaves password empty — so recover both by splitting on the
+  // first ':' of the decoded userinfo (a UUID never contains one).
+  let uuid = decodeURIComponent(u.username);
+  let password = decodeURIComponent(u.password || "");
+  if (!password && uuid.includes(":")) {
+    const ci = uuid.indexOf(":");
+    password = uuid.slice(ci + 1);
+    uuid = uuid.slice(0, ci);
+  }
+  if (!password) password = params.get("password") || "";
   const outbound: Record<string, unknown> = {
     type: "tuic",
     tag: "proxy",
     server: u.hostname,
     server_port: parseInt(u.port || "443", 10),
-    uuid: decodeURIComponent(u.username),
-    password: decodeURIComponent(u.password || params.get("password") || ""),
+    uuid,
+    password,
     tls,
   };
   const cc = params.get("congestion_control") || params.get("congestion");
