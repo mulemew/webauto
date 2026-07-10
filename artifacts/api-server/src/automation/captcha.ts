@@ -950,8 +950,11 @@ export async function detectAndHandleCaptcha(
         // This is ported from JustRunMy.App's handle_turnstile() approach.
         logger.info("Turnstile not auto-solved after wait — attempting checkbox click (xdotool + CDP)");
 
-        // Bounded retries so a site we cannot solve fails in ~1 min, not many.
-        const MAX_TS_CLICK_ATTEMPTS = 3;
+        // Keep this LOW: the cf-proxy native clicker already does a gentle
+        // one-click-then-wait internally. Re-calling it many times mashes the
+        // Turnstile checkbox and makes CF show "Verification failed". If a couple
+        // of clean clicks don't solve it, more won't — it's an IP/fingerprint wall.
+        const MAX_TS_CLICK_ATTEMPTS = 2;
         for (let attempt = 1; attempt <= MAX_TS_CLICK_ATTEMPTS; attempt++) {
           try {
             // Simulate human presence before each click attempt

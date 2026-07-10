@@ -1515,6 +1515,33 @@ def _raise_window(wid):
             pass
 
 
+def _turnstile_token(sb):
+    """Return the Turnstile response token (native OR reCAPTCHA-compat), or ''."""
+    try:
+        return sb.execute_script(
+            "var q='input[name=\"cf-turnstile-response\"],textarea[name=\"cf-turnstile-response\"],"
+            "textarea[name=\"g-recaptcha-response\"]';"
+            "var els=document.querySelectorAll(q);"
+            "for(var i=0;i<els.length;i++){if(els[i].value&&els[i].value.length>20)return els[i].value;}"
+            "return '';"
+        ) or ""
+    except Exception:
+        return ""
+
+
+def _poll_turnstile_token(sb, secs):
+    """Poll for the Turnstile token for up to `secs`. Give CF time to validate
+    AFTER a single click instead of mashing the checkbox (rapid repeated clicks
+    make Turnstile show 'Verification failed')."""
+    deadline = time.time() + secs
+    while time.time() < deadline:
+        tok = _turnstile_token(sb)
+        if tok and len(tok) > 20:
+            return tok
+        time.sleep(1)
+    return _turnstile_token(sb)
+
+
 @app.route("/sessions/<sid>/click-turnstile", methods=["POST"])
 def click_turnstile(sid):
     """Click an embedded Turnstile widget using SB's uc_gui_click_captcha.
@@ -1532,41 +1559,32 @@ def click_turnstile(sid):
     def _fn(sb):
         import subprocess
 
+        # Already solved (managed / auto mode)?
+        tok = _turnstile_token(sb)
+        if tok and len(tok) > 20:
+            return {"solved": True, "method": "auto", "attempt": 0}
+
+        # ONE click per attempt, then WAIT for CF to validate — do NOT combine
+        # uc_gui + xdotool in the same pass or loop fast. Rapid repeated clicks
+        # on the checkbox make Turnstile report "Verification failed".
         for attempt in range(max_retries):
-            # Check if Turnstile token is already populated (auto-solved)
-            try:
-                token = sb.execute_script(
-                    "var i=document.querySelector('input[name=\"cf-turnstile-response\"]');"
-                    "return i ? i.value : '';"
-                )
-                if token and len(token) > 20:
-                    return {"solved": True, "method": "auto", "attempt": attempt}
-            except Exception:
-                pass
+            method = "uc_gui" if attempt == 0 else "xdotool"
 
-            # Strategy 1: SB's built-in uc_gui_click_captcha (PyAutoGUI).
-            # Raise THIS session's window first so PyAutoGUI's OS-level click
-            # lands on the task page and not on an idle warm-pool "New Tab"
-            # window stacked on top of the shared Xvfb :99.
-            try:
-                with _gui_lock:
-                    _raise_window(_find_session_window(sb))
-                    time.sleep(0.3)
-                    sb.uc_gui_click_captcha()
-                    time.sleep(3)
-            except Exception:
-                pass
-
-            # Check if solved after click
-            try:
-                token = sb.execute_script(
-                    "var i=document.querySelector('input[name=\"cf-turnstile-response\"]');"
-                    "return i ? i.value : '';"
-                )
-                if token and len(token) > 20:
+            if method == "uc_gui":
+                # Strategy 1: SB's built-in PyAutoGUI clicker. Raise THIS session's
+                # window first so the OS-level click lands on the task page and not
+                # an idle warm-pool "New Tab" stacked on the shared Xvfb :99.
+                try:
+                    with _gui_lock:
+                        _raise_window(_find_session_window(sb))
+                        time.sleep(0.3)
+                        sb.uc_gui_click_captcha()
+                except Exception:
+                    pass
+                tok = _poll_turnstile_token(sb, 8)
+                if tok and len(tok) > 20:
                     return {"solved": True, "method": "uc_gui", "attempt": attempt + 1}
-            except Exception:
-                pass
+                continue
 
             # Strategy 2: Locate Turnstile iframe and xdotool-click its checkbox
             # Use xdotool getwindowgeometry for accurate window position in Xvfb
@@ -1663,25 +1681,16 @@ def click_turnstile(sid):
                                 )
                             except Exception:
                                 pass
-                            time.sleep(3)
-                    except Exception:
-                        pass
-
-                    # Check again
-                    try:
-                        token = sb.execute_script(
-                            "var i=document.querySelector('input[name=\"cf-turnstile-response\"]');"
-                            "return i ? i.value : '';"
-                        )
-                        if token and len(token) > 20:
-                            return {"solved": True, "method": "xdotool", "attempt": attempt + 1}
                     except Exception:
                         pass
             except Exception:
                 pass
 
-            # Brief wait before retry
-            time.sleep(2)
+            # Give CF time to validate this SINGLE xdotool click before giving up
+            # or retrying — no fast re-clicks.
+            tok = _poll_turnstile_token(sb, 8)
+            if tok and len(tok) > 20:
+                return {"solved": True, "method": "xdotool", "attempt": attempt + 1}
 
         return {"solved": False, "method": "none", "attempt": max_retries}
 
