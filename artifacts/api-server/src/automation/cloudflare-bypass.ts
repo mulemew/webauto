@@ -402,6 +402,22 @@ const rand = (min: number, max: number) => Math.floor(Math.random() * (max - min
 export async function simulateHumanMouseMovement(page: PageAdapter): Promise<void> {
   const vp = page.viewport() ?? { width: 1280, height: 800 };
 
+  // ── cf-proxy fast path ────────────────────────────────────────────────────
+  // On the SeleniumBase/cf-proxy backend EVERY mouse.move is a separate HTTP
+  // round-trip to the sidecar, so a full bezier sweep (4-9 curves × 12-25 steps
+  // = 100-200 moves) takes MINUTES and floods the logs — that is the main reason
+  // a failing Turnstile login "takes forever". cf-proxy's native
+  // uc_gui_click_captcha already produces human-like OS input, so here we just do
+  // a couple of cheap moves for a liveness signal instead of a full sweep.
+  if ("clickTurnstile" in page && typeof (page as unknown as { clickTurnstile?: unknown }).clickTurnstile === "function") {
+    try {
+      await page.mouse.move(rand(vp.width * 0.3, vp.width * 0.6), rand(vp.height * 0.3, vp.height * 0.6));
+      await sleep(rand(80, 160));
+      await page.mouse.move(rand(vp.width * 0.4, vp.width * 0.7), rand(vp.height * 0.4, vp.height * 0.7));
+    } catch { /* non-critical */ }
+    return;
+  }
+
   let x = rand(vp.width * 0.1, vp.width * 0.9);
   let y = rand(vp.height * 0.1, vp.height * 0.9);
   await page.mouse.move(x, y).catch(() => {});

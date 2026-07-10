@@ -906,8 +906,8 @@ export async function detectAndHandleCaptcha(
       // zero interaction looks like a headless bot. We simulate human presence
       // throughout the wait to help the PoW pass.
       // Fail fast: a managed Turnstile that is going to auto-solve does so within
-      // ~15 s. Waiting 40 s only delays the (usually doomed) manual-click phase.
-      const VERIFY_TIMEOUT_MS = 15_000;
+      // ~8 s. Waiting longer only delays the (usually doomed) manual-click phase.
+      const VERIFY_TIMEOUT_MS = 8_000;
       const POLL_INTERVAL_MS = 2_000;
       const verifyDeadline = Date.now() + VERIFY_TIMEOUT_MS;
 
@@ -950,11 +950,11 @@ export async function detectAndHandleCaptcha(
         // This is ported from JustRunMy.App's handle_turnstile() approach.
         logger.info("Turnstile not auto-solved after wait — attempting checkbox click (xdotool + CDP)");
 
-        // Keep this LOW: the cf-proxy native clicker already does a gentle
-        // one-click-then-wait internally. Re-calling it many times mashes the
-        // Turnstile checkbox and makes CF show "Verification failed". If a couple
-        // of clean clicks don't solve it, more won't — it's an IP/fingerprint wall.
-        const MAX_TS_CLICK_ATTEMPTS = 2;
+        // Keep this at 1: the cf-proxy native clicker already does uc_gui + xdotool
+        // (two gentle, spaced clicks) internally per call. Re-calling it just mashes
+        // the checkbox into "Verification failed" and drags out the failure. If a
+        // couple of clean clicks don't solve it, more won't — it's an IP/fingerprint wall.
+        const MAX_TS_CLICK_ATTEMPTS = 1;
         for (let attempt = 1; attempt <= MAX_TS_CLICK_ATTEMPTS; attempt++) {
           try {
             // Simulate human presence before each click attempt

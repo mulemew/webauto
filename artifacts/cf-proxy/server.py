@@ -1581,7 +1581,7 @@ def click_turnstile(sid):
                         sb.uc_gui_click_captcha()
                 except Exception:
                     pass
-                tok = _poll_turnstile_token(sb, 8)
+                tok = _poll_turnstile_token(sb, 6)
                 if tok and len(tok) > 20:
                     return {"solved": True, "method": "uc_gui", "attempt": attempt + 1}
                 continue
@@ -1688,7 +1688,7 @@ def click_turnstile(sid):
 
             # Give CF time to validate this SINGLE xdotool click before giving up
             # or retrying — no fast re-clicks.
-            tok = _poll_turnstile_token(sb, 8)
+            tok = _poll_turnstile_token(sb, 6)
             if tok and len(tok) > 20:
                 return {"solved": True, "method": "xdotool", "attempt": attempt + 1}
 
