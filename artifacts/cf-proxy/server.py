@@ -85,6 +85,10 @@ _CHROMIUM_ARGS = [
     "--no-default-browser-check",
     "--disable-features=IsolateOrigins,site-per-process",
     "--disable-site-isolation-trials",
+    # Stop WebRTC/STUN from leaking the real IP by bypassing the proxy (WebRTC
+    # uses direct UDP). Keeps RTCPeerConnection present (so "no WebRTC" is not a
+    # tell) but only allows proxied UDP -> no real-IP STUN leak.
+    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
 ]
 
 # Resolve Chrome binary once at module level
@@ -342,25 +346,52 @@ def _detect_geo(proxy):
     with _geo_lock:
         if key in _geo_cache:
             return _geo_cache[key]
+
+    import requests as _rq
+    proxies = None
+    if proxy:
+        p = proxy
+        if p.startswith("socks5h://") or p.startswith("socks4a://") or p.startswith("socks://"):
+            p = "socks5://" + p.split("//", 1)[1]
+        proxies = {"http": p, "https": p}
+    pmask = (proxy or "direct").split("@")[-1]
+
+    # Try a couple of free, no-key geo services with a retry each. WARP exits via
+    # Cloudflare's shared IPs, which ip-api.com often rate-limits/blocks (that is
+    # why France-over-WARP silently fell back to UTC/en-US), and a fresh proxy
+    # tunnel may not be up on the first try — so retry and try a fallback source.
+    endpoints = [
+        ("http://ip-api.com/json/?fields=status,message,timezone,countryCode",
+         lambda d: (d.get("timezone"), (d.get("countryCode") or "").upper())),
+        ("https://ipwho.is/",
+         lambda d: ((d.get("timezone") or {}).get("id"), (d.get("country_code") or "").upper())),
+        ("https://ipapi.co/json/",
+         lambda d: (d.get("timezone"), (d.get("country_code") or d.get("country") or "").upper())),
+    ]
     tz, locale = None, None
-    try:
-        import requests as _rq
-        proxies = None
-        if proxy:
-            p = proxy
-            if p.startswith("socks5h://") or p.startswith("socks4a://") or p.startswith("socks://"):
-                p = "socks5://" + p.split("//", 1)[1]
-            proxies = {"http": p, "https": p}
-        r = _rq.get(
-            "http://ip-api.com/json/?fields=timezone,countryCode",
-            proxies=proxies, timeout=8,
-        )
-        d = r.json() if r is not None else {}
-        tz = d.get("timezone") or None
-        cc = (d.get("countryCode") or "").upper()
-        locale = _CC_LOCALE.get(cc)
-    except Exception as e:
-        print(f"[fingerprint] geo detect failed: {e}", flush=True)
+    for url, parse in endpoints:
+        host = url.split("/")[2]
+        for attempt in range(2):
+            try:
+                r = _rq.get(url, proxies=proxies, timeout=12, headers={"User-Agent": "curl/8"})
+                d = r.json()
+                _tz, cc = parse(d)
+                if _tz:
+                    tz, locale = _tz, _CC_LOCALE.get(cc)
+                    print(f"[fingerprint] geo via {host} proxy={pmask} -> "
+                          f"tz={tz} cc={cc} locale={locale}", flush=True)
+                    break
+                print(f"[fingerprint] geo {host} proxy={pmask} attempt {attempt+1}: "
+                      f"no tz in {str(d)[:120]}", flush=True)
+            except Exception as e:
+                print(f"[fingerprint] geo {host} proxy={pmask} attempt {attempt+1} failed: {e}", flush=True)
+            time.sleep(1)
+        if tz:
+            break
+
+    if not tz:
+        print(f"[fingerprint] geo detect FAILED for proxy={pmask} — "
+              f"timezone/locale stay default. Set them manually per task.", flush=True)
     with _geo_lock:
         _geo_cache[key] = (tz, locale)
     return tz, locale
