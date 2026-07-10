@@ -1098,16 +1098,17 @@ def goto(sid):
     max_retries = body.get("max_retries", DEFAULT_MAX_RETRIES)
     timeout = body.get("timeout", 60)
 
-    _fp = getattr(s, "fingerprint", None)
-    _proxy = getattr(s, "proxy", None)
-
     def _fn(sb):
         if bypass_cf:
             sb.uc_open_with_reconnect(url, reconnect_time=reconnect_time)
-            # uc_open_with_reconnect drops CDP overrides on reconnect — re-apply
-            # the fingerprint so it is active for the widget/Turnstile validation
-            # that follows.
-            _apply_fingerprint(sb, _proxy, _fp)
+            # DO NOT touch CDP here. The whole point of uc_open_with_reconnect is
+            # that CDP is disconnected so Cloudflare can't see automation. An
+            # embedded Turnstile widget keeps evaluating after the page loads, so
+            # any execute_cdp_cmd / execute_script now (e.g. re-applying the
+            # fingerprint) re-exposes the automation mid-validation and the widget
+            # reports "Verification failed". The fingerprint's durable parts
+            # (UA / timezone / language) are already baked in at launch and need
+            # no CDP; platform/UA-CH are handled out-of-band, not here.
 
             # ── Post-navigation CF challenge handling ────────────────────
             # uc_open_with_reconnect handles JS challenges by disconnecting
@@ -1161,31 +1162,6 @@ def goto(sid):
                             time.sleep(3)
                     except Exception:
                         pass
-
-        # navigator.platform / userAgentData / WebGL / languages can only be set
-        # via CDP + an on-new-document init script, both of which
-        # uc_open_with_reconnect drops. Re-applying them lands AFTER the landing
-        # page (and its Web Workers) already read the real Linux values, so the
-        # page still fingerprints as Linux even though the UA string (launch
-        # flag) says Windows. Once CF has cleared, reload ONCE: the freshly
-        # re-applied CDP UA-CH + init script then run before the new document's
-        # scripts, so userAgentData/platform/WebGL/languages come out spoofed.
-        # The cf_clearance cookie makes the reload pass without a new challenge.
-        _fp_os = ((_fp or {}).get("os") or "").strip().lower()
-        if bypass_cf and _fp_os in ("windows", "mac") and not _is_cf_challenge(sb):
-            try:
-                # Ensure the overrides are registered on the CURRENT CDP session
-                # (a CF-retry reconnect above may have dropped them again) BEFORE
-                # the reload so they apply to the new document.
-                _apply_fingerprint(sb, _proxy, _fp)
-                sb.refresh()
-                time.sleep(1)
-                if _is_cf_challenge(sb):
-                    # Unexpected re-challenge on reload — recover the page.
-                    sb.uc_open_with_reconnect(url, reconnect_time=reconnect_time)
-                    _apply_fingerprint(sb, _proxy, _fp)
-            except Exception as e:
-                print(f"[fingerprint] post-load reload failed: {e}", flush=True)
 
         cf_status = "challenged" if _is_cf_challenge(sb) else "passed"
         return {"url": sb.get_current_url(), "cf_status": cf_status}
@@ -1690,15 +1666,25 @@ def _turnstile_token(sb):
 
 
 def _poll_turnstile_token(sb, secs):
-    """Poll for the Turnstile token for up to `secs`. Give CF time to validate
-    AFTER a single click instead of mashing the checkbox (rapid repeated clicks
-    make Turnstile show 'Verification failed')."""
-    deadline = time.time() + secs
+    """Wait for the Turnstile token for up to `secs`.
+
+    Cloudflare validates the click over the next few seconds and is watching for
+    automation the whole time. Reading the token uses execute_script (CDP), so
+    polling every second pokes the page throughout CF's validation window and
+    itself trips 'Verification failed'. Instead stay SILENT for an initial quiet
+    window (this is what the known-good 07-05 build did with a plain sleep), then
+    check only sparingly."""
+    quiet = min(3.0, secs)
+    time.sleep(quiet)
+    tok = _turnstile_token(sb)
+    if tok and len(tok) > 20:
+        return tok
+    deadline = time.time() + max(0.0, secs - quiet)
     while time.time() < deadline:
+        time.sleep(2)
         tok = _turnstile_token(sb)
         if tok and len(tok) > 20:
             return tok
-        time.sleep(1)
     return _turnstile_token(sb)
 
 
