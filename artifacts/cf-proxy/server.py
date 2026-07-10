@@ -1651,6 +1651,47 @@ def _raise_window(wid):
             pass
 
 
+def _human_mouse_drift(target_x=None, target_y=None):
+    """Move the shared Xvfb :99 pointer along a jittery, eased, human-like path.
+
+    Turnstile's behavioural check watches the pointer; a dead-static page scores
+    bot-like. The previous mouse-sim did this from the app container with ONE
+    HTTP round-trip PER move (100-200 moves = minutes), so it was cut. This does
+    it NATIVELY with local xdotool: fast (~1-1.5s), and genuine OS-level input
+    (isTrusted=true) that never touches CDP — so it can't re-expose automation.
+
+    Caller must hold _gui_lock and have raised the right window (the pointer is
+    shared across sessions on the one display).
+    """
+    import subprocess, random
+    try:
+        out = subprocess.run(
+            ["xdotool", "getmouselocation", "--shell"],
+            capture_output=True, text=True, timeout=2,
+        ).stdout
+        pos = {k: int(v) for k, v in (p.split("=", 1) for p in out.split() if "=" in p)
+               if k in ("X", "Y")}
+        x0, y0 = pos.get("X", 640), pos.get("Y", 400)
+    except Exception:
+        x0, y0 = 640, 400
+    tx = target_x if target_x is not None else random.randint(480, 820)
+    ty = target_y if target_y is not None else random.randint(340, 560)
+    steps = random.randint(18, 30)
+    for i in range(1, steps + 1):
+        t = i / steps
+        ease = t * t * (3 - 2 * t)  # smoothstep in/out
+        x = x0 + (tx - x0) * ease + random.uniform(-6, 6)
+        y = y0 + (ty - y0) * ease + random.uniform(-6, 6)
+        try:
+            subprocess.run(
+                ["xdotool", "mousemove", "--sync", str(int(x)), str(int(y))],
+                timeout=1, capture_output=True,
+            )
+        except Exception:
+            pass
+        time.sleep(random.uniform(0.01, 0.045))
+
+
 def _turnstile_token(sb):
     """Return the Turnstile response token (native OR reCAPTCHA-compat), or ''."""
     try:
@@ -1709,6 +1750,16 @@ def click_turnstile(sid):
         tok = _turnstile_token(sb)
         if tok and len(tok) > 20:
             return {"solved": True, "method": "auto", "attempt": 0}
+
+        # Give Turnstile's behavioural check a live, human-like pointer BEFORE it
+        # finishes verifying — a dead-static page scores bot-like. Native OS
+        # movement (no HTTP per move, no CDP).
+        try:
+            with _gui_lock:
+                _raise_window(_find_session_window(sb))
+                _human_mouse_drift()
+        except Exception:
+            pass
 
         # Non-interactive Turnstile (the "Verifying..." spinner with no checkbox)
         # issues a token ON ITS OWN — clicking it does nothing, or disturbs and
