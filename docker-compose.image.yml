@@ -52,6 +52,14 @@
         CF_RECONNECT_TIME: "${CF_RECONNECT_TIME:-4}"
         SESSION_TIMEOUT_S: "1800"
         POOL_SIZE: "${POOL_SIZE:-1}"
+        # 指纹伪装（默认关；设 windows/mac 才生效）+ 语音识别引擎
+        FINGERPRINT_OS: "${FINGERPRINT_OS:-}"
+        FINGERPRINT_TZ: "${FINGERPRINT_TZ:-}"
+        FINGERPRINT_LOCALE: "${FINGERPRINT_LOCALE:-}"
+        FINGERPRINT_LANGS: "${FINGERPRINT_LANGS:-}"
+        FINGERPRINT_AUTOGEO: "${FINGERPRINT_AUTOGEO:-1}"
+        WHISPER_MODEL: "${WHISPER_MODEL:-small}"
+        STT_ENGINE: "${STT_ENGINE:-whisper}"
       shm_size: 2g
       healthcheck:
         test: ["CMD-SHELL", "wget -qO- http://localhost:7317/health || exit 1"]
@@ -74,6 +82,9 @@
         BROWSERLESS_URL: "ws://browserless:3000"
         BROWSER_PROVIDER: "${BROWSER_PROVIDER:-playwright}"
         CF_PROXY_URL: "http://cf-proxy:7317"
+        LOG_LEVEL: "${LOG_LEVEL:-info}"
+        WIT_AI_TOKEN: "${WIT_AI_TOKEN:-}"
+        RECAPTCHA_STT_ORDER: "${RECAPTCHA_STT_ORDER:-}"
       ports:
         - "${PORT:-80}:8080"
       volumes:
