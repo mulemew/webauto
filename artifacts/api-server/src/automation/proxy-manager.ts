@@ -305,6 +305,36 @@ function decodeBase64(s: string): string {
   ).toString("utf8");
 }
 
+/**
+ * Build a sing-box WebSocket transport, correctly handling the v2ray/xray
+ * early-data convention where the path carries `?ed=<n>` (e.g. `/secret?ed=2560`).
+ *
+ * Real clients (v2rayN / nekoray) split that into `max_early_data` +
+ * `early_data_header_name: "Sec-WebSocket-Protocol"`. Our previous parser passed
+ * the whole `/secret?ed=2560` through as the literal WS path, so the upstream
+ * request-target contained a stray `?ed=2560` and no early-data header — which
+ * breaks Cloudflare-Worker WS tunnels that route on an exact path (the node
+ * still opened its local SOCKS port, but the outbound never connected, so Chrome
+ * failed with ERR_SOCKS_CONNECTION_FAILED). Splitting `ed` out fixes it and
+ * matches how the same share link behaves in a normal client.
+ */
+function buildWsTransport(rawPath: string | null, host: string | null): Record<string, unknown> {
+  let wsPath = rawPath || "/";
+  const transport: Record<string, unknown> = { type: "ws" };
+  const qIdx = wsPath.indexOf("?");
+  if (qIdx !== -1) {
+    const ed = new URLSearchParams(wsPath.slice(qIdx + 1)).get("ed");
+    wsPath = wsPath.slice(0, qIdx) || "/";
+    if (ed && /^\d+$/.test(ed)) {
+      transport.max_early_data = parseInt(ed, 10);
+      transport.early_data_header_name = "Sec-WebSocket-Protocol";
+    }
+  }
+  transport.path = wsPath;
+  if (host) transport.headers = { Host: host };
+  return transport;
+}
+
 /** Parse a vmess:// base64 JSON link into a sing-box vmess outbound. */
 function parseVmess(link: string): Record<string, unknown> {
   const raw = link.replace(/^vmess:\/\//i, "").trim();
@@ -327,11 +357,7 @@ function parseVmess(link: string): Record<string, unknown> {
     };
   const net = json.net || "tcp";
   if (net === "ws") {
-    outbound.transport = {
-      type: "ws",
-      path: json.path || "/",
-      headers: json.host ? { Host: json.host } : undefined,
-    };
+    outbound.transport = buildWsTransport(json.path || "/", json.host || null);
   } else if (net === "grpc") {
     outbound.transport = { type: "grpc", service_name: json.path || "" };
   }
@@ -370,11 +396,7 @@ function parseVless(link: string): Record<string, unknown> {
   }
   const type = params.get("type") || "tcp";
   if (type === "ws") {
-    outbound.transport = {
-      type: "ws",
-      path: params.get("path") || "/",
-      headers: params.get("host") ? { Host: params.get("host") } : undefined,
-    };
+    outbound.transport = buildWsTransport(params.get("path"), params.get("host"));
   } else if (type === "grpc") {
     outbound.transport = {
       type: "grpc",
@@ -402,11 +424,7 @@ function parseTrojan(link: string): Record<string, unknown> {
   };
   const type = params.get("type");
   if (type === "ws") {
-    outbound.transport = {
-      type: "ws",
-      path: params.get("path") || "/",
-      headers: params.get("host") ? { Host: params.get("host") } : undefined,
-    };
+    outbound.transport = buildWsTransport(params.get("path"), params.get("host"));
   }
   return outbound;
 }
