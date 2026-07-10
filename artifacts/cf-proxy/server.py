@@ -1162,6 +1162,31 @@ def goto(sid):
                     except Exception:
                         pass
 
+        # navigator.platform / userAgentData / WebGL / languages can only be set
+        # via CDP + an on-new-document init script, both of which
+        # uc_open_with_reconnect drops. Re-applying them lands AFTER the landing
+        # page (and its Web Workers) already read the real Linux values, so the
+        # page still fingerprints as Linux even though the UA string (launch
+        # flag) says Windows. Once CF has cleared, reload ONCE: the freshly
+        # re-applied CDP UA-CH + init script then run before the new document's
+        # scripts, so userAgentData/platform/WebGL/languages come out spoofed.
+        # The cf_clearance cookie makes the reload pass without a new challenge.
+        _fp_os = ((_fp or {}).get("os") or "").strip().lower()
+        if bypass_cf and _fp_os in ("windows", "mac") and not _is_cf_challenge(sb):
+            try:
+                # Ensure the overrides are registered on the CURRENT CDP session
+                # (a CF-retry reconnect above may have dropped them again) BEFORE
+                # the reload so they apply to the new document.
+                _apply_fingerprint(sb, _proxy, _fp)
+                sb.refresh()
+                time.sleep(1)
+                if _is_cf_challenge(sb):
+                    # Unexpected re-challenge on reload — recover the page.
+                    sb.uc_open_with_reconnect(url, reconnect_time=reconnect_time)
+                    _apply_fingerprint(sb, _proxy, _fp)
+            except Exception as e:
+                print(f"[fingerprint] post-load reload failed: {e}", flush=True)
+
         cf_status = "challenged" if _is_cf_challenge(sb) else "passed"
         return {"url": sb.get_current_url(), "cf_status": cf_status}
 
