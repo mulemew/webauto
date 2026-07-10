@@ -366,21 +366,32 @@ def _detect_geo(proxy):
     return tz, locale
 
 
-def _resolve_tz_locale(proxy):
-    """Manual env wins; otherwise auto-detect from the exit IP if enabled."""
-    tz = FINGERPRINT_TZ or None
-    locale = FINGERPRINT_LOCALE or None
-    if (not tz or not locale) and FINGERPRINT_AUTOGEO:
+def _resolve_tz_locale(proxy, man_tz, man_locale, auto_geo):
+    """Manual value wins; otherwise auto-detect from the exit IP if enabled."""
+    tz = man_tz or None
+    locale = man_locale or None
+    if (not tz or not locale) and auto_geo:
         auto_tz, auto_locale = _detect_geo(proxy)
         tz = tz or auto_tz
         locale = locale or auto_locale
     return tz, (locale or "en-US")
 
 
-def _apply_fingerprint(sb, proxy=None):
-    """Overlay a consistent OS fingerprint on this session via CDP (opt-in)."""
-    if FINGERPRINT_OS not in ("windows", "mac"):
+def _apply_fingerprint(sb, proxy=None, fp=None):
+    """Overlay a consistent OS fingerprint on this session via CDP.
+
+    `fp` is the per-session config from POST /sessions ({os,timezone,locale,
+    auto_geo}); when absent, falls back to the FINGERPRINT_* env defaults. No-op
+    unless an OS profile is selected. Must be RE-APPLIED after every
+    uc_open_with_reconnect (that drops CDP overrides).
+    """
+    fp = fp or {}
+    os_name = (fp.get("os") or FINGERPRINT_OS or "").strip().lower()
+    if os_name not in ("windows", "mac"):
         return
+    man_tz = (fp.get("timezone") if fp.get("timezone") is not None else FINGERPRINT_TZ) or ""
+    man_locale = (fp.get("locale") if fp.get("locale") is not None else FINGERPRINT_LOCALE) or ""
+    auto_geo = fp.get("auto_geo") if fp.get("auto_geo") is not None else FINGERPRINT_AUTOGEO
     try:
         import re as _re
         ver = _get_chrome_version(_CHROME_BIN) or ""
@@ -388,11 +399,11 @@ def _apply_fingerprint(sb, proxy=None):
         full = m.group(0) if m else "150.0.0.0"
         major = full.split(".")[0]
 
-        tz, locale = _resolve_tz_locale(proxy)
+        tz, locale = _resolve_tz_locale(proxy, man_tz, man_locale, auto_geo)
         langs = FINGERPRINT_LANGS or (f"{locale},{locale.split('-')[0]},en" if locale else "en-US,en")
         lang_list = [x.strip() for x in langs.split(",") if x.strip()]
 
-        if FINGERPRINT_OS == "windows":
+        if os_name == "windows":
             ua = (f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36")
             platform = "Win32"
@@ -460,7 +471,7 @@ def _apply_fingerprint(sb, proxy=None):
         )
         sb.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": init_js})
         print(
-            f"[fingerprint] applied {FINGERPRINT_OS} profile "
+            f"[fingerprint] applied {os_name} profile "
             f"(Chrome {major}, tz={tz or 'default'}, locale={locale})",
             flush=True,
         )
@@ -545,6 +556,9 @@ class SessionThread:
         # We normalize the incoming URL before passing it to SB so callers can
         # send a full proxy URL without needing to know SeleniumBase's quirks.
         self.proxy = (proxy or "").strip() or None
+        # Per-session fingerprint config ({os,timezone,locale,auto_geo}); set by
+        # create_session and re-applied after every uc_open_with_reconnect.
+        self.fingerprint = None
         self._log_dir = os.path.join("/tmp/cf-proxy-logs", self.session_id)
         os.makedirs(self._log_dir, exist_ok=True)
         self._chrome_stdout_path = os.path.join(self._log_dir, "chrome.stdout.log")
@@ -640,7 +654,7 @@ class SessionThread:
                     with SB(**_kw) as sb:
                         # Overlay an OS fingerprint (opt-in; no-op unless
                         # FINGERPRINT_OS is set) before the session serves goto.
-                        _apply_fingerprint(sb, self.proxy)
+                        _apply_fingerprint(sb, self.proxy, self.fingerprint)
                         self._res_q.put({"ok": True})
                         while True:
                             item = self._cmd_q.get()
@@ -934,6 +948,7 @@ def health():
 def create_session():
     body = request.json if request.is_json else {}
     proxy = (body or {}).get("proxy") if isinstance(body, dict) else None
+    fp = (body or {}).get("fingerprint") if isinstance(body, dict) else None
     try:
         if proxy:
             # A proxy must be set at Chrome launch, so it cannot come from the
@@ -944,6 +959,14 @@ def create_session():
             s = _pool.acquire()
     except Exception as e:
         return _err(str(e), 500)
+    # Apply the per-session fingerprint (warm-pool sessions were launched without
+    # it, so apply it at runtime here — CDP overrides work on a live session).
+    if isinstance(fp, dict) and fp.get("os"):
+        s.fingerprint = fp
+        try:
+            s.run(lambda sb: _apply_fingerprint(sb, s.proxy, fp), timeout=40)
+        except Exception as e:
+            print(f"[fingerprint] apply-on-create failed: {e}", flush=True)
     with _sessions_lock:
         _sessions[s.session_id] = s
     return jsonify({"session_id": s.session_id}), 201
@@ -970,9 +993,16 @@ def goto(sid):
     max_retries = body.get("max_retries", DEFAULT_MAX_RETRIES)
     timeout = body.get("timeout", 60)
 
+    _fp = getattr(s, "fingerprint", None)
+    _proxy = getattr(s, "proxy", None)
+
     def _fn(sb):
         if bypass_cf:
             sb.uc_open_with_reconnect(url, reconnect_time=reconnect_time)
+            # uc_open_with_reconnect drops CDP overrides on reconnect — re-apply
+            # the fingerprint so it is active for the widget/Turnstile validation
+            # that follows.
+            _apply_fingerprint(sb, _proxy, _fp)
 
             # ── Post-navigation CF challenge handling ────────────────────
             # uc_open_with_reconnect handles JS challenges by disconnecting

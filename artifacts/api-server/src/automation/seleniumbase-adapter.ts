@@ -416,7 +416,24 @@
         }
       }
 
-      const body = proxyServerUrl ? { proxy: proxyServerUrl } : undefined;
+      // Forward the page-configured fingerprint (if any) so cf-proxy applies the
+      // OS profile per session. Only include it when an OS is actually selected.
+      const fp = this.config?.fingerprint;
+      const fpBody =
+        fp && fp.os && fp.os !== "off"
+          ? {
+              fingerprint: {
+                os: fp.os,
+                timezone: fp.timezone ?? "",
+                locale: fp.locale ?? "",
+                auto_geo: fp.autoGeo !== false,
+              },
+            }
+          : undefined;
+      const body =
+        proxyServerUrl || fpBody
+          ? { ...(proxyServerUrl ? { proxy: proxyServerUrl } : {}), ...(fpBody ?? {}) }
+          : undefined;
       let res: Response;
       try {
         res = await fetch(`${baseUrl}/sessions`, {

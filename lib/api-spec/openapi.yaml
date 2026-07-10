@@ -793,6 +793,24 @@ components:
           type: ["boolean", "null"]
         sessionTimeoutMs:
           type: ["integer", "null"]
+        fingerprint:
+          type: ["object", "null"]
+          description: >
+            Browser fingerprint spoofing (SeleniumBase/cf-proxy backend only).
+            Overlays a Windows/Mac OS profile (UA, UA-CH, platform, WebGL, timezone,
+            locale). Leave os empty/off for the honest Linux fingerprint.
+          properties:
+            os:
+              type: string
+              enum: ["", windows, mac]
+            timezone:
+              type: string
+              description: IANA timezone; empty = auto-detect from exit IP
+            locale:
+              type: string
+              description: BCP-47 locale; empty = auto-detect from exit IP
+            autoGeo:
+              type: boolean
 
     WorkflowStep:
       oneOf:

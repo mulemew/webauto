@@ -292,6 +292,7 @@ export const ListTasksResponseItem = zod.object({
           blockAds: zod.boolean().nullish(),
           ignoreHTTPS: zod.boolean().nullish(),
           sessionTimeoutMs: zod.number().nullish(),
+          fingerprint: zod.object({ os: zod.string().nullish(), timezone: zod.string().nullish(), locale: zod.string().nullish(), autoGeo: zod.boolean().nullish() }).nullish(),
         })
         .describe(
           "Per-task browser backend override. When set, these values are merged over the global browser config (Settings page), letting each task use a different execution backend.\n",
@@ -538,6 +539,7 @@ export const CreateTaskBody = zod.object({
           blockAds: zod.boolean().nullish(),
           ignoreHTTPS: zod.boolean().nullish(),
           sessionTimeoutMs: zod.number().nullish(),
+          fingerprint: zod.object({ os: zod.string().nullish(), timezone: zod.string().nullish(), locale: zod.string().nullish(), autoGeo: zod.boolean().nullish() }).nullish(),
         })
         .describe(
           "Per-task browser backend override. When set, these values are merged over the global browser config (Settings page), letting each task use a different execution backend.\n",
@@ -809,6 +811,7 @@ export const GetTaskResponse = zod
             blockAds: zod.boolean().nullish(),
             ignoreHTTPS: zod.boolean().nullish(),
             sessionTimeoutMs: zod.number().nullish(),
+            fingerprint: zod.object({ os: zod.string().nullish(), timezone: zod.string().nullish(), locale: zod.string().nullish(), autoGeo: zod.boolean().nullish() }).nullish(),
           })
           .describe(
             "Per-task browser backend override. When set, these values are merged over the global browser config (Settings page), letting each task use a different execution backend.\n",
@@ -1072,6 +1075,7 @@ export const UpdateTaskBody = zod.object({
           blockAds: zod.boolean().nullish(),
           ignoreHTTPS: zod.boolean().nullish(),
           sessionTimeoutMs: zod.number().nullish(),
+          fingerprint: zod.object({ os: zod.string().nullish(), timezone: zod.string().nullish(), locale: zod.string().nullish(), autoGeo: zod.boolean().nullish() }).nullish(),
         })
         .describe(
           "Per-task browser backend override. When set, these values are merged over the global browser config (Settings page), letting each task use a different execution backend.\n",
@@ -1331,6 +1335,7 @@ export const UpdateTaskResponse = zod.object({
           blockAds: zod.boolean().nullish(),
           ignoreHTTPS: zod.boolean().nullish(),
           sessionTimeoutMs: zod.number().nullish(),
+          fingerprint: zod.object({ os: zod.string().nullish(), timezone: zod.string().nullish(), locale: zod.string().nullish(), autoGeo: zod.boolean().nullish() }).nullish(),
         })
         .describe(
           "Per-task browser backend override. When set, these values are merged over the global browser config (Settings page), letting each task use a different execution backend.\n",

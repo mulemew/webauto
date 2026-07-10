@@ -109,6 +109,22 @@ export interface BrowserProviderConfig {
      * Browser viewport height in pixels. See viewportWidth.
      */
     viewportHeight?: number;
+    /**
+     * Browser fingerprint spoofing (cf-proxy / SeleniumBase backend only).
+     * Configured page-side (global default in Settings, per-task override in the
+     * task form) and forwarded to cf-proxy's POST /sessions. Leave os empty/off
+     * for the honest (Linux) fingerprint.
+     */
+    fingerprint?: {
+      /** "windows" | "mac" | "" (off) */
+      os?: string;
+      /** IANA timezone, e.g. "America/New_York". Empty = auto-detect from exit IP. */
+      timezone?: string;
+      /** BCP-47 locale, e.g. "en-US". Empty = auto-detect from exit IP. */
+      locale?: string;
+      /** Auto-detect timezone/locale from the exit IP when they are not set. Default true. */
+      autoGeo?: boolean;
+    };
   }
 
 export interface BrowserProvider {

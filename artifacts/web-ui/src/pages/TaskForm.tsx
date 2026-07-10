@@ -168,6 +168,11 @@ interface BrowserConfigState {
   blockAds: boolean;
   ignoreHTTPS: boolean;
   sessionTimeoutMs: string;
+  // Fingerprint spoofing (cf-proxy / SeleniumBase only)
+  fpOs: "" | "windows" | "mac";
+  fpTimezone: string;
+  fpLocale: string;
+  fpAutoGeo: boolean;
 }
 
 const defaultBrowserConfig: BrowserConfigState = {
@@ -181,6 +186,10 @@ const defaultBrowserConfig: BrowserConfigState = {
   blockAds: false,
   ignoreHTTPS: false,
   sessionTimeoutMs: "",
+  fpOs: "",
+  fpTimezone: "",
+  fpLocale: "",
+  fpAutoGeo: true,
 };
 
 const PROVIDER_LABELS: Record<BrowserProvider, string> = {
@@ -368,6 +377,16 @@ export default function TaskForm() {
           sessionTimeoutMs: bc.sessionTimeoutMs
             ? String(bc.sessionTimeoutMs)
             : "",
+          fpOs: ((bc.fingerprint as Record<string, unknown> | undefined)?.os as
+            | ""
+            | "windows"
+            | "mac") || "",
+          fpTimezone:
+            ((bc.fingerprint as Record<string, unknown> | undefined)?.timezone as string) || "",
+          fpLocale:
+            ((bc.fingerprint as Record<string, unknown> | undefined)?.locale as string) || "",
+          fpAutoGeo:
+            ((bc.fingerprint as Record<string, unknown> | undefined)?.autoGeo as boolean) ?? true,
         });
         setBrowserConfigExpanded(true);
       }
@@ -388,6 +407,14 @@ export default function TaskForm() {
       ignoreHTTPS: browserConfig.ignoreHTTPS || null,
       sessionTimeoutMs: browserConfig.sessionTimeoutMs
         ? parseInt(browserConfig.sessionTimeoutMs, 10)
+        : null,
+      fingerprint: browserConfig.fpOs
+        ? {
+            os: browserConfig.fpOs,
+            timezone: browserConfig.fpTimezone.trim(),
+            locale: browserConfig.fpLocale.trim(),
+            autoGeo: browserConfig.fpAutoGeo,
+          }
         : null,
     };
   };
@@ -895,6 +922,80 @@ export default function TaskForm() {
                         }
                       />
                     </div>
+
+                    {/* 浏览器指纹伪装（仅 SeleniumBase / cf-proxy 生效）*/}
+                    {browserConfig.provider === "seleniumbase" && (
+                      <div className="space-y-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
+                        <div>
+                          <p className="text-sm font-medium">浏览器指纹伪装</p>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            把 Linux 指纹伪装成 Windows/Mac（UA、平台、WebGL、时区、语言）。
+                            Windows 伪装度更高。半吊子伪装可能反而更难过 CF，开启后请实测对比。
+                          </p>
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-sm font-medium">操作系统画像</label>
+                          <Select
+                            value={browserConfig.fpOs || "off"}
+                            onValueChange={(v) =>
+                              setBrowserConfig((s) => ({
+                                ...s,
+                                fpOs: v === "off" ? "" : (v as "windows" | "mac"),
+                              }))
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="off">关闭（真实 Linux 指纹）</SelectItem>
+                              <SelectItem value="windows">Windows（推荐）</SelectItem>
+                              <SelectItem value="mac">Mac</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {browserConfig.fpOs && (
+                          <>
+                            <div className="flex items-center justify-between rounded-md border border-border px-3 py-2.5">
+                              <div>
+                                <p className="text-xs font-medium">按出口 IP 自动设时区/语言</p>
+                                <p className="text-[10px] text-muted-foreground">
+                                  开启后忽略下面手填的值，按代理出口 IP 自动对齐
+                                </p>
+                              </div>
+                              <Switch
+                                checked={browserConfig.fpAutoGeo}
+                                onCheckedChange={(v) =>
+                                  setBrowserConfig((s) => ({ ...s, fpAutoGeo: v }))
+                                }
+                              />
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <div className="space-y-1.5">
+                                <label className="text-sm font-medium">时区</label>
+                                <Input
+                                  placeholder="America/New_York（留空=自动）"
+                                  value={browserConfig.fpTimezone}
+                                  onChange={(e) =>
+                                    setBrowserConfig((s) => ({ ...s, fpTimezone: e.target.value }))
+                                  }
+                                />
+                              </div>
+                              <div className="space-y-1.5">
+                                <label className="text-sm font-medium">语言</label>
+                                <Input
+                                  placeholder="en-US（留空=自动）"
+                                  value={browserConfig.fpLocale}
+                                  onChange={(e) =>
+                                    setBrowserConfig((s) => ({ ...s, fpLocale: e.target.value }))
+                                  }
+                                />
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
 
                     {/* Toggles */}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
