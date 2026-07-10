@@ -440,9 +440,20 @@ class SessionThread:
                         _kw["binary_location"] = _CHROME_BIN
                     if self.proxy:
                         proxy = self.proxy
-                        is_socks = proxy.startswith("socks5://") or proxy.startswith("socks4://") or proxy.startswith("socks://")
-                        if proxy.startswith("socks://"):
-                            proxy = "socks5://" + proxy.split("//", 1)[1]
+                        is_socks = (
+                            proxy.startswith("socks5://") or proxy.startswith("socks5h://")
+                            or proxy.startswith("socks4://") or proxy.startswith("socks4a://")
+                            or proxy.startswith("socks://")
+                        )
+                        # Normalise every SOCKS variant to socks5:// for Chrome's
+                        # --proxy-server (it does remote DNS for socks5 anyway).
+                        # socks5h:// in particular was NOT recognised before, so it
+                        # fell through to SB(proxy=socks5h://…) and failed with
+                        # "Proxy String is NOT in the expected format".
+                        for _scheme in ("socks://", "socks5h://", "socks4a://"):
+                            if proxy.startswith(_scheme):
+                                proxy = "socks5://" + proxy.split("//", 1)[1]
+                                break
                         if is_socks:
                             ok, err = _is_proxy_reachable(proxy)
                             if not ok:
