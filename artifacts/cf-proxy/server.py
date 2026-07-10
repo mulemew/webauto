@@ -217,6 +217,13 @@ def _tail_file(path: str | None, max_bytes: int = 6000) -> str:
         return ""
 
 
+def _free_tcp_port() -> int:
+    """Pick a currently free localhost TCP port for UC remote debugging."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
 def _get_chrome_version(binary: str | None) -> str | None:
     if not binary:
         return None
@@ -559,6 +566,16 @@ class SessionThread:
         # Per-session fingerprint config ({os,timezone,locale,auto_geo}); set by
         # create_session and re-applied after every uc_open_with_reconnect.
         self.fingerprint = None
+        # Explicit per-session profile dir + fixed debug port. Restored from
+        # commit 26dcc23's removal: the 07-08 build that passed BOTH justrunmy.app
+        # and betadash Cloudflare launched Chrome with these; letting UC pick its
+        # own regressed the CF bypass. undetected-chromedriver's disconnect/
+        # reconnect (uc_open_with_reconnect / uc_gui_click_captcha) — the mechanism
+        # that hides automation from Cloudflare — is more reliable with a stable
+        # profile + debug port.
+        self._profile_dir = os.path.join("/tmp/cf-proxy-profiles", self.session_id)
+        self._debug_port = _free_tcp_port()
+        os.makedirs(self._profile_dir, exist_ok=True)
         self._log_dir = os.path.join("/tmp/cf-proxy-logs", self.session_id)
         os.makedirs(self._log_dir, exist_ok=True)
         self._chrome_stdout_path = os.path.join(self._log_dir, "chrome.stdout.log")
@@ -609,12 +626,16 @@ class SessionThread:
                     _thread_local.chrome_stderr_path = self._chrome_stderr_path
                     from seleniumbase import SB
                     _assert_uc_driver_accessible()
-                    chrome_args = _join_chromium_args(_CHROMIUM_ARGS)
+                    chrome_args = _join_chromium_args(
+                        _CHROMIUM_ARGS,
+                        f"--remote-debugging-port={self._debug_port}",
+                    )
                     _kw = dict(
                         uc=True,
                         headed=True,
                         xvfb=False,
                         chromium_arg=chrome_args,
+                        user_data_dir=self._profile_dir,
                     )
                     if _CHROME_BIN:
                         _kw["binary_location"] = _CHROME_BIN
@@ -712,6 +733,16 @@ class SessionThread:
                 log_root_real = os.path.realpath("/tmp/cf-proxy-logs")
                 if log_real.startswith(log_root_real + os.sep):
                     shutil.rmtree(log_real, ignore_errors=True)
+        except Exception:
+            pass
+        # Also drop the per-session Chrome profile (restored with 26dcc23 revert).
+        try:
+            prof_dir = getattr(self, "_profile_dir", None)
+            if prof_dir:
+                prof_real = os.path.realpath(prof_dir)
+                prof_root_real = os.path.realpath("/tmp/cf-proxy-profiles")
+                if prof_real.startswith(prof_root_real + os.sep):
+                    shutil.rmtree(prof_real, ignore_errors=True)
         except Exception:
             pass
 
