@@ -9,6 +9,17 @@ type CfChallengeType = "js_challenge" | "turnstile_click" | "waf_blocked" | "non
 let _xdotoolAvailable: boolean | null = null;
 function isXdotoolAvailable(): boolean {
   if (_xdotoolAvailable === null) {
+    // Require BOTH the xdotool binary AND a DISPLAY. The app container ships
+    // xdotool but has NO X server when running the cf-proxy backend (the browser
+    // and Xvfb live in the cf-proxy container), so every xdotool call fails with
+    // "Can't open display: (null) / Failed creating new xdo instance". Only the
+    // local/patchright backend runs Chrome on the app container's own Xvfb
+    // (DISPLAY=:99). Gate on DISPLAY so we never spam those errors or waste time.
+    if (!process.env.DISPLAY) {
+      _xdotoolAvailable = false;
+      logger.debug("No DISPLAY in this container — OS-level xdotool clicking disabled (expected on the cf-proxy backend)");
+      return _xdotoolAvailable;
+    }
     try {
       execSync("which xdotool", { stdio: "ignore" });
       _xdotoolAvailable = true;
@@ -472,12 +483,15 @@ export async function clickTurnstileCheckbox(page: PageAdapter): Promise<boolean
     // which produce OS-level events undetectable by CF.
     if ("clickTurnstile" in page && typeof (page as any).clickTurnstile === "function") {
       logger.info("Using cf-proxy native Turnstile click (uc_gui_click_captcha + xdotool)");
-      const solved = await (page as any).clickTurnstile(3);
-      if (solved) {
-        logger.info("Turnstile solved via cf-proxy native click");
-        return true;
-      }
-      logger.debug("cf-proxy native Turnstile click did not solve — falling back to standard strategies");
+      const solved = await (page as any).clickTurnstile(2);
+      logger.info({ solved }, "cf-proxy native Turnstile click finished");
+      // Do NOT fall through to the Node xdotool/CDP strategies below on the
+      // cf-proxy backend: the browser + X display live in the cf-proxy container,
+      // so THIS app container's xdotool has no DISPLAY ("Can't open display") and
+      // CDP coordinate clicks miss (the generic /mouse/click adds no window/
+      // title-bar offset). Native is the only correct path here — returning its
+      // result avoids ~minutes of doomed retries spamming xdo errors.
+      return solved;
     }
     // ── Step 0: Expand hidden Turnstile containers ──────────────────────
     // Many sites hide the Turnstile iframe inside overflow:hidden containers.

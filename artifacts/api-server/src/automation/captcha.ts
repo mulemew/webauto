@@ -905,7 +905,9 @@ export async function detectAndHandleCaptcha(
       // movement, scroll, keyboard) during the verification phase. A page with
       // zero interaction looks like a headless bot. We simulate human presence
       // throughout the wait to help the PoW pass.
-      const VERIFY_TIMEOUT_MS = 40_000;
+      // Fail fast: a managed Turnstile that is going to auto-solve does so within
+      // ~15 s. Waiting 40 s only delays the (usually doomed) manual-click phase.
+      const VERIFY_TIMEOUT_MS = 15_000;
       const POLL_INTERVAL_MS = 2_000;
       const verifyDeadline = Date.now() + VERIFY_TIMEOUT_MS;
 
@@ -948,17 +950,21 @@ export async function detectAndHandleCaptcha(
         // This is ported from JustRunMy.App's handle_turnstile() approach.
         logger.info("Turnstile not auto-solved after wait — attempting checkbox click (xdotool + CDP)");
 
-        for (let attempt = 1; attempt <= 6; attempt++) {
+        // Bounded retries so a site we cannot solve fails in ~1 min, not many.
+        const MAX_TS_CLICK_ATTEMPTS = 3;
+        for (let attempt = 1; attempt <= MAX_TS_CLICK_ATTEMPTS; attempt++) {
           try {
             // Simulate human presence before each click attempt
             await simulateHumanMouseMovement(page);
             await new Promise((r) => setTimeout(r, 300 + Math.random() * 500));
 
-            // clickTurnstileCheckbox: expand iframe → xdotool → CDP fallback
+            // clickTurnstileCheckbox: cf-proxy backend uses the native clicker;
+            // local/patchright uses xdotool/CDP. (It no longer falls through to
+            // app-container xdotool on cf-proxy — that has no DISPLAY.)
             const clicked = await clickTurnstileCheckbox(page);
             if (!clicked) {
               logger.debug({ attempt }, "Could not locate Turnstile widget to click");
-              if (attempt < 6) await new Promise((r) => setTimeout(r, 2000));
+              if (attempt < MAX_TS_CLICK_ATTEMPTS) await new Promise((r) => setTimeout(r, 2000));
               continue;
             }
 
