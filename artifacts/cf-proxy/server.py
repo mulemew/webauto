@@ -549,10 +549,20 @@ def _write_fp_extension(os_name: str, major: str, full: str, lang_list: list) ->
         ("__UACH__", prof["ua_ch"]),
     ):
         js = js.replace(tok, json.dumps(val))
+    # Accept-Language HTTP header value (e.g. ["pl-PL","pl","en"] ->
+    # "pl-PL,pl;q=0.9,en;q=0.8"). A content script can't set this network-level
+    # header, so a declarativeNetRequest rule below rewrites it — otherwise it
+    # stays en-US and contradicts the spoofed navigator.languages / Intl locale.
+    _al_parts = []
+    for i, lg in enumerate(langs):
+        _al_parts.append(lg if i == 0 else f"{lg};q={max(0.1, round(1.0 - i * 0.1, 1))}")
+    accept_language = ",".join(_al_parts) or "en-US,en"
     manifest = {
         "manifest_version": 3,
         "name": "fp",
         "version": "1.0",
+        "permissions": ["declarativeNetRequest"],
+        "host_permissions": ["<all_urls>"],
         "content_scripts": [{
             "matches": ["<all_urls>"],
             "js": ["fp.js"],
@@ -560,12 +570,34 @@ def _write_fp_extension(os_name: str, major: str, full: str, lang_list: list) ->
             "all_frames": True,
             "world": "MAIN",
         }],
+        "declarative_net_request": {
+            "rule_resources": [{"id": "fp_rules", "enabled": True, "path": "rules.json"}],
+        },
     }
+    rules = [{
+        "id": 1,
+        "priority": 1,
+        "action": {
+            "type": "modifyHeaders",
+            "requestHeaders": [
+                {"header": "accept-language", "operation": "set", "value": accept_language},
+            ],
+        },
+        "condition": {
+            "resourceTypes": [
+                "main_frame", "sub_frame", "stylesheet", "script", "image",
+                "font", "object", "xmlhttprequest", "ping", "media",
+                "websocket", "other",
+            ],
+        },
+    }]
     d = tempfile.mkdtemp(prefix="cf-fp-ext-")
     with open(os.path.join(d, "manifest.json"), "w") as f:
         json.dump(manifest, f)
     with open(os.path.join(d, "fp.js"), "w") as f:
         f.write(js)
+    with open(os.path.join(d, "rules.json"), "w") as f:
+        json.dump(rules, f)
     return d
 
 
