@@ -1950,6 +1950,34 @@ def _element_abs_xy(sb, css, dx=0, dy_frac=0.5, wid=None):
     return (ax, ay)
 
 
+# Un-clip Turnstile widgets hidden inside overflow:hidden / zero-size containers
+# so uc_gui_click_captcha can actually see + click the checkbox. Ported from the
+# TS EXPAND_TURNSTILE_JS; the reference (eooce/katabump-renew) runs the same idea
+# 3x before clicking.
+_EXPAND_JS = r"""
+(function(){
+  var ts = document.querySelector('input[name="cf-turnstile-response"]');
+  var containers = document.querySelectorAll('.cf-turnstile, [data-sitekey]');
+  if (!ts && containers.length === 0) return 'no-turnstile';
+  var el = ts ? ts : containers[0];
+  for (var i = 0; i < 20; i++) {
+    el = el.parentElement; if (!el) break;
+    var s = window.getComputedStyle(el);
+    if (s.overflow === 'hidden' || s.overflowX === 'hidden' || s.overflowY === 'hidden')
+      el.style.overflow = 'visible';
+  }
+  document.querySelectorAll('iframe').forEach(function(f){
+    if (f.src && (f.src.indexOf('challenges.cloudflare.com')>=0 || f.src.indexOf('turnstile')>=0)) {
+      f.style.width='300px'; f.style.height='65px'; f.style.minWidth='300px';
+      f.style.visibility='visible'; f.style.opacity='1';
+      f.style.position='relative'; f.style.zIndex='999999';
+    }
+  });
+  return 'done';
+})()
+"""
+
+
 def _turnstile_token(sb):
     """Return the Turnstile response token (native OR reCAPTCHA-compat), or ''."""
     try:
@@ -2036,35 +2064,46 @@ def click_turnstile(sid):
     timeout = body.get("timeout", 60)
 
     def _fn(sb):
-        import subprocess
-
-        # Already solved (managed / auto mode)?
-        tok = _turnstile_token(sb)
-        if tok and len(tok) > 20:
+        # Ported line-for-line from the known-good eooce/katabump-renew
+        # handle_turnstile (which logs into the same CF-shielded panels with the
+        # exact same SeleniumBase-UC stack). This also matches our own last
+        # working 07-05 build: plain uc_gui_click_captcha, no window-raise, no
+        # detach, no coordinate math — just persistence.
+        time.sleep(2)
+        if _turnstile_token(sb):
             return {"solved": True, "method": "auto", "attempt": 0}
 
-        # Match the known-good reference (eooce/katabump-renew): after the long
-        # uc_open_with_reconnect, just call uc_gui_click_captcha() on a clean
-        # (unspoofed) browser — nothing fancy. We only add: raise THIS session's
-        # window first (the reference runs a single browser; we have a warm-pool
-        # 2nd one on the shared :99), then a quiet sleep for CF to validate.
-        for attempt in range(max_retries):
+        # Expand hidden / zero-size Turnstile containers 3x so uc_gui can click it.
+        for _ in range(3):
             try:
+                sb.execute_script(_EXPAND_JS)
+            except Exception:
+                pass
+            time.sleep(0.5)
+
+        # Up to 6 click attempts; after each, poll the token every 0.5s for 8s.
+        for attempt in range(6):
+            if _turnstile_token(sb):
+                return {"solved": True, "method": "auto", "attempt": attempt}
+            print(f"[turnstile] uc_gui_click_captcha attempt {attempt + 1}", flush=True)
+            try:
+                # _gui_lock only serialises the shared :99 pointer across
+                # concurrent sessions — otherwise identical to the reference.
                 with _gui_lock:
-                    _raise_window(_find_session_window(sb))
-                    time.sleep(0.5)
                     sb.uc_gui_click_captcha()
             except Exception as e:
                 print(f"[turnstile] uc_gui_click_captcha: {e}", flush=True)
-            time.sleep(3)  # let CF validate undisturbed
-            tok = _turnstile_token(sb)
-            if tok and len(tok) > 20:
-                return {"solved": True, "method": "uc_gui", "attempt": attempt + 1}
+            for _ in range(16):
+                time.sleep(0.5)
+                if _turnstile_token(sb):
+                    return {"solved": True, "method": "uc_gui", "attempt": attempt + 1}
 
-        return {"solved": False, "method": "none", "attempt": max_retries}
+        return {"solved": False, "method": "none", "attempt": 6}
 
     try:
-        result = s.run(_fn, timeout=timeout + 10)
+        # 6 attempts x (~2s click + 8s poll) ~= 60s worst case, so give ample
+        # headroom over the caller's timeout.
+        result = s.run(_fn, timeout=max(timeout, 90) + 15)
         return jsonify({"ok": True, **result})
     except Exception as e:
         return _err(str(e), 500)
