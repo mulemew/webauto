@@ -317,17 +317,32 @@ import type { PageAdapter } from "./page-adapter";
       } catch { /* ignore */ }
     }
 
-    // Fallback: find buttons by text content (works with both Playwright and Puppeteer adapters)
+    // Fallback: find buttons by text content (works with both Playwright and
+    // Puppeteer adapters). Match by SUBSTRING, not exact equality — the
+    // known-good reference (eooce/katabump-renew) just does `"Accept" in btn.text`,
+    // so a button labelled "Accept cookies" / "I Accept" / "Accept all cookies"
+    // is dismissed too (our old exact-equality check silently missed all of them).
     try {
       await page.evaluate(() => {
-        const acceptTexts = ["Accept All", "Accept all", "Accept", "OK", "Got it", "接受", "同意", "I agree", "Allow all"];
-        const buttons = Array.from(document.querySelectorAll<HTMLElement>("button, a[role='button'], [class*='btn']"));
+        // Distinctive substrings that are safe to match anywhere in the label.
+        const contains = ["accept", "agree", "allow all", "got it", "接受", "同意", "同意并继续"];
+        // Short/ambiguous labels only matched exactly (so "OK" doesn't fire on
+        // "Bookmark"/"Cookie" etc.).
+        const exact = ["ok", "close", "关闭"];
+        const buttons = Array.from(
+          document.querySelectorAll<HTMLElement>("button, a[role='button'], [role='button'], [class*='btn'], a[class*='accept' i]"),
+        );
         for (const btn of buttons) {
-          const text = btn.textContent?.trim() ?? "";
+          const raw = (btn.textContent ?? "").trim();
+          const text = raw.toLowerCase();
           const style = window.getComputedStyle(btn);
           const rect = btn.getBoundingClientRect();
           if (style.display === "none" || style.visibility === "hidden" || rect.width === 0) continue;
-          if (acceptTexts.some((t) => text === t || text.toLowerCase() === t.toLowerCase())) {
+          if (raw.length > 40) continue; // skip paragraph-length "buttons"
+          const hit =
+            contains.some((t) => text.includes(t) || raw.includes(t)) ||
+            exact.some((t) => text === t || raw === t);
+          if (hit) {
             btn.click();
             return;
           }
