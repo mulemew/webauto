@@ -1640,7 +1640,7 @@ def mouse_click(sid):
             # sessions would land clicks in the wrong window. See _gui_lock.
             with _gui_lock:
                 subprocess.run(
-                    ["xdotool", "mousemove", "--sync", str(int(x)), str(int(y))],
+                    ["xdotool", "mousemove", str(int(x)), str(int(y))],
                     timeout=3, capture_output=True,
                 )
                 subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
@@ -1875,7 +1875,7 @@ def _human_mouse_drift(target_x=None, target_y=None):
     def _move(x, y):
         try:
             subprocess.run(
-                ["xdotool", "mousemove", "--sync", str(int(x)), str(int(y))],
+                ["xdotool", "mousemove", str(int(x)), str(int(y))],
                 timeout=1, capture_output=True,
             )
         except Exception:
@@ -2157,7 +2157,7 @@ def click_turnstile(sid):
                             # can't steal the top window between raise and click.
                             _raise_window(wid)
                             subprocess.run(
-                                ["xdotool", "mousemove", "--sync", str(abs_x), str(abs_y)],
+                                ["xdotool", "mousemove", str(abs_x), str(abs_y)],
                                 timeout=3, capture_output=True,
                             )
                             subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
@@ -2343,7 +2343,7 @@ def solve_recaptcha_audio(sid):
                         _raise_window(_wid)
                         _human_mouse_drift(cbxy[0], cbxy[1])
                         subprocess.run(
-                            ["xdotool", "mousemove", "--sync", str(cbxy[0]), str(cbxy[1])],
+                            ["xdotool", "mousemove", str(cbxy[0]), str(cbxy[1])],
                             timeout=2, capture_output=True,
                         )
                         subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
