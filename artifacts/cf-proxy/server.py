@@ -436,6 +436,131 @@ def _fp_ua(os_name: str, major: str) -> str:
             f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36")
 
 
+def _fp_profile(os_name: str, major: str, full: str) -> dict:
+    """Canonical values for a spoofed OS profile — the single source of truth
+    shared by the launch-loaded MAIN-world extension and the (secondary,
+    pre-navigation) CDP overlay, so the two never diverge."""
+    if os_name == "mac":
+        platform = "MacIntel"
+        meta_platform, meta_pv, meta_arch = "macOS", "14.5.0", "arm"
+        webgl_vendor = "Google Inc. (Apple)"
+        webgl_renderer = "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)"
+    else:
+        platform = "Win32"
+        meta_platform, meta_pv, meta_arch = "Windows", "15.0.0", "x86"
+        webgl_vendor = "Google Inc. (Intel)"
+        webgl_renderer = ("ANGLE (Intel, Intel(R) UHD Graphics 630 (0x00003E9B) "
+                          "Direct3D11 vs_5_0 ps_5_0, D3D11)")
+    brands = [
+        {"brand": "Chromium", "version": major},
+        {"brand": "Google Chrome", "version": major},
+        {"brand": "Not.A/Brand", "version": "99"},
+    ]
+    full_versions = [
+        {"brand": "Chromium", "version": full},
+        {"brand": "Google Chrome", "version": full},
+        {"brand": "Not.A/Brand", "version": "99.0.0.0"},
+    ]
+    return {
+        "ua": _fp_ua(os_name, major),
+        "platform": platform,
+        "vendor": "Google Inc.",
+        "webgl_vendor": webgl_vendor,
+        "webgl_renderer": webgl_renderer,
+        "ua_ch": {
+            "brands": brands, "fullVersionList": full_versions,
+            "platform": meta_platform, "platformVersion": meta_pv,
+            "architecture": meta_arch, "bitness": "64", "model": "",
+            "mobile": False, "wow64": False, "uaFullVersion": full,
+        },
+    }
+
+
+# MAIN-world content script: spoofs the JS-observable fingerprint BEFORE any page
+# script runs, on every frame and navigation. Immune to uc_open_with_reconnect
+# (it is not CDP), so unlike the CDP overlay it actually reaches the landing page
+# and CF's Turnstile iframe — and it never re-exposes automation.
+_FP_EXT_JS = r"""(function(){
+'use strict';
+var P=__PLATFORM__, VEND=__VENDOR__, LANGS=__LANGS__, GLV=__GLV__, GLR=__GLR__, UACH=__UACH__;
+function def(o,k,v){try{Object.defineProperty(o,k,{get:function(){return v;},configurable:true});}catch(e){}}
+def(navigator,'platform',P);
+def(navigator,'vendor',VEND);
+def(navigator,'language',LANGS[0]);
+def(navigator,'languages',Object.freeze(LANGS.slice()));
+try{
+  var NUA=window.NavigatorUAData;
+  // Only the OS-revealing fields need spoofing; keep the real brands /
+  // fullVersionList / model so the object stays as native as possible.
+  var over=function(r){r=r||{};r.platform=UACH.platform;r.platformVersion=UACH.platformVersion;r.architecture=UACH.architecture;r.bitness=UACH.bitness;r.wow64=UACH.wow64;return r;};
+  if(NUA&&NUA.prototype){
+    // Patch the PROTOTYPE so navigator.userAgentData stays a genuine
+    // NavigatorUAData instance (passes instanceof / native checks) and only the
+    // OS bits change.
+    try{Object.defineProperty(NUA.prototype,'platform',{get:function(){return UACH.platform;},configurable:true});}catch(e){}
+    try{
+      var g=NUA.prototype.getHighEntropyValues;
+      var patched=function(h){try{return Promise.resolve(g.call(this,h)).then(over);}catch(e){return Promise.resolve(over({brands:UACH.brands,fullVersionList:UACH.fullVersionList,mobile:UACH.mobile,model:UACH.model,uaFullVersion:UACH.uaFullVersion}));}};
+      try{patched.toString=function(){return g.toString();};}catch(e){}
+      Object.defineProperty(NUA.prototype,'getHighEntropyValues',{value:patched,writable:true,configurable:true});
+    }catch(e){}
+  }else{
+    // Fallback (engine without a NavigatorUAData global): object replacement.
+    def(navigator,'userAgentData',{brands:UACH.brands,mobile:UACH.mobile,platform:UACH.platform,
+      getHighEntropyValues:function(h){return Promise.resolve(over({brands:UACH.brands,fullVersionList:UACH.fullVersionList,mobile:UACH.mobile,model:UACH.model,uaFullVersion:UACH.uaFullVersion}));},
+      toJSON:function(){return {brands:UACH.brands,mobile:UACH.mobile,platform:UACH.platform};}});
+  }
+}catch(e){}
+function patchGL(proto){
+  if(!proto||!proto.getParameter)return;
+  var g=proto.getParameter;
+  function getParameter(x){if(x===37445)return GLV;if(x===37446)return GLR;return g.apply(this,arguments);}
+  try{getParameter.toString=function(){return 'function getParameter() { [native code] }';};}catch(e){}
+  proto.getParameter=getParameter;
+}
+try{patchGL(window.WebGLRenderingContext&&WebGLRenderingContext.prototype);}catch(e){}
+try{patchGL(window.WebGL2RenderingContext&&WebGL2RenderingContext.prototype);}catch(e){}
+})();"""
+
+
+def _write_fp_extension(os_name: str, major: str, full: str, lang_list: list) -> str:
+    """Generate a per-session unpacked MV3 extension whose MAIN-world,
+    document_start content script spoofs navigator.platform / userAgentData /
+    languages / WebGL. Returns the extension directory (loaded via
+    --load-extension). Caller cleans it up on session close."""
+    import json, tempfile
+    prof = _fp_profile(os_name, major, full)
+    langs = lang_list or ["en-US", "en"]
+    js = _FP_EXT_JS
+    for tok, val in (
+        ("__PLATFORM__", prof["platform"]),
+        ("__VENDOR__", prof["vendor"]),
+        ("__LANGS__", langs),
+        ("__GLV__", prof["webgl_vendor"]),
+        ("__GLR__", prof["webgl_renderer"]),
+        ("__UACH__", prof["ua_ch"]),
+    ):
+        js = js.replace(tok, json.dumps(val))
+    manifest = {
+        "manifest_version": 3,
+        "name": "fp",
+        "version": "1.0",
+        "content_scripts": [{
+            "matches": ["<all_urls>"],
+            "js": ["fp.js"],
+            "run_at": "document_start",
+            "all_frames": True,
+            "world": "MAIN",
+        }],
+    }
+    d = tempfile.mkdtemp(prefix="cf-fp-ext-")
+    with open(os.path.join(d, "manifest.json"), "w") as f:
+        json.dump(manifest, f)
+    with open(os.path.join(d, "fp.js"), "w") as f:
+        f.write(js)
+    return d
+
+
 def _apply_fingerprint(sb, proxy=None, fp=None):
     """Overlay a consistent OS fingerprint on this session via CDP.
 
@@ -468,35 +593,12 @@ def _apply_fingerprint(sb, proxy=None, fp=None):
         langs = FINGERPRINT_LANGS or (f"{locale},{locale.split('-')[0]},en" if locale else "en-US,en")
         lang_list = [x.strip() for x in langs.split(",") if x.strip()]
 
-        ua = fp.get("_ua") or _fp_ua(os_name, major)
-        if os_name == "windows":
-            platform = "Win32"
-            meta_platform, meta_platform_version, meta_arch = "Windows", "15.0.0", "x86"
-            webgl_vendor = "Google Inc. (Intel)"
-            webgl_renderer = ("ANGLE (Intel, Intel(R) UHD Graphics 630 (0x00003E9B) "
-                              "Direct3D11 vs_5_0 ps_5_0, D3D11)")
-        else:  # mac
-            platform = "MacIntel"
-            meta_platform, meta_platform_version, meta_arch = "macOS", "14.5.0", "arm"
-            webgl_vendor = "Google Inc. (Apple)"
-            webgl_renderer = "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)"
-
-        brands = [
-            {"brand": "Chromium", "version": major},
-            {"brand": "Google Chrome", "version": major},
-            {"brand": "Not.A/Brand", "version": "99"},
-        ]
-        full_versions = [
-            {"brand": "Chromium", "version": full},
-            {"brand": "Google Chrome", "version": full},
-            {"brand": "Not.A/Brand", "version": "99.0.0.0"},
-        ]
-        meta = {
-            "brands": brands, "fullVersionList": full_versions,
-            "platform": meta_platform, "platformVersion": meta_platform_version,
-            "architecture": meta_arch, "bitness": "64", "model": "",
-            "mobile": False, "wow64": False,
-        }
+        prof = _fp_profile(os_name, major, full)
+        ua = fp.get("_ua") or prof["ua"]
+        platform = prof["platform"]
+        webgl_vendor = prof["webgl_vendor"]
+        webgl_renderer = prof["webgl_renderer"]
+        meta = prof["ua_ch"]
 
         sb.driver.execute_cdp_cmd("Network.setUserAgentOverride", {
             "userAgent": ua,
@@ -623,6 +725,9 @@ class SessionThread:
         # locale -> --lang launch flag (both applied at launch in _worker), plus
         # UA/UA-CH/platform/WebGL re-applied via CDP after uc_open_with_reconnect.
         self.fingerprint = fingerprint if isinstance(fingerprint, dict) else None
+        # Temp dir of the per-session fingerprint extension (if any); cleaned up
+        # on close.
+        self._fp_ext_dir = None
         self._log_dir = os.path.join("/tmp/cf-proxy-logs", self.session_id)
         os.makedirs(self._log_dir, exist_ok=True)
         self._chrome_stdout_path = os.path.join(self._log_dir, "chrome.stdout.log")
@@ -698,6 +803,35 @@ class SessionThread:
                             f"lang={_fp_locale or '-'} ua={'set' if _fp_ua_str else '-'}",
                             flush=True,
                         )
+                    # LAUNCH-LEVEL fingerprint (JS side): a MAIN-world extension
+                    # that spoofs navigator.platform / userAgentData / languages /
+                    # WebGL before any page script runs. Unlike the CDP overlay it
+                    # survives uc_open_with_reconnect and never touches CDP, so it
+                    # reaches the landing page + Turnstile without re-exposing
+                    # automation to Cloudflare.
+                    _fp_os_name = (_fp.get("os") or "").strip().lower()
+                    if _fp_os_name in ("windows", "mac"):
+                        try:
+                            import re as _re2
+                            _cver = _get_chrome_version(_CHROME_BIN) or ""
+                            _cm = _re2.search(r"(\d+\.\d+\.\d+\.\d+)", _cver)
+                            _cfull = _cm.group(1) if _cm else "150.0.0.0"
+                            _cmajor = _cfull.split(".")[0]
+                            _loc = _fp_locale or "en-US"
+                            _langs_str = FINGERPRINT_LANGS or (
+                                f"{_loc},{_loc.split('-')[0]},en" if _loc else "en-US,en")
+                            _llist = [x.strip() for x in _langs_str.split(",") if x.strip()]
+                            _ext_dir = _write_fp_extension(_fp_os_name, _cmajor, _cfull, _llist)
+                            args.append(f"--disable-extensions-except={_ext_dir}")
+                            args.append(f"--load-extension={_ext_dir}")
+                            self._fp_ext_dir = _ext_dir
+                            print(
+                                f"[fingerprint] MAIN-world extension loaded "
+                                f"({_fp_os_name}, Chrome {_cmajor}, langs={_llist})",
+                                flush=True,
+                            )
+                        except Exception as _ee:
+                            print(f"[fingerprint] extension build failed: {_ee}", flush=True)
                     chrome_args = _join_chromium_args(args)
                     _kw = dict(
                         uc=True,
@@ -834,6 +968,12 @@ class SessionThread:
                 self._cleanup_logs()
         except Exception:
             pass
+        if self._fp_ext_dir:
+            try:
+                import shutil
+                shutil.rmtree(self._fp_ext_dir, ignore_errors=True)
+            except Exception:
+                pass
 
 
 # ── Warm session pool ────────────────────────────────────────────────────────
