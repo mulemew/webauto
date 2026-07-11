@@ -351,6 +351,54 @@ import type { PageAdapter } from "./page-adapter";
     } catch { /* ignore */ }
   }
 
+  // Fill an input the way the known-good reference (eooce/katabump-renew) does:
+  // set the value through the NATIVE HTMLInputElement value setter and dispatch
+  // input+change, instead of click()+keyboard.type(). This avoids "element not
+  // interactable" / "click intercepted" and garbled/partial typing (focus
+  // stealing), and React/Vue-controlled inputs actually register the value.
+  async function jsFillInput(page: PageAdapter, selector: string, text: string): Promise<void> {
+    await page.evaluate((arg: unknown) => {
+      const { sel, val } = arg as { sel: string; val: string };
+      const el = document.querySelector(sel) as HTMLInputElement | null;
+      if (!el) return;
+      try { el.focus(); } catch { /* ignore */ }
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+      if (setter) setter.call(el, val); else el.value = val;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      try { el.blur(); } catch { /* ignore */ }
+    }, { sel: selector, val: text } as never);
+  }
+
+  // Click the real submit/login control. Prefers <button|input type=submit>,
+  // else a visible button whose text is a login word — and SKIPS theme/language/
+  // nav toggles (Wispbyte's theme-toggle-btn has "login" in its class, which the
+  // old `button[class*='login']` selector wrongly matched and clicked). Returns
+  // false if nothing suitable was found (caller falls back to Enter).
+  async function jsClickSubmit(page: PageAdapter): Promise<boolean> {
+    return (await page.evaluate(() => {
+      const words = ["log in", "login", "sign in", "signin", "submit", "登录", "登陆", "登入", "log in"];
+      const skip = ["theme", "toggle", "lang", "language", "menu", "hamburger"];
+      let cands = Array.from(document.querySelectorAll('button[type="submit"], input[type="submit"]'));
+      if (cands.length === 0) {
+        cands = Array.from(document.querySelectorAll('button, input[type="button"], a[role="button"], [role="button"]'));
+      }
+      for (const el of cands) {
+        const cls = ((el as HTMLElement).className || "").toString().toLowerCase();
+        if (skip.some((s) => cls.includes(s))) continue;
+        const r = (el as HTMLElement).getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue;
+        const isSubmit = (el as HTMLInputElement).type === "submit";
+        const txt = (((el as HTMLElement).textContent || (el as HTMLInputElement).value || "") + "").trim().toLowerCase();
+        if (isSubmit || words.some((w) => txt === w || txt.includes(w))) {
+          (el as HTMLElement).click();
+          return true;
+        }
+      }
+      return false;
+    }) as boolean);
+  }
+
   export async function formLogin(
     page: PageAdapter,
     targetUrl: string,
@@ -405,23 +453,13 @@ import type { PageAdapter } from "./page-adapter";
       if (!usernameSel) {
         return { success: false, captchaBlocked: false, message: "Could not find username/email input field on the page" };
       }
-      await page.click(usernameSel);
-      await page.evaluate((sel: unknown) => {
-        const el = document.querySelector<HTMLInputElement>(sel as string);
-        if (el) el.value = "";
-      }, usernameSel as never);
-      await page.keyboard.type(credentials.username, { delay: 50 });
+      await jsFillInput(page, usernameSel, credentials.username);
 
       const passwordSel = await findSelector(page, PASSWORD_SELECTORS);
       if (!passwordSel) {
         return { success: false, captchaBlocked: false, message: "Could not find password input field on the page" };
       }
-      await page.click(passwordSel);
-      await page.evaluate((sel: unknown) => {
-        const el = document.querySelector<HTMLInputElement>(sel as string);
-        if (el) el.value = "";
-      }, passwordSel as never);
-      await page.keyboard.type(credentials.password, { delay: 50 });
+      await jsFillInput(page, passwordSel, credentials.password);
 
       // ── 2. Handle captcha AFTER filling fields, BEFORE submit ─────────────
       const captchaResult = await detectAndHandleCaptcha(page, solver);
@@ -432,15 +470,8 @@ import type { PageAdapter } from "./page-adapter";
         logger.warn("Captcha detected but not solved — attempting login anyway");
       }
 
-      // ── 3. Submit — try button click first, fall back to Enter key ────────
-      const submitSel =
-        "button[type='submit'], input[type='submit'], button.btn-primary, button.login-btn, " +
-        "button[class*='submit' i], button[class*='sign-in' i], button[class*='login' i]";
-      const submitBtn = await page.$(submitSel);
-
-      if (submitBtn) {
-        await submitBtn.click();
-      } else {
+      // ── 3. Submit — click the real login control, else press Enter ────────
+      if (!(await jsClickSubmit(page))) {
         await page.keyboard.press("Enter");
       }
 
@@ -465,10 +496,7 @@ import type { PageAdapter } from "./page-adapter";
             return { success: false, captchaBlocked: true, message: `Captcha dialog: "${lastDialogMessage}". ${retryResult.message}` };
           }
           // Re-submit after captcha retry
-          const retryBtn = await page.$(submitSel);
-          if (retryBtn) {
-            await retryBtn.click();
-          } else {
+          if (!(await jsClickSubmit(page))) {
             await page.keyboard.press("Enter");
           }
           await waitForSettle(page, 8000);
@@ -517,7 +545,14 @@ import type { PageAdapter } from "./page-adapter";
         } catch { /* OTP detection failed — proceed to outcome detection */ }
       }
 
-      const outcome = await detectLoginOutcome(page, targetUrl, successSelector, submitSel, successText);
+      // Precise submit selector for the "is the login button still visible?"
+      // success check — deliberately WITHOUT the loose `[class*='login']` that
+      // matched Wispbyte's theme-toggle-btn (which would keep it "visible" and
+      // report a false failure).
+      const detectSubmitSel =
+        "button[type='submit'], input[type='submit'], button.login-btn, " +
+        "button[class*='submit' i], button[class*='sign-in' i]";
+      const outcome = await detectLoginOutcome(page, targetUrl, successSelector, detectSubmitSel, successText);
       logger.info({ url: page.url(), success: outcome.success, reason: outcome.reason }, "Form login outcome");
 
       return {
