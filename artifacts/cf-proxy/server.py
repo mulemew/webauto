@@ -490,26 +490,34 @@ def(navigator,'language',LANGS[0]);
 def(navigator,'languages',Object.freeze(LANGS.slice()));
 try{
   var NUA=window.NavigatorUAData;
-  // Only the OS-revealing fields need spoofing; keep the real brands /
-  // fullVersionList / model so the object stays as native as possible.
+  var origUAD=navigator.userAgentData;
   var over=function(r){r=r||{};r.platform=UACH.platform;r.platformVersion=UACH.platformVersion;r.architecture=UACH.architecture;r.bitness=UACH.bitness;r.wow64=UACH.wow64;return r;};
-  if(NUA&&NUA.prototype){
-    // Patch the PROTOTYPE so navigator.userAgentData stays a genuine
-    // NavigatorUAData instance (passes instanceof / native checks) and only the
-    // OS bits change.
-    try{Object.defineProperty(NUA.prototype,'platform',{get:function(){return UACH.platform;},configurable:true});}catch(e){}
-    try{
-      var g=NUA.prototype.getHighEntropyValues;
-      var patched=function(h){try{return Promise.resolve(g.call(this,h)).then(over);}catch(e){return Promise.resolve(over({brands:UACH.brands,fullVersionList:UACH.fullVersionList,mobile:UACH.mobile,model:UACH.model,uaFullVersion:UACH.uaFullVersion}));}};
-      try{patched.toString=function(){return g.toString();};}catch(e){}
-      Object.defineProperty(NUA.prototype,'getHighEntropyValues',{value:patched,writable:true,configurable:true});
-    }catch(e){}
-  }else{
-    // Fallback (engine without a NavigatorUAData global): object replacement.
-    def(navigator,'userAgentData',{brands:UACH.brands,mobile:UACH.mobile,platform:UACH.platform,
-      getHighEntropyValues:function(h){return Promise.resolve(over({brands:UACH.brands,fullVersionList:UACH.fullVersionList,mobile:UACH.mobile,model:UACH.model,uaFullVersion:UACH.uaFullVersion}));},
-      toJSON:function(){return {brands:UACH.brands,mobile:UACH.mobile,platform:UACH.platform};}});
-  }
+  var hev=function(h){
+    try{if(origUAD&&origUAD.getHighEntropyValues){return origUAD.getHighEntropyValues(h).then(over);}}catch(e){}
+    return Promise.resolve(over({brands:UACH.brands,fullVersionList:UACH.fullVersionList,mobile:UACH.mobile,model:UACH.model,uaFullVersion:UACH.uaFullVersion}));
+  };
+  // Build a fake NavigatorUAData INSTANCE — Object.create keeps its prototype so
+  // `instanceof NavigatorUAData` still passes — then install it on the navigator
+  // instance via the SAME defineProperty path that works for languages/platform.
+  // (Patching NavigatorUAData.prototype directly does NOT take in a MAIN-world
+  // content script, which is why userAgentData was still leaking Linux.)
+  var proto=(NUA&&NUA.prototype)?NUA.prototype:Object.prototype;
+  var uad=Object.create(proto);
+  Object.defineProperty(uad,'brands',{value:UACH.brands,enumerable:true});
+  Object.defineProperty(uad,'mobile',{value:UACH.mobile,enumerable:true});
+  Object.defineProperty(uad,'platform',{value:UACH.platform,enumerable:true});
+  Object.defineProperty(uad,'getHighEntropyValues',{value:hev});
+  Object.defineProperty(uad,'toJSON',{value:function(){return {brands:UACH.brands,mobile:UACH.mobile,platform:UACH.platform};}});
+  def(navigator,'userAgentData',uad);
+}catch(e){}
+// Intl locale (Intl.DateTimeFormat().resolvedOptions().locale) otherwise leaks
+// the real en-US even when navigator.languages is spoofed — report our locale.
+try{
+  var LOC=LANGS[0];
+  var patchRO=function(C){if(!C||!C.prototype||!C.prototype.resolvedOptions)return;
+    var ro=C.prototype.resolvedOptions;
+    C.prototype.resolvedOptions=function(){var r=ro.apply(this,arguments);try{r.locale=LOC;}catch(e){}return r;};};
+  patchRO(Intl.DateTimeFormat);patchRO(Intl.NumberFormat);patchRO(Intl.Collator);
 }catch(e){}
 function patchGL(proto){
   if(!proto||!proto.getParameter)return;
