@@ -75,7 +75,15 @@ _geo_lock = threading.Lock()
 # Chrome flags shared by all sessions
 _CHROMIUM_ARGS = [
     "--no-sandbox",
-    "--disable-gpu",
+    # NB: do NOT use --disable-gpu — it makes WebGL unavailable entirely
+    # (vendor/renderer/hash all empty), a glaring "this is a bot" tell that also
+    # leaves our WebGL fingerprint override nothing to override. Instead force
+    # software rendering via ANGLE+SwiftShader so WebGL actually works (and can
+    # then be spoofed). --enable-unsafe-swiftshader is required on Chrome 137+
+    # for SwiftShader WebGL after the "unsafe SwiftShader" deprecation.
+    "--use-gl=angle",
+    "--use-angle=swiftshader",
+    "--enable-unsafe-swiftshader",
     "--disable-dev-shm-usage",
     "--disable-blink-features=AutomationControlled",
     "--disable-infobars",

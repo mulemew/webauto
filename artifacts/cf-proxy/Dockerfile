@@ -115,4 +115,4 @@ RUN python -c "from faster_whisper import WhisperModel; import os; WhisperModel(
 
 EXPOSE 7317
 
-ENTRYPOINT ["/bin/sh", "-c", "rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 && Xvfb :99 -screen 0 1280x900x24 -ac +extension GLX +render -noreset & sleep 1 && fluxbox &>/dev/null & sleep 1 && exec python server.py"]
+ENTRYPOINT ["/bin/sh", "-c", "rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 && Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset & sleep 1 && fluxbox &>/dev/null & sleep 1 && exec python server.py"]
