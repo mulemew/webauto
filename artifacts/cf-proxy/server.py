@@ -40,7 +40,7 @@ _gui_lock = threading.Lock()
 SESSION_TIMEOUT_S = int(os.getenv("SESSION_TIMEOUT_S", "1800"))
 SESSION_START_TIMEOUT_S = int(os.getenv("SESSION_START_TIMEOUT_S", "180"))
 CHROME_START_ATTEMPTS = int(os.getenv("CHROME_START_ATTEMPTS", "1"))
-DEFAULT_RECONNECT_TIME = int(os.getenv("CF_RECONNECT_TIME", "4"))
+DEFAULT_RECONNECT_TIME = int(os.getenv("CF_RECONNECT_TIME", "8"))
 DEFAULT_MAX_RETRIES = int(os.getenv("CF_MAX_RETRIES", "3"))
 POOL_SIZE = int(os.getenv("POOL_SIZE", "1"))
 PORT = int(os.getenv("PORT", "7317"))
@@ -2043,68 +2043,23 @@ def click_turnstile(sid):
         if tok and len(tok) > 20:
             return {"solved": True, "method": "auto", "attempt": 0}
 
-        # Read the checkbox coordinates NOW, while still connected — the widget
-        # container ([data-sitekey]/.cf-turnstile) is static HTML present from
-        # page load, so its position is available immediately. After this we do
-        # NOT touch CDP again until we read the token: an attached DevTools
-        # session while the widget verifies is exactly what makes Cloudflare
-        # soft-block it (perpetual "Verifying..."). The checkbox sits in the
-        # widget's UPPER row (~0.38 of its height), ~30px from the left.
-        _wid = None
-        try:
-            _wid = _find_session_window(sb)
-        except Exception:
-            pass
-        cbxy = _element_abs_xy(
-            sb,
-            ".cf-turnstile, [data-sitekey], "
-            "iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile']",
-            dx=30, dy_frac=0.38, wid=_wid,
-        )
-        print(f"[turnstile] checkbox target={cbxy} wid={_wid}", flush=True)
-
+        # Match the known-good reference (eooce/katabump-renew): after the long
+        # uc_open_with_reconnect, just call uc_gui_click_captcha() on a clean
+        # (unspoofed) browser — nothing fancy. We only add: raise THIS session's
+        # window first (the reference runs a single browser; we have a warm-pool
+        # 2nd one on the shared :99), then a quiet sleep for CF to validate.
         for attempt in range(max_retries):
-            # attempt 0: just wait (non-interactive auto-verify). Later attempts:
-            # click the checkbox. Everything below is OS-level (xdotool) with the
-            # driver DETACHED — no CDP touches the page while CF is verifying.
-            do_click = attempt > 0 and bool(cbxy)
-
-            def _act():
-                try:
-                    with _gui_lock:
-                        _raise_window(_wid)
-                        if cbxy:
-                            _human_mouse_drift(cbxy[0], cbxy[1])
-                        else:
-                            _human_mouse_drift()
-                        if do_click and cbxy:
-                            subprocess.run(
-                                ["xdotool", "mousemove", str(cbxy[0]), str(cbxy[1])],
-                                timeout=2, capture_output=True,
-                            )
-                            time.sleep(0.25)
-                            subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
-                            # Screen (with pointer) right after the click so we can
-                            # tell a coordinate miss from a CF rejection. Fetch via
-                            #   docker cp <cf-proxy>:/tmp/cf-turnstile-last.png ./
-                            try:
-                                subprocess.run(
-                                    ["scrot", "-p", "-o", "/tmp/cf-turnstile-last.png"],
-                                    timeout=5, capture_output=True,
-                                )
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
-
-            _detached_wait(sb, 15 if attempt == 0 else 10, during=_act)
+            try:
+                with _gui_lock:
+                    _raise_window(_find_session_window(sb))
+                    time.sleep(0.5)
+                    sb.uc_gui_click_captcha()
+            except Exception as e:
+                print(f"[turnstile] uc_gui_click_captcha: {e}", flush=True)
+            time.sleep(3)  # let CF validate undisturbed
             tok = _turnstile_token(sb)
             if tok and len(tok) > 20:
-                return {
-                    "solved": True,
-                    "method": "auto-wait" if attempt == 0 else "detached-click",
-                    "attempt": attempt,
-                }
+                return {"solved": True, "method": "uc_gui", "attempt": attempt + 1}
 
         return {"solved": False, "method": "none", "attempt": max_retries}
 
