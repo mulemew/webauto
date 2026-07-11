@@ -1832,6 +1832,45 @@ def _human_mouse_drift(target_x=None, target_y=None):
         time.sleep(random.uniform(0.01, 0.045))
 
 
+def _element_abs_xy(sb, css, dx=0, dy_frac=0.5, wid=None):
+    """Absolute Xvfb-screen coords of a point inside a TOP-LEVEL element (e.g. the
+    reCAPTCHA anchor iframe) for an OS-level xdotool click. dx = px from the
+    element's left edge, dy_frac = fraction of its height for y. Returns (x, y) or
+    None. Call on default_content with the driver CONNECTED."""
+    import subprocess
+    try:
+        rect = sb.execute_script(
+            "var e=document.querySelector(arguments[0]);"
+            "if(!e)return null;var r=e.getBoundingClientRect();"
+            "return {x:r.x,y:r.y,w:r.width,h:r.height};", css)
+    except Exception:
+        rect = None
+    if not rect or not rect.get("w"):
+        return None
+    win_x = win_y = title_bar = 0
+    try:
+        if wid is None:
+            wid = _find_session_window(sb)
+        if wid:
+            _raise_window(wid)
+            geo = subprocess.run(
+                ["xdotool", "getwindowgeometry", "--shell", wid],
+                capture_output=True, text=True, timeout=3,
+            ).stdout
+            for line in geo.strip().split("\n"):
+                if line.startswith("X="):
+                    win_x = int(line.split("=")[1])
+                elif line.startswith("Y="):
+                    win_y = int(line.split("=")[1])
+            wi = sb.execute_script("return {oh:window.outerHeight,ih:window.innerHeight};")
+            title_bar = max(0, (wi.get("oh", 0) - wi.get("ih", 0)))
+    except Exception:
+        pass
+    ax = int(rect["x"]) + dx + win_x
+    ay = int(rect["y"]) + int(rect["h"] * dy_frac) + win_y + title_bar
+    return (ax, ay)
+
+
 def _turnstile_token(sb):
     """Return the Turnstile response token (native OR reCAPTCHA-compat), or ''."""
     try:
@@ -2210,17 +2249,47 @@ def solve_recaptcha_audio(sid):
         if token_present():
             return {"solved": True, "blocked": False, "message": "already solved"}
 
-        # 1. Click the anchor checkbox.
+        # 1. Click the anchor checkbox — OS-level (xdotool) with the driver
+        # DETACHED while reCAPTCHA scores it. A WebDriver click with the
+        # automation session attached is exactly what reCAPTCHA flags as a bot;
+        # an OS-level trusted click on a detached driver (plus a Windows
+        # fingerprint + residential IP) is what actually passes on the checkbox.
         d.switch_to.default_content()
+        _anchor_css = ("iframe[src*='api2/anchor'], "
+                       "iframe[src*='recaptcha/api2/anchor'], "
+                       "iframe[src*='enterprise/anchor']")
         try:
-            anchor = find("iframe[src*='api2/anchor'], iframe[src*='recaptcha/api2/anchor'], iframe[src*='enterprise/anchor']")
-            d.switch_to.frame(anchor)
-            find("#recaptcha-anchor, .recaptcha-checkbox").click()
+            _wid = _find_session_window(sb)
         except Exception:
-            pass
-        finally:
-            d.switch_to.default_content()
-        time.sleep(2)
+            _wid = None
+        cbxy = _element_abs_xy(sb, _anchor_css, dx=30, dy_frac=0.5, wid=_wid)
+        if cbxy:
+            def _click_checkbox():
+                import subprocess
+                try:
+                    with _gui_lock:
+                        _raise_window(_wid)
+                        _human_mouse_drift(cbxy[0], cbxy[1])
+                        subprocess.run(
+                            ["xdotool", "mousemove", "--sync", str(cbxy[0]), str(cbxy[1])],
+                            timeout=2, capture_output=True,
+                        )
+                        subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
+                except Exception:
+                    pass
+            # detach → drift+click (OS-level) → let reCAPTCHA score undisturbed → reconnect
+            _detached_wait(sb, 3, during=_click_checkbox)
+        else:
+            # Couldn't locate the anchor iframe — fall back to a WebDriver click.
+            try:
+                anchor = find(_anchor_css)
+                d.switch_to.frame(anchor)
+                find("#recaptcha-anchor, .recaptcha-checkbox").click()
+            except Exception:
+                pass
+            finally:
+                d.switch_to.default_content()
+            time.sleep(2)
         if token_present():
             return {"solved": True, "blocked": False, "message": "passed on checkbox"}
 
@@ -2288,9 +2357,11 @@ def solve_recaptcha_audio(sid):
                 find("#recaptcha-verify-button, button.rc-audiochallenge-verify-button").click()
             except Exception:
                 pass
-            time.sleep(2.5)
 
+            # Validate the submitted answer with the driver DETACHED (reCAPTCHA
+            # watches for the automation session while it verifies, same as CF).
             d.switch_to.default_content()
+            _detached_wait(sb, 3)
             if token_present():
                 return {"solved": True, "blocked": False, "message": f"solved via audio (round {rnd + 1})"}
             # Re-enter bframe for the next clip.
