@@ -2036,162 +2036,58 @@ def click_turnstile(sid):
         if tok and len(tok) > 20:
             return {"solved": True, "method": "auto", "attempt": 0}
 
-        # Raise THIS session's window (needs the driver) so the pointer/click land
-        # on the task page and not an idle warm-pool "New Tab".
+        # Read the checkbox coordinates NOW, while still connected — the widget
+        # container ([data-sitekey]/.cf-turnstile) is static HTML present from
+        # page load, so its position is available immediately. After this we do
+        # NOT touch CDP again until we read the token: an attached DevTools
+        # session while the widget verifies is exactly what makes Cloudflare
+        # soft-block it (perpetual "Verifying..."). The checkbox sits in the
+        # widget's UPPER row (~0.38 of its height), ~30px from the left.
+        _wid = None
         try:
-            with _gui_lock:
-                _raise_window(_find_session_window(sb))
+            _wid = _find_session_window(sb)
         except Exception:
             pass
+        cbxy = _element_abs_xy(
+            sb,
+            ".cf-turnstile, [data-sitekey], "
+            "iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile']",
+            dx=30, dy_frac=0.38, wid=_wid,
+        )
+        print(f"[turnstile] checkbox target={cbxy} wid={_wid}", flush=True)
 
-        # Non-interactive Turnstile (the "Verifying..." spinner) issues a token on
-        # its own — it just needs TIME and a live pointer, with NO automation
-        # attached. Detach the driver, drift the mouse (OS-level, still works while
-        # detached), and let CF verify undisturbed, then reattach and check.
-        def _drift():
-            try:
-                with _gui_lock:
-                    _human_mouse_drift()
-            except Exception:
-                pass
-
-        _detached_wait(sb, 16, during=_drift)
-        tok = _turnstile_token(sb)
-        if tok and len(tok) > 20:
-            return {"solved": True, "method": "auto-wait", "attempt": 0}
-
-        # Still no token -> treat it as an INTERACTIVE widget that needs a
-        # checkbox click. ONE click per attempt, then WAIT for CF to validate —
-        # do NOT combine uc_gui + xdotool in the same pass or loop fast. Rapid
-        # repeated clicks on the checkbox make Turnstile report "Verification
-        # failed".
         for attempt in range(max_retries):
-            method = "uc_gui" if attempt == 0 else "xdotool"
+            # attempt 0: just wait (non-interactive auto-verify). Later attempts:
+            # click the checkbox. Everything below is OS-level (xdotool) with the
+            # driver DETACHED — no CDP touches the page while CF is verifying.
+            do_click = attempt > 0 and bool(cbxy)
 
-            if method == "uc_gui":
-                # Strategy 1: SB's built-in PyAutoGUI clicker. Raise THIS session's
-                # window first so the OS-level click lands on the task page and not
-                # an idle warm-pool "New Tab" stacked on the shared Xvfb :99.
+            def _act():
                 try:
                     with _gui_lock:
-                        _raise_window(_find_session_window(sb))
-                        time.sleep(0.3)
-                        sb.uc_gui_click_captcha()
+                        _raise_window(_wid)
+                        if cbxy:
+                            _human_mouse_drift(cbxy[0], cbxy[1])
+                        else:
+                            _human_mouse_drift()
+                        if do_click and cbxy:
+                            subprocess.run(
+                                ["xdotool", "mousemove", str(cbxy[0]), str(cbxy[1])],
+                                timeout=2, capture_output=True,
+                            )
+                            time.sleep(0.25)
+                            subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
                 except Exception:
                     pass
-                # Validate the click with the driver DETACHED (see _detached_wait).
-                _detached_wait(sb, 8)
-                tok = _turnstile_token(sb)
-                if tok and len(tok) > 20:
-                    return {"solved": True, "method": "uc_gui", "attempt": attempt + 1}
-                continue
 
-            # Strategy 2: Locate Turnstile iframe and xdotool-click its checkbox
-            # Use xdotool getwindowgeometry for accurate window position in Xvfb
-            try:
-                rect = sb.execute_script("""
-                    var frames = document.querySelectorAll('iframe');
-                    for (var i = 0; i < frames.length; i++) {
-                        var src = frames[i].src || '';
-                        if (src.indexOf('challenges.cloudflare.com') >= 0 || src.indexOf('turnstile') >= 0) {
-                            var r = frames[i].getBoundingClientRect();
-                            if (r.width > 0 && r.height > 0)
-                                return {x: r.x + 30, y: r.y + r.height / 2, w: r.width, h: r.height};
-                        }
-                    }
-                    var containers = document.querySelectorAll('.cf-turnstile, [data-sitekey]');
-                    for (var i = 0; i < containers.length; i++) {
-                        var r = containers[i].getBoundingClientRect();
-                        if (r.width > 0 && r.height > 0)
-                            return {x: r.x + 30, y: r.y + r.height / 2, w: r.width, h: r.height};
-                    }
-                    return null;
-                """)
-                if rect:
-                    # Get accurate window position via xdotool instead of
-                    # window.screenX/screenY which are unreliable in Xvfb
-                    win_x, win_y, title_bar = 0, 0, 0
-                    wid = None
-                    try:
-                        # Pick + raise THIS session's window (not an idle warm-pool
-                        # "New Tab" window stacked on top of the shared Xvfb :99).
-                        wid = _find_session_window(sb)
-                        if wid:
-                            _raise_window(wid)
-                            time.sleep(0.3)
-                            # xdotool getwindowgeometry gives accurate position
-                            geo = subprocess.run(
-                                ["xdotool", "getwindowgeometry", "--shell", wid],
-                                capture_output=True, text=True, timeout=3,
-                            ).stdout
-                            for line in geo.strip().split("\n"):
-                                if line.startswith("X="):
-                                    win_x = int(line.split("=")[1])
-                                elif line.startswith("Y="):
-                                    win_y = int(line.split("=")[1])
-                            # Compute title bar from outer vs inner height
-                            win_info = sb.execute_script(
-                                "return {oh: window.outerHeight, ih: window.innerHeight};"
-                            )
-                            title_bar = max(0, (win_info.get("oh", 0) - win_info.get("ih", 0)))
-                    except Exception:
-                        # Fallback to JS-based coordinates
-                        win_info = sb.execute_script(
-                            "return {sx: window.screenX||0, sy: window.screenY||0, "
-                            "oh: window.outerHeight, ih: window.innerHeight};"
-                        )
-                        win_x = int(win_info.get("sx", 0))
-                        win_y = int(win_info.get("sy", 0))
-                        title_bar = max(0, (win_info.get("oh", 0) - win_info.get("ih", 0)))
-
-                    abs_x = int(rect["x"]) + win_x
-                    abs_y = int(rect["y"]) + win_y + title_bar
-                    print(f"[turnstile] xdotool click at ({abs_x}, {abs_y}) "
-                          f"win=({win_x},{win_y}) title_bar={title_bar} "
-                          f"rect=({rect['x']},{rect['y']})", flush=True)
-                    try:
-                        # Serialise the physical pointer move+click behind the
-                        # shared GUI lock — see _gui_lock docstring.
-                        with _gui_lock:
-                            # Re-raise inside the lock so a concurrent session
-                            # can't steal the top window between raise and click.
-                            _raise_window(wid)
-                            subprocess.run(
-                                ["xdotool", "mousemove", str(abs_x), str(abs_y)],
-                                timeout=3, capture_output=True,
-                            )
-                            subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
-                            time.sleep(1)
-                            # ── Diagnostic ────────────────────────────────────
-                            # Grab the WHOLE Xvfb :99 screen WITH the pointer
-                            # (scrot -p) so we can see exactly where the physical
-                            # click landed relative to the Turnstile checkbox —
-                            # the definitive way to tell a coordinate miss from a
-                            # CF rejection. Retrieve after a run with:
-                            #   docker compose cp cf-proxy:/tmp/cf-turnstile-last.png ./
-                            try:
-                                subprocess.run(
-                                    ["scrot", "-p", "-o", "/tmp/cf-turnstile-last.png"],
-                                    timeout=5, capture_output=True,
-                                )
-                                print(
-                                    "[turnstile] saved screen diagnostic to "
-                                    f"/tmp/cf-turnstile-last.png (cursor aimed at {abs_x},{abs_y})",
-                                    flush=True,
-                                )
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-            # Validate this SINGLE xdotool click with the driver DETACHED (see
-            # _detached_wait) — no fast re-clicks, no attached automation session.
-            _detached_wait(sb, 8)
+            _detached_wait(sb, 15 if attempt == 0 else 10, during=_act)
             tok = _turnstile_token(sb)
             if tok and len(tok) > 20:
-                return {"solved": True, "method": "xdotool", "attempt": attempt + 1}
+                return {
+                    "solved": True,
+                    "method": "auto-wait" if attempt == 0 else "detached-click",
+                    "attempt": attempt,
+                }
 
         return {"solved": False, "method": "none", "attempt": max_retries}
 
