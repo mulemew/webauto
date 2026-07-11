@@ -490,25 +490,33 @@ def(navigator,'language',LANGS[0]);
 def(navigator,'languages',Object.freeze(LANGS.slice()));
 try{
   var NUA=window.NavigatorUAData;
-  var origUAD=navigator.userAgentData;
   var over=function(r){r=r||{};r.platform=UACH.platform;r.platformVersion=UACH.platformVersion;r.architecture=UACH.architecture;r.bitness=UACH.bitness;r.wow64=UACH.wow64;return r;};
-  var hev=function(h){
-    try{if(origUAD&&origUAD.getHighEntropyValues){return origUAD.getHighEntropyValues(h).then(over);}}catch(e){}
-    return Promise.resolve(over({brands:UACH.brands,fullVersionList:UACH.fullVersionList,mobile:UACH.mobile,model:UACH.model,uaFullVersion:UACH.uaFullVersion}));
-  };
-  // Build a fake NavigatorUAData INSTANCE — Object.create keeps its prototype so
-  // `instanceof NavigatorUAData` still passes — then install it on the navigator
-  // instance via the SAME defineProperty path that works for languages/platform.
-  // (Patching NavigatorUAData.prototype directly does NOT take in a MAIN-world
-  // content script, which is why userAgentData was still leaking Linux.)
-  var proto=(NUA&&NUA.prototype)?NUA.prototype:Object.prototype;
-  var uad=Object.create(proto);
-  Object.defineProperty(uad,'brands',{value:UACH.brands,enumerable:true});
-  Object.defineProperty(uad,'mobile',{value:UACH.mobile,enumerable:true});
-  Object.defineProperty(uad,'platform',{value:UACH.platform,enumerable:true});
-  Object.defineProperty(uad,'getHighEntropyValues',{value:hev});
-  Object.defineProperty(uad,'toJSON',{value:function(){return {brands:UACH.brands,mobile:UACH.mobile,platform:UACH.platform};}});
-  def(navigator,'userAgentData',uad);
+  var hevFallback=function(){return Promise.resolve(over({brands:UACH.brands,fullVersionList:UACH.fullVersionList,mobile:UACH.mobile,model:UACH.model,uaFullVersion:UACH.uaFullVersion}));};
+  // PRIMARY: patch NavigatorUAData.prototype. navigator.userAgentData is a
+  // locked-down own property that defineProperty on the instance CANNOT replace
+  // (that is why the previous instance-swap left it as Linux), but the values it
+  // returns live on the prototype, which IS patchable — the same
+  // prototype-patch that makes the Intl locale spoof work.
+  if(NUA&&NUA.prototype){
+    try{Object.defineProperty(NUA.prototype,'platform',{get:function(){return UACH.platform;},configurable:true});}catch(e){}
+    try{
+      var g=NUA.prototype.getHighEntropyValues;
+      Object.defineProperty(NUA.prototype,'getHighEntropyValues',{configurable:true,writable:true,value:function(h){
+        try{return g.call(this,h).then(over);}catch(e){return hevFallback();}
+      }});
+    }catch(e){}
+  }
+  // SECONDARY: also try to replace the instance (only takes if it's configurable;
+  // harmless if it throws — the prototype patch above already did the job).
+  try{
+    var origUAD=navigator.userAgentData;
+    var uad=Object.create((NUA&&NUA.prototype)||Object.prototype);
+    Object.defineProperty(uad,'brands',{value:UACH.brands,enumerable:true});
+    Object.defineProperty(uad,'mobile',{value:UACH.mobile,enumerable:true});
+    Object.defineProperty(uad,'platform',{value:UACH.platform,enumerable:true});
+    Object.defineProperty(uad,'getHighEntropyValues',{value:function(h){try{return origUAD.getHighEntropyValues(h).then(over);}catch(e){return hevFallback();}}});
+    Object.defineProperty(navigator,'userAgentData',{get:function(){return uad;},configurable:true});
+  }catch(e){}
 }catch(e){}
 // Intl locale (Intl.DateTimeFormat().resolvedOptions().locale) otherwise leaks
 // the real en-US even when navigator.languages is spoofed — report our locale.
