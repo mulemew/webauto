@@ -488,6 +488,10 @@ def(navigator,'platform',P);
 def(navigator,'vendor',VEND);
 def(navigator,'language',LANGS[0]);
 def(navigator,'languages',Object.freeze(LANGS.slice()));
+// navigator.webdriver=true is the single loudest automation tell a real browser
+// never has. Force it false before any page/CF script reads it.
+try{def(navigator,'webdriver',false);}catch(e){}
+try{delete Navigator.prototype.webdriver;}catch(e){}
 try{
   var NUA=window.NavigatorUAData;
   var over=function(r){r=r||{};r.platform=UACH.platform;r.platformVersion=UACH.platformVersion;r.architecture=UACH.architecture;r.bitness=UACH.bitness;r.wow64=UACH.wow64;return r;};
