@@ -2084,6 +2084,16 @@ def click_turnstile(sid):
                             )
                             time.sleep(0.25)
                             subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
+                            # Screen (with pointer) right after the click so we can
+                            # tell a coordinate miss from a CF rejection. Fetch via
+                            #   docker cp <cf-proxy>:/tmp/cf-turnstile-last.png ./
+                            try:
+                                subprocess.run(
+                                    ["scrot", "-p", "-o", "/tmp/cf-turnstile-last.png"],
+                                    timeout=5, capture_output=True,
+                                )
+                            except Exception:
+                                pass
                 except Exception:
                     pass
 
