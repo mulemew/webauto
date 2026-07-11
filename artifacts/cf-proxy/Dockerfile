@@ -115,4 +115,7 @@ RUN python -c "from faster_whisper import WhisperModel; import os; WhisperModel(
 
 EXPOSE 7317
 
-ENTRYPOINT ["/bin/sh", "-c", "rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 && Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset & sleep 1 && fluxbox &>/dev/null & sleep 1 && exec python server.py"]
+# No window manager: the known-good reference runs bare `xvfb-run` (no WM), and
+# a WM (fluxbox) adds window decorations/stacking that throw off
+# uc_gui_click_captcha's screen-coordinate math. Match the reference: Xvfb only.
+ENTRYPOINT ["/bin/sh", "-c", "rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 && Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset & sleep 2 && exec python server.py"]

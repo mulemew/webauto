@@ -73,32 +73,20 @@ _geo_cache: dict = {}
 _geo_lock = threading.Lock()
 
 # Chrome flags shared by all sessions
+# MINIMAL — match the known-good reference (eooce/katabump-renew), which passes
+# CF with a plain SB(uc=True) and NO extra chromium args. Every flag we add can
+# conflict with SeleniumBase UC's own carefully-chosen launch flags or be a tell,
+# so keep only what the container genuinely needs:
+#   - dev-shm: containers have a tiny /dev/shm; without this Chrome can crash.
+#   - software WebGL (ANGLE+SwiftShader): otherwise WebGL is empty (a bot tell).
+#   - WebRTC policy: stop real-IP STUN leak through the proxy.
+# Everything else (automation-hiding, infobars, first-run, site isolation, sandbox
+# — we run non-root) is left to SeleniumBase UC to manage, exactly like the ref.
 _CHROMIUM_ARGS = [
-    "--no-sandbox",
-    # NB: do NOT use --disable-gpu — it makes WebGL unavailable entirely
-    # (vendor/renderer/hash all empty), a glaring "this is a bot" tell that also
-    # leaves our WebGL fingerprint override nothing to override. Instead force
-    # software rendering via ANGLE+SwiftShader so WebGL actually works (and can
-    # then be spoofed). --enable-unsafe-swiftshader is required on Chrome 137+
-    # for SwiftShader WebGL after the "unsafe SwiftShader" deprecation.
+    "--disable-dev-shm-usage",
     "--use-gl=angle",
     "--use-angle=swiftshader",
     "--enable-unsafe-swiftshader",
-    "--disable-dev-shm-usage",
-    "--disable-blink-features=AutomationControlled",
-    "--disable-infobars",
-    "--no-first-run",
-    "--disable-component-extensions-with-background-pages",
-    "--no-default-browser-check",
-    # Chrome keeps only the LAST --disable-features on the command line, so all
-    # disabled features must live in ONE flag — splitting them (as two separate
-    # --disable-features=) silently dropped AutomationControlled, re-exposing the
-    # automation tell. Keep them merged.
-    "--disable-features=AutomationControlled,IsolateOrigins,site-per-process",
-    "--disable-site-isolation-trials",
-    # Stop WebRTC/STUN from leaking the real IP by bypassing the proxy (WebRTC
-    # uses direct UDP). Keeps RTCPeerConnection present (so "no WebRTC" is not a
-    # tell) but only allows proxied UDP -> no real-IP STUN leak.
     "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
 ]
 
