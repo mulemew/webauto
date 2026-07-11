@@ -376,26 +376,41 @@ def _detect_geo(proxy):
         ("https://ipapi.co/json/",
          lambda d: (d.get("timezone"), (d.get("country_code") or d.get("country") or "").upper())),
     ]
-    tz, locale = None, None
+    # Query MULTIPLE sources and MAJORITY-VOTE the timezone. A single geo DB is
+    # wrong for some IPs (e.g. 78.154.103.36 is UK but ip-api.com reports it as
+    # Belgium, while ipwho.is + ipapi.co both say UK). Taking the first success
+    # let one bad source win; a majority vote across sources fixes it. Fast path:
+    # if the first two sources already agree, stop (don't hit the third).
+    results = []  # list of (tz, cc)
     for url, parse in endpoints:
         host = url.split("/")[2]
+        got = None
         for attempt in range(2):
             try:
                 r = _rq.get(url, proxies=proxies, timeout=12, headers={"User-Agent": "curl/8"})
-                d = r.json()
-                _tz, cc = parse(d)
+                _tz, cc = parse(r.json())
                 if _tz:
-                    tz, locale = _tz, _CC_LOCALE.get(cc)
-                    print(f"[fingerprint] geo via {host} proxy={pmask} -> "
-                          f"tz={tz} cc={cc} locale={locale}", flush=True)
+                    got = (_tz, cc)
+                    print(f"[fingerprint] geo via {host} proxy={pmask} -> tz={_tz} cc={cc}", flush=True)
                     break
-                print(f"[fingerprint] geo {host} proxy={pmask} attempt {attempt+1}: "
-                      f"no tz in {str(d)[:120]}", flush=True)
             except Exception as e:
                 print(f"[fingerprint] geo {host} proxy={pmask} attempt {attempt+1} failed: {e}", flush=True)
             time.sleep(1)
-        if tz:
-            break
+        if got:
+            results.append(got)
+            if len(results) >= 2 and results[0][0] == results[1][0]:
+                break  # first two agree -> consensus, skip the rest
+
+    tz, locale = None, None
+    if results:
+        from collections import Counter
+        tz = Counter(t for t, _ in results).most_common(1)[0][0]
+        cc = next((c for t, c in results if t == tz), "")
+        locale = _CC_LOCALE.get(cc)
+        if len({t for t, _ in results}) > 1:
+            print(f"[fingerprint] geo sources DISAGREED {results} -> majority tz={tz}", flush=True)
+        print(f"[fingerprint] geo proxy={pmask} -> tz={tz} cc={cc} locale={locale} "
+              f"(from {len(results)} source(s))", flush=True)
 
     if not tz:
         print(f"[fingerprint] geo detect FAILED for proxy={pmask} — "
