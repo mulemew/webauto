@@ -1869,6 +1869,40 @@ def _poll_turnstile_token(sb, secs):
     return _turnstile_token(sb)
 
 
+def _detached_wait(sb, secs, during=None):
+    """Wait `secs` with the chromedriver/CDP session DETACHED.
+
+    THE crux of embedded-Turnstile solving: the widget keeps evaluating after the
+    page loads, and if an automation/DevTools session is attached while it does,
+    Cloudflare detects it and fails the widget — the exact reason
+    uc_open_with_reconnect disconnects during full-page challenges. We were never
+    disconnecting for the embedded widget (token reads / form fill / window lookup
+    all keep the driver attached), so CF failed it every time.
+
+    Detach, optionally run `during()` (OS-level xdotool still reaches the browser
+    while detached), let CF verify/validate completely undisturbed, then reattach.
+    Falls back to a plain connected sleep if this SB build lacks disconnect()."""
+    detached = False
+    try:
+        sb.driver.disconnect()
+        detached = True
+    except Exception:
+        pass
+    if during:
+        try:
+            during()
+        except Exception:
+            pass
+    time.sleep(secs)
+    if detached:
+        for _ in range(4):
+            try:
+                sb.driver.connect()
+                return
+            except Exception:
+                time.sleep(1)
+
+
 @app.route("/sessions/<sid>/click-turnstile", methods=["POST"])
 def click_turnstile(sid):
     """Click an embedded Turnstile widget using SB's uc_gui_click_captcha.
@@ -1891,22 +1925,27 @@ def click_turnstile(sid):
         if tok and len(tok) > 20:
             return {"solved": True, "method": "auto", "attempt": 0}
 
-        # Give Turnstile's behavioural check a live, human-like pointer BEFORE it
-        # finishes verifying — a dead-static page scores bot-like. Native OS
-        # movement (no HTTP per move, no CDP).
+        # Raise THIS session's window (needs the driver) so the pointer/click land
+        # on the task page and not an idle warm-pool "New Tab".
         try:
             with _gui_lock:
                 _raise_window(_find_session_window(sb))
-                _human_mouse_drift()
         except Exception:
             pass
 
-        # Non-interactive Turnstile (the "Verifying..." spinner with no checkbox)
-        # issues a token ON ITS OWN — clicking it does nothing, or disturbs and
-        # resets it. It just needs TIME, and our Linux/datacenter-ish environment
-        # makes CF take longer than a real desktop. So FIRST wait patiently and
-        # quietly for the auto-verify to finish before deciding to click.
-        tok = _poll_turnstile_token(sb, 16)
+        # Non-interactive Turnstile (the "Verifying..." spinner) issues a token on
+        # its own — it just needs TIME and a live pointer, with NO automation
+        # attached. Detach the driver, drift the mouse (OS-level, still works while
+        # detached), and let CF verify undisturbed, then reattach and check.
+        def _drift():
+            try:
+                with _gui_lock:
+                    _human_mouse_drift()
+            except Exception:
+                pass
+
+        _detached_wait(sb, 16, during=_drift)
+        tok = _turnstile_token(sb)
         if tok and len(tok) > 20:
             return {"solved": True, "method": "auto-wait", "attempt": 0}
 
@@ -1929,7 +1968,9 @@ def click_turnstile(sid):
                         sb.uc_gui_click_captcha()
                 except Exception:
                     pass
-                tok = _poll_turnstile_token(sb, 10)
+                # Validate the click with the driver DETACHED (see _detached_wait).
+                _detached_wait(sb, 8)
+                tok = _turnstile_token(sb)
                 if tok and len(tok) > 20:
                     return {"solved": True, "method": "uc_gui", "attempt": attempt + 1}
                 continue
@@ -2034,9 +2075,10 @@ def click_turnstile(sid):
             except Exception:
                 pass
 
-            # Give CF time to validate this SINGLE xdotool click before giving up
-            # or retrying — no fast re-clicks.
-            tok = _poll_turnstile_token(sb, 10)
+            # Validate this SINGLE xdotool click with the driver DETACHED (see
+            # _detached_wait) — no fast re-clicks, no attached automation session.
+            _detached_wait(sb, 8)
+            tok = _turnstile_token(sb)
             if tok and len(tok) > 20:
                 return {"solved": True, "method": "xdotool", "attempt": attempt + 1}
 
