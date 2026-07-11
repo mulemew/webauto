@@ -1800,36 +1800,35 @@ def _raise_window(wid):
 
 
 def _human_mouse_drift(target_x=None, target_y=None):
-    """Move the shared Xvfb :99 pointer along a jittery, eased, human-like path.
+    """Move the shared Xvfb :99 pointer along a RICH, curved, human-like path.
 
-    Turnstile's behavioural check watches the pointer; a dead-static page scores
-    bot-like. The previous mouse-sim did this from the app container with ONE
-    HTTP round-trip PER move (100-200 moves = minutes), so it was cut. This does
-    it NATIVELY with local xdotool: fast (~1-1.5s), and genuine OS-level input
-    (isTrusted=true) that never touches CDP — so it can't re-expose automation.
+    Turnstile / reCAPTCHA behavioural checks watch the pointer; a dead-static
+    page (or a 2-move twitch) scores bot-like. The known-good version wandered
+    the cursor with a full multi-segment bezier sweep (100-200 moves) and that is
+    what let CF pass — but it ran from the app container over ONE HTTP round-trip
+    PER move (minutes), so it was cut down to almost nothing. This restores that
+    richness NATIVELY with local xdotool (100+ moves in ~2-3s), genuine OS-level
+    input (isTrusted=true) that never touches CDP. Wanders through a few random
+    waypoints, then lands on the target (the checkbox) if one is given.
 
     Caller must hold _gui_lock and have raised the right window (the pointer is
     shared across sessions on the one display).
     """
     import subprocess, random
-    try:
-        out = subprocess.run(
-            ["xdotool", "getmouselocation", "--shell"],
-            capture_output=True, text=True, timeout=2,
-        ).stdout
-        pos = {k: int(v) for k, v in (p.split("=", 1) for p in out.split() if "=" in p)
-               if k in ("X", "Y")}
-        x0, y0 = pos.get("X", 640), pos.get("Y", 400)
-    except Exception:
-        x0, y0 = 640, 400
-    tx = target_x if target_x is not None else random.randint(480, 820)
-    ty = target_y if target_y is not None else random.randint(340, 560)
-    steps = random.randint(18, 30)
-    for i in range(1, steps + 1):
-        t = i / steps
-        ease = t * t * (3 - 2 * t)  # smoothstep in/out
-        x = x0 + (tx - x0) * ease + random.uniform(-6, 6)
-        y = y0 + (ty - y0) * ease + random.uniform(-6, 6)
+
+    def _pos():
+        try:
+            out = subprocess.run(
+                ["xdotool", "getmouselocation", "--shell"],
+                capture_output=True, text=True, timeout=2,
+            ).stdout
+            p = {k: int(v) for k, v in (l.split("=", 1) for l in out.split() if "=" in l)
+                 if k in ("X", "Y")}
+            return p.get("X", 640), p.get("Y", 400)
+        except Exception:
+            return 640, 400
+
+    def _move(x, y):
         try:
             subprocess.run(
                 ["xdotool", "mousemove", "--sync", str(int(x)), str(int(y))],
@@ -1837,7 +1836,28 @@ def _human_mouse_drift(target_x=None, target_y=None):
             )
         except Exception:
             pass
-        time.sleep(random.uniform(0.01, 0.045))
+
+    x0, y0 = _pos()
+    # A few wandering waypoints, then the target — like a real hand approaching
+    # the checkbox, not a straight teleport.
+    waypoints = [(random.randint(360, 940), random.randint(230, 680))
+                 for _ in range(random.randint(3, 5))]
+    if target_x is not None and target_y is not None:
+        waypoints.append((int(target_x), int(target_y)))
+    for tx, ty in waypoints:
+        steps = random.randint(16, 28)
+        # Quadratic bezier via a random control point -> a curved, non-linear path.
+        cx = (x0 + tx) / 2 + random.uniform(-90, 90)
+        cy = (y0 + ty) / 2 + random.uniform(-90, 90)
+        for i in range(1, steps + 1):
+            e = (i / steps)
+            e = e * e * (3 - 2 * e)  # ease in/out for non-constant speed
+            mx = (1 - e) ** 2 * x0 + 2 * (1 - e) * e * cx + e ** 2 * tx + random.uniform(-3, 3)
+            my = (1 - e) ** 2 * y0 + 2 * (1 - e) * e * cy + e ** 2 * ty + random.uniform(-3, 3)
+            _move(mx, my)
+            time.sleep(random.uniform(0.006, 0.028))
+        x0, y0 = tx, ty
+        time.sleep(random.uniform(0.04, 0.18))  # brief pause at each waypoint
 
 
 def _element_abs_xy(sb, css, dx=0, dy_frac=0.5, wid=None):
