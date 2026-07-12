@@ -306,6 +306,9 @@ export const ConditionalActionType = {
   keypress: "keypress",
   screenshot: "screenshot",
   scroll: "scroll",
+  continue: "continue",
+  exitSuccess: "exitSuccess",
+  exitFailure: "exitFailure",
 } as const;
 
 export type ConditionalActionSelectorType =
@@ -330,6 +333,8 @@ export interface ConditionalAction {
   key?: string;
   x?: number;
   y?: number;
+  /** For exitSuccess / exitFailure: optional message recorded in the log */
+  message?: string;
 }
 
 export type ConditionStepType =
@@ -361,6 +366,8 @@ export interface ConditionStep {
   /** CSS selector for element-based conditions */
   conditionSelector?: string;
   thenAction?: ConditionalAction;
+  /** Action to execute when the condition is false */
+  elseAction?: ConditionalAction;
 }
 
 /**

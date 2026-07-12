@@ -15,8 +15,11 @@ import type { DecryptedCredentials } from "./runner";
 
 export type ConditionType = "text_contains" | "text_not_contains" | "element_visible" | "element_not_visible" | "url_contains";
 
+// An if/else branch action. Either performs a sub-step (click/fill/…), or is a
+// control-flow action: continue to the next step, or end the whole task.
 export interface ConditionalAction {
-  type: "click" | "fill" | "navigate" | "wait" | "keypress" | "screenshot" | "scroll";
+  type: "click" | "fill" | "navigate" | "wait" | "keypress" | "screenshot" | "scroll"
+    | "continue" | "exitSuccess" | "exitFailure";
   selector?: string;
   selectorType?: "text" | "css" | "xpath";
   url?: string;
@@ -25,6 +28,8 @@ export interface ConditionalAction {
   key?: string;
   x?: number;
   y?: number;
+  /** For exitSuccess / exitFailure: an optional message recorded in the log. */
+  message?: string;
 }
 
 export type WorkflowStep =
@@ -42,7 +47,7 @@ export type WorkflowStep =
   | { type: "switchToNewPage"; timeout?: number }
   | { type: "keypress"; key: string }
   | { type: "login"; loginMethod: "form" | "github" | "google"; loginUrl: string; inlineUsername?: string; inlinePassword?: string; inlineTotp?: string; successSelector?: string; successText?: string; cookieMode?: boolean; sessionKey?: string }
-  | { type: "condition"; conditionType: ConditionType; conditionValue: string; conditionSelector?: string; thenAction: ConditionalAction };
+  | { type: "condition"; conditionType: ConditionType; conditionValue: string; conditionSelector?: string; thenAction: ConditionalAction; elseAction?: ConditionalAction };
 
 export interface StepResult {
   success: boolean;
@@ -56,6 +61,18 @@ export class CaptchaBlockedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "CaptchaBlockedError";
+  }
+}
+
+/**
+ * Thrown by a condition step's exitSuccess / exitFailure branch to END the whole
+ * task early (like a return in an if/else). `succeeded` decides the task outcome.
+ * Caught by the workflow loop, which records a final step result and stops.
+ */
+export class TaskExitError extends Error {
+  constructor(public readonly succeeded: boolean, message: string) {
+    super(message);
+    this.name = "TaskExitError";
   }
 }
 
@@ -123,6 +140,7 @@ const MAX_WAIT_MS = 60_000;
       const MAX_STEP_RETRIES = 1;
       let _stepErr: unknown = null;
       let _stepResult: { message: string; newPage?: PageAdapter; screenshotPath?: string } | null = null;
+      let _taskExit: TaskExitError | null = null;
       for (let _attempt = 0; _attempt <= MAX_STEP_RETRIES; _attempt++) {
         try {
           _stepResult = await executeStep(currentPage, step, dataDir, taskId, i, creds, solver, targetUrl);
@@ -130,12 +148,27 @@ const MAX_WAIT_MS = 60_000;
           break;
         } catch (err) {
           if (err instanceof CaptchaBlockedError) throw err;
+          // Intentional if/else exit — don't retry; end the task with this outcome.
+          if (err instanceof TaskExitError) { _taskExit = err; break; }
           _stepErr = err;
           if (_attempt < MAX_STEP_RETRIES) {
             logger.warn({ taskId, stepIndex: i, type: step.type, attempt: _attempt + 1 }, "Step failed, retrying once");
             await new Promise<void>((r) => setTimeout(r, 2000));
           }
         }
+      }
+      if (_taskExit) {
+        const screenshotPath = await saveStepScreenshot(currentPage, dataDir, taskId, i, "cond").catch(() => undefined);
+        const exitResult: StepResult = {
+          success: _taskExit.succeeded,
+          message: `${label}: ${_taskExit.message}`,
+          screenshotPath,
+          durationMs: Date.now() - _stepStart,
+        };
+        results.push(exitResult);
+        onStepDone?.(exitResult);
+        logger.info({ taskId, stepIndex: i, succeeded: _taskExit.succeeded, msg: _taskExit.message }, "Task ended early by a condition step");
+        break;
       }
       if (_stepErr !== null || !_stepResult) {
         const msg = _stepErr instanceof Error ? _stepErr.message : String(_stepErr);
@@ -695,35 +728,36 @@ async function executeStep(
           conditionMet = false;
         }
 
-        if (!conditionMet) {
-          // Condition not met is NOT a failure — it means the page is already in
-          // the desired state (e.g. element already visible/hidden, already clicked).
-          // The task continues as successful without running the then-action.
-          const warningNote = evalWarning ? ` (eval warning: ${evalWarning})` : "";
-            const notMetShot = await saveStepScreenshot(page, dataDir, taskId, stepIndex, "cond");
-            return {
-              message: `Condition not met (${conditionType}: "${conditionValue}") — no action needed, continuing${warningNote}`,
-              screenshotPath: notMetShot,
-            };
+        // ── if / else ──────────────────────────────────────────────────────
+        // Condition NOT met is never a failure by itself — it just selects the
+        // else branch (which defaults to "continue", preserving old behavior).
+        const branch = conditionMet ? "then" : "else";
+        const action: ConditionalAction = conditionMet
+          ? thenAction
+          : (step.elseAction ?? { type: "continue" });
+        const condDesc = `${conditionType}: "${conditionValue}"`;
+        const metWord = conditionMet ? "met" : "not met";
+        const evalNote = !conditionMet && evalWarning ? ` (eval warning: ${evalWarning})` : "";
+
+        // Control-flow branches.
+        if (!action || action.type === "continue") {
+          const shot = await saveStepScreenshot(page, dataDir, taskId, stepIndex, "cond");
+          return { message: `Condition ${metWord} (${condDesc}) → ${branch}: continue${evalNote}`, screenshotPath: shot };
+        }
+        if (action.type === "exitSuccess") {
+          throw new TaskExitError(true, `Condition ${metWord} (${condDesc}) → ${branch}: exit task (success)${action.message ? ` — ${action.message}` : ""}`);
+        }
+        if (action.type === "exitFailure") {
+          throw new TaskExitError(false, `Condition ${metWord} (${condDesc}) → ${branch}: exit task (failure)${action.message ? ` — ${action.message}` : ""}`);
         }
 
-        // Condition IS met — execute the then-action as a sub-step. Wrap it so a
-        // failing then-action (target vanished between check and act, empty/misconfigured
-        // selector, etc.) does NOT hard-fail the whole task: a conditional step is
-        // branch/best-effort by design, mirroring the "not met is not a failure" rule above.
-        const subStep = thenAction as unknown as WorkflowStep;
-        try {
-          const subResult = await executeStep(page, subStep, dataDir, taskId, stepIndex, creds, solver, targetUrl);
-          const condMetShot = subResult.screenshotPath ?? await saveStepScreenshot(subResult.newPage ?? page, dataDir, taskId, stepIndex, "cond");
-          return { message: `Condition met (${conditionType}: "${conditionValue}") → ${subResult.message}`, newPage: subResult.newPage, screenshotPath: condMetShot };
-        } catch (actionErr) {
-          const actionMsg = actionErr instanceof Error ? actionErr.message : String(actionErr);
-          const failShot = await saveStepScreenshot(page, dataDir, taskId, stepIndex, "cond");
-          return {
-            message: `Condition met (${conditionType}: "${conditionValue}") but then-action failed — continuing: ${actionMsg}`,
-            screenshotPath: failShot,
-          };
-        }
+        // Otherwise it's a sub-step action — run it. A FAILURE here aborts the task
+        // like a normal step (the user asked for this): only the condition itself
+        // not matching is non-fatal (handled by the else/continue branch above).
+        const subStep = action as unknown as WorkflowStep;
+        const subResult = await executeStep(page, subStep, dataDir, taskId, stepIndex, creds, solver, targetUrl);
+        const condShot = subResult.screenshotPath ?? await saveStepScreenshot(subResult.newPage ?? page, dataDir, taskId, stepIndex, "cond");
+        return { message: `Condition ${metWord} (${condDesc}) → ${branch}: ${subResult.message}`, newPage: subResult.newPage, screenshotPath: condShot };
       }
   
     default: {

@@ -175,6 +175,9 @@ export const ListTasksResponseItem = zod.object({
                   "keypress",
                   "screenshot",
                   "scroll",
+                  "continue",
+                  "exitSuccess",
+                  "exitFailure",
                 ]),
                 selector: zod.string().optional(),
                 selectorType: zod.enum(["text", "css", "xpath"]).optional(),
@@ -184,9 +187,36 @@ export const ListTasksResponseItem = zod.object({
                 key: zod.string().optional(),
                 x: zod.number().optional(),
                 y: zod.number().optional(),
+                message: zod.string().optional(),
               })
               .optional()
               .describe("Action to execute when the condition is true"),
+            elseAction: zod
+              .object({
+                type: zod.enum([
+                  "click",
+                  "fill",
+                  "navigate",
+                  "wait",
+                  "keypress",
+                  "screenshot",
+                  "scroll",
+                  "continue",
+                  "exitSuccess",
+                  "exitFailure",
+                ]),
+                selector: zod.string().optional(),
+                selectorType: zod.enum(["text", "css", "xpath"]).optional(),
+                url: zod.string().optional(),
+                value: zod.string().optional(),
+                ms: zod.number().optional(),
+                key: zod.string().optional(),
+                x: zod.number().optional(),
+                y: zod.number().optional(),
+                message: zod.string().optional(),
+              })
+              .optional()
+              .describe("Action to execute when the condition is false"),
           })
           .describe("Conditionally execute an action based on page state"),
         zod
@@ -440,6 +470,9 @@ export const CreateTaskBody = zod.object({
                   "keypress",
                   "screenshot",
                   "scroll",
+                  "continue",
+                  "exitSuccess",
+                  "exitFailure",
                 ]),
                 selector: zod.string().optional(),
                 selectorType: zod.enum(["text", "css", "xpath"]).optional(),
@@ -449,9 +482,36 @@ export const CreateTaskBody = zod.object({
                 key: zod.string().optional(),
                 x: zod.number().optional(),
                 y: zod.number().optional(),
+                message: zod.string().optional(),
               })
               .optional()
               .describe("Action to execute when the condition is true"),
+            elseAction: zod
+              .object({
+                type: zod.enum([
+                  "click",
+                  "fill",
+                  "navigate",
+                  "wait",
+                  "keypress",
+                  "screenshot",
+                  "scroll",
+                  "continue",
+                  "exitSuccess",
+                  "exitFailure",
+                ]),
+                selector: zod.string().optional(),
+                selectorType: zod.enum(["text", "css", "xpath"]).optional(),
+                url: zod.string().optional(),
+                value: zod.string().optional(),
+                ms: zod.number().optional(),
+                key: zod.string().optional(),
+                x: zod.number().optional(),
+                y: zod.number().optional(),
+                message: zod.string().optional(),
+              })
+              .optional()
+              .describe("Action to execute when the condition is false"),
           })
           .describe("Conditionally execute an action based on page state"),
         zod
@@ -690,6 +750,9 @@ export const GetTaskResponse = zod
                     "keypress",
                     "screenshot",
                     "scroll",
+                    "continue",
+                    "exitSuccess",
+                    "exitFailure",
                   ]),
                   selector: zod.string().optional(),
                   selectorType: zod.enum(["text", "css", "xpath"]).optional(),
@@ -699,9 +762,36 @@ export const GetTaskResponse = zod
                   key: zod.string().optional(),
                   x: zod.number().optional(),
                   y: zod.number().optional(),
+                  message: zod.string().optional(),
                 })
                 .optional()
                 .describe("Action to execute when the condition is true"),
+              elseAction: zod
+                .object({
+                  type: zod.enum([
+                    "click",
+                    "fill",
+                    "navigate",
+                    "wait",
+                    "keypress",
+                    "screenshot",
+                    "scroll",
+                    "continue",
+                    "exitSuccess",
+                    "exitFailure",
+                  ]),
+                  selector: zod.string().optional(),
+                  selectorType: zod.enum(["text", "css", "xpath"]).optional(),
+                  url: zod.string().optional(),
+                  value: zod.string().optional(),
+                  ms: zod.number().optional(),
+                  key: zod.string().optional(),
+                  x: zod.number().optional(),
+                  y: zod.number().optional(),
+                  message: zod.string().optional(),
+                })
+                .optional()
+                .describe("Action to execute when the condition is false"),
             })
             .describe("Conditionally execute an action based on page state"),
           zod
@@ -976,6 +1066,9 @@ export const UpdateTaskBody = zod.object({
                   "keypress",
                   "screenshot",
                   "scroll",
+                  "continue",
+                  "exitSuccess",
+                  "exitFailure",
                 ]),
                 selector: zod.string().optional(),
                 selectorType: zod.enum(["text", "css", "xpath"]).optional(),
@@ -985,9 +1078,36 @@ export const UpdateTaskBody = zod.object({
                 key: zod.string().optional(),
                 x: zod.number().optional(),
                 y: zod.number().optional(),
+                message: zod.string().optional(),
               })
               .optional()
               .describe("Action to execute when the condition is true"),
+            elseAction: zod
+              .object({
+                type: zod.enum([
+                  "click",
+                  "fill",
+                  "navigate",
+                  "wait",
+                  "keypress",
+                  "screenshot",
+                  "scroll",
+                  "continue",
+                  "exitSuccess",
+                  "exitFailure",
+                ]),
+                selector: zod.string().optional(),
+                selectorType: zod.enum(["text", "css", "xpath"]).optional(),
+                url: zod.string().optional(),
+                value: zod.string().optional(),
+                ms: zod.number().optional(),
+                key: zod.string().optional(),
+                x: zod.number().optional(),
+                y: zod.number().optional(),
+                message: zod.string().optional(),
+              })
+              .optional()
+              .describe("Action to execute when the condition is false"),
           })
           .describe("Conditionally execute an action based on page state"),
         zod
@@ -1218,6 +1338,9 @@ export const UpdateTaskResponse = zod.object({
                   "keypress",
                   "screenshot",
                   "scroll",
+                  "continue",
+                  "exitSuccess",
+                  "exitFailure",
                 ]),
                 selector: zod.string().optional(),
                 selectorType: zod.enum(["text", "css", "xpath"]).optional(),
@@ -1227,9 +1350,36 @@ export const UpdateTaskResponse = zod.object({
                 key: zod.string().optional(),
                 x: zod.number().optional(),
                 y: zod.number().optional(),
+                message: zod.string().optional(),
               })
               .optional()
               .describe("Action to execute when the condition is true"),
+            elseAction: zod
+              .object({
+                type: zod.enum([
+                  "click",
+                  "fill",
+                  "navigate",
+                  "wait",
+                  "keypress",
+                  "screenshot",
+                  "scroll",
+                  "continue",
+                  "exitSuccess",
+                  "exitFailure",
+                ]),
+                selector: zod.string().optional(),
+                selectorType: zod.enum(["text", "css", "xpath"]).optional(),
+                url: zod.string().optional(),
+                value: zod.string().optional(),
+                ms: zod.number().optional(),
+                key: zod.string().optional(),
+                x: zod.number().optional(),
+                y: zod.number().optional(),
+                message: zod.string().optional(),
+              })
+              .optional()
+              .describe("Action to execute when the condition is false"),
           })
           .describe("Conditionally execute an action based on page state"),
         zod

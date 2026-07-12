@@ -72,6 +72,9 @@ const thenActionSchema = z
       "keypress",
       "screenshot",
       "scroll",
+      "continue",
+      "exitSuccess",
+      "exitFailure",
     ]),
     selector: z.string().optional(),
     selectorType: z.enum(["text", "css", "xpath"]).optional(),
@@ -81,6 +84,7 @@ const thenActionSchema = z
     key: z.string().optional(),
     x: z.number().optional(),
     y: z.number().optional(),
+    message: z.string().optional(),
   })
   .optional();
 
@@ -135,6 +139,7 @@ const stepSchema = z.object({
   conditionSelector: z.string().optional(),
   maxReloads: z.number().optional(),
   thenAction: thenActionSchema,
+  elseAction: thenActionSchema,
 });
 
 const formSchema = z.object({

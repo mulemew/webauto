@@ -11,7 +11,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 export type StepType = "navigate" | "click" | "fill" | "select" | "scroll" | "hover" | "wait" | "waitFor" | "screenshot" | "dismissPopups" | "switchToNewPage" | "keypress" | "login" | "condition" | "cfVerify";
 
 export type ConditionType = "text_contains" | "text_not_contains" | "element_visible" | "element_not_visible" | "url_contains";
-export type ThenActionType = "click" | "fill" | "navigate" | "wait" | "keypress" | "screenshot" | "scroll";
+export type ThenActionType = "click" | "fill" | "navigate" | "wait" | "keypress" | "screenshot" | "scroll" | "continue" | "exitSuccess" | "exitFailure";
 
 export interface ConditionalAction {
   type: ThenActionType;
@@ -23,6 +23,7 @@ export interface ConditionalAction {
   key?: string;
   x?: number;
   y?: number;
+  message?: string;
 }
 
 export interface WorkflowStep {
@@ -53,6 +54,7 @@ export interface WorkflowStep {
   conditionValue?: string;
   conditionSelector?: string;
   thenAction?: ConditionalAction;
+  elseAction?: ConditionalAction;
 }
 
 export interface SavedCredentialOption {
@@ -124,6 +126,113 @@ function defaultStep(type: StepType, taskTargetUrl = ""): WorkflowStep {
     case "dismissPopups":   return { type };
     case "cfVerify":        return { type, maxReloads: 2 };
   }
+}
+
+// Editor for one if/else branch action (used for both thenAction and elseAction).
+// An action is either a sub-step (click/fill/…) or a control action
+// (continue / exit the task success or failure).
+function ConditionalActionEditor({ action, onChange, label, idPrefix }: {
+  action: ConditionalAction | undefined;
+  onChange: (a: ConditionalAction) => void;
+  label: string;
+  idPrefix: string;
+}) {
+  const { t } = useLang();
+  const a: ConditionalAction = action ?? { type: "continue" };
+  const patch = (p: Partial<ConditionalAction>) => onChange({ ...a, ...p });
+  const setType = (v: ThenActionType) => {
+    const na: ConditionalAction = { type: v };
+    if (v === "click") { na.selector = ""; na.selectorType = "text"; }
+    if (v === "fill") { na.selector = ""; na.value = ""; }
+    if (v === "navigate") { na.url = ""; }
+    if (v === "wait") { na.ms = 1000; }
+    if (v === "keypress") { na.key = "Enter"; }
+    if (v === "scroll") { na.x = 0; na.y = 300; }
+    if (v === "exitSuccess" || v === "exitFailure") { na.message = ""; }
+    onChange(na);
+  };
+  return (
+    <div className="space-y-2">
+      <Label className="text-xs font-medium">{label}</Label>
+      <Select value={a.type} onValueChange={(v) => setType(v as ThenActionType)}>
+        <SelectTrigger className="h-8 text-xs font-mono"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="continue" className="text-xs">Continue (继续下一步)</SelectItem>
+          <SelectItem value="exitSuccess" className="text-xs">Exit task — success (结束·成功)</SelectItem>
+          <SelectItem value="exitFailure" className="text-xs">Exit task — failure (结束·失败)</SelectItem>
+          <SelectItem value="click" className="text-xs">{t.stepClick}</SelectItem>
+          <SelectItem value="fill" className="text-xs">{t.stepFill}</SelectItem>
+          <SelectItem value="navigate" className="text-xs">{t.stepNavigate}</SelectItem>
+          <SelectItem value="wait" className="text-xs">{t.stepWait}</SelectItem>
+          <SelectItem value="keypress" className="text-xs">{t.stepKeyPress}</SelectItem>
+          <SelectItem value="screenshot" className="text-xs">{t.stepScreenshotType}</SelectItem>
+          <SelectItem value="scroll" className="text-xs">{t.stepScroll}</SelectItem>
+        </SelectContent>
+      </Select>
+      {a.type === "continue" && (
+        <p className="text-xs text-muted-foreground font-mono">Do nothing — continue to the next step.</p>
+      )}
+      {(a.type === "exitSuccess" || a.type === "exitFailure") && (
+        <Input className="font-mono text-xs h-8" placeholder="Optional note for the log"
+          value={a.message ?? ""} onChange={(e) => patch({ message: e.target.value })} />
+      )}
+      {a.type === "click" && (
+        <div className="space-y-2">
+          <RadioGroup
+            value={a.selectorType ?? "text"}
+            onValueChange={(v) => patch({ selectorType: v as "text" | "css" | "xpath" })}
+            className="flex gap-4"
+          >
+            {(["text", "css", "xpath"] as const).map((st) => (
+              <div key={st} className="flex items-center gap-1.5">
+                <RadioGroupItem value={st} id={`${idPrefix}-sel-${st}`} />
+                <Label htmlFor={`${idPrefix}-sel-${st}`} className="text-xs font-mono cursor-pointer">{st}</Label>
+              </div>
+            ))}
+          </RadioGroup>
+          <Input className="font-mono text-xs h-8" placeholder="Selector or text"
+            value={a.selector ?? ""} onChange={(e) => patch({ selector: e.target.value })} />
+        </div>
+      )}
+      {a.type === "fill" && (
+        <div className="space-y-2">
+          <Input className="font-mono text-xs h-8" placeholder="CSS Selector"
+            value={a.selector ?? ""} onChange={(e) => patch({ selector: e.target.value })} />
+          <Input className="font-mono text-xs h-8" placeholder="Value to type"
+            value={a.value ?? ""} onChange={(e) => patch({ value: e.target.value })} />
+        </div>
+      )}
+      {a.type === "navigate" && (
+        <Input className="font-mono text-xs h-8" placeholder="https://example.com/next"
+          value={a.url ?? ""} onChange={(e) => patch({ url: e.target.value })} />
+      )}
+      {a.type === "wait" && (
+        <Input type="number" className="font-mono text-xs h-8 w-36" placeholder="ms"
+          value={a.ms ?? 1000} onChange={(e) => patch({ ms: parseInt(e.target.value, 10) || 0 })} />
+      )}
+      {a.type === "keypress" && (
+        <Input className="font-mono text-xs h-8" placeholder="Enter, Tab, Escape…"
+          value={a.key ?? ""} onChange={(e) => patch({ key: e.target.value })} />
+      )}
+      {a.type === "scroll" && (
+        <div className="flex gap-3">
+          <div className="space-y-1 flex-1">
+            <Label className="text-xs">X</Label>
+            <Input type="number" className="font-mono text-xs h-8" value={a.x ?? 0}
+              onChange={(e) => patch({ x: parseInt(e.target.value, 10) || 0 })} />
+          </div>
+          <div className="space-y-1 flex-1">
+            <Label className="text-xs">Y</Label>
+            <Input type="number" className="font-mono text-xs h-8" value={a.y ?? 300}
+              onChange={(e) => patch({ y: parseInt(e.target.value, 10) || 0 })} />
+          </div>
+        </div>
+      )}
+      {a.type === "screenshot" && (
+        <p className="text-xs text-muted-foreground font-mono">Captures the page.</p>
+      )}
+    </div>
+  );
 }
 
 function StepCard({
@@ -379,89 +488,21 @@ function StepCard({
               />
             </div>
           )}
-          <div className="border-t border-border pt-3 space-y-2">
-            <Label className="text-xs font-medium">{t.thenExecute}</Label>
-            <Select
-              value={step.thenAction?.type ?? "click"}
-              onValueChange={(v) => {
-                const newAction: ConditionalAction = { type: v as ThenActionType };
-                if (v === "click") { newAction.selector = ""; newAction.selectorType = "text"; }
-                if (v === "fill") { newAction.selector = ""; newAction.value = ""; }
-                if (v === "navigate") { newAction.url = ""; }
-                if (v === "wait") { newAction.ms = 1000; }
-                if (v === "keypress") { newAction.key = "Enter"; }
-                if (v === "scroll") { newAction.x = 0; newAction.y = 300; }
-                set({ thenAction: newAction });
-              }}
-            >
-              <SelectTrigger className="h-8 text-xs font-mono">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="click" className="text-xs">{t.stepClick}</SelectItem>
-                <SelectItem value="fill" className="text-xs">{t.stepFill}</SelectItem>
-                <SelectItem value="navigate" className="text-xs">{t.stepNavigate}</SelectItem>
-                <SelectItem value="wait" className="text-xs">{t.stepWait}</SelectItem>
-                <SelectItem value="keypress" className="text-xs">{t.stepKeyPress}</SelectItem>
-                <SelectItem value="screenshot" className="text-xs">{t.stepScreenshotType}</SelectItem>
-                <SelectItem value="scroll" className="text-xs">{t.stepScroll}</SelectItem>
-              </SelectContent>
-            </Select>
-            {step.thenAction?.type === "click" && (
-              <div className="space-y-2">
-                <RadioGroup
-                  value={step.thenAction.selectorType ?? "text"}
-                  onValueChange={(v) => set({ thenAction: { ...step.thenAction!, selectorType: v as "text" | "css" | "xpath" } })}
-                  className="flex gap-4"
-                >
-                  {(["text", "css", "xpath"] as const).map((t) => (
-                    <div key={t} className="flex items-center gap-1.5">
-                      <RadioGroupItem value={t} id={`cond-click-sel-${index}-${t}`} />
-                      <Label htmlFor={`cond-click-sel-${index}-${t}`} className="text-xs font-mono cursor-pointer">{t}</Label>
-                    </div>
-                  ))}
-                </RadioGroup>
-                <Input className="font-mono text-xs h-8" placeholder="Selector or text"
-                  value={step.thenAction.selector ?? ""} onChange={(e) => set({ thenAction: { ...step.thenAction!, selector: e.target.value } })} />
-              </div>
-            )}
-            {step.thenAction?.type === "fill" && (
-              <div className="space-y-2">
-                <Input className="font-mono text-xs h-8" placeholder="CSS Selector"
-                  value={step.thenAction.selector ?? ""} onChange={(e) => set({ thenAction: { ...step.thenAction!, selector: e.target.value } })} />
-                <Input className="font-mono text-xs h-8" placeholder="Value to type"
-                  value={step.thenAction.value ?? ""} onChange={(e) => set({ thenAction: { ...step.thenAction!, value: e.target.value } })} />
-              </div>
-            )}
-            {step.thenAction?.type === "navigate" && (
-              <Input className="font-mono text-xs h-8" placeholder="https://example.com/next"
-                value={step.thenAction.url ?? ""} onChange={(e) => set({ thenAction: { ...step.thenAction!, url: e.target.value } })} />
-            )}
-            {step.thenAction?.type === "wait" && (
-              <Input type="number" className="font-mono text-xs h-8 w-36" placeholder="ms"
-                value={step.thenAction.ms ?? 1000} onChange={(e) => set({ thenAction: { ...step.thenAction!, ms: parseInt(e.target.value, 10) || 0 } })} />
-            )}
-            {step.thenAction?.type === "keypress" && (
-              <Input className="font-mono text-xs h-8" placeholder="Enter, Tab, Escape…"
-                value={step.thenAction.key ?? ""} onChange={(e) => set({ thenAction: { ...step.thenAction!, key: e.target.value } })} />
-            )}
-            {step.thenAction?.type === "scroll" && (
-              <div className="flex gap-3">
-                <div className="space-y-1 flex-1">
-                  <Label className="text-xs">X</Label>
-                  <Input type="number" className="font-mono text-xs h-8" value={step.thenAction.x ?? 0}
-                    onChange={(e) => set({ thenAction: { ...step.thenAction!, x: parseInt(e.target.value, 10) || 0 } })} />
-                </div>
-                <div className="space-y-1 flex-1">
-                  <Label className="text-xs">Y</Label>
-                  <Input type="number" className="font-mono text-xs h-8" value={step.thenAction.y ?? 300}
-                    onChange={(e) => set({ thenAction: { ...step.thenAction!, y: parseInt(e.target.value, 10) || 0 } })} />
-                </div>
-              </div>
-            )}
-            {step.thenAction?.type === "screenshot" && (
-              <p className="text-xs text-muted-foreground font-mono">Captures the page if condition is met.</p>
-            )}
+          <div className="border-t border-border pt-3">
+            <ConditionalActionEditor
+              label={`${t.thenExecute} (条件成立)`}
+              idPrefix={`cond-then-${index}`}
+              action={step.thenAction}
+              onChange={(a) => set({ thenAction: a })}
+            />
+          </div>
+          <div className="border-t border-border pt-3">
+            <ConditionalActionEditor
+              label="Else — 条件不成立时"
+              idPrefix={`cond-else-${index}`}
+              action={step.elseAction}
+              onChange={(a) => set({ elseAction: a })}
+            />
           </div>
         </div>
       )}

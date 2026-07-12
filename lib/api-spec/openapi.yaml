@@ -716,11 +716,14 @@ components:
 
     ConditionalAction:
       type: object
-      description: Action to execute when the condition is true
+      description: >-
+        An if/else branch action. Either performs a sub-step
+        (click/fill/navigate/wait/keypress/screenshot/scroll), or a control-flow
+        action: continue to the next step, or end the task (exitSuccess/exitFailure).
       properties:
         type:
           type: string
-          enum: [click, fill, navigate, wait, keypress, screenshot, scroll]
+          enum: [click, fill, navigate, wait, keypress, screenshot, scroll, continue, exitSuccess, exitFailure]
         selector:
           type: string
         selectorType:
@@ -738,6 +741,9 @@ components:
           type: integer
         y:
           type: integer
+        message:
+          type: string
+          description: For exitSuccess / exitFailure, an optional message recorded in the log
       required: [type]
 
     ConditionStep:
@@ -757,6 +763,9 @@ components:
           type: string
           description: CSS selector for element-based conditions
         thenAction:
+          $ref: "#/components/schemas/ConditionalAction"
+        elseAction:
+          description: Action to execute when the condition is false
           $ref: "#/components/schemas/ConditionalAction"
       required: [type, conditionType]
 
