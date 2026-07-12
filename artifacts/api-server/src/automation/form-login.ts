@@ -411,15 +411,28 @@ import type { PageAdapter } from "./page-adapter";
   // password field's own form — this fires onSubmit WITHOUT clicking any button,
   // so it can never trip a social-login button.
   async function jsClickSubmit(page: PageAdapter): Promise<boolean> {
-    const submitSel =
-      "button[type='submit'], input[type='submit'], button.btn-primary, button.login-btn, " +
-      "button[class*='submit' i], button[class*='sign-in' i]";
-    const btn = await page.$(submitSel);
-    if (btn) {
-      await btn.click();
-      return true;
-    }
     return (await page.evaluate(() => {
+      const firstVisible = (sel: string): HTMLElement | null => {
+        for (const el of Array.from(document.querySelectorAll<HTMLElement>(sel))) {
+          const r = el.getBoundingClientRect();
+          const s = getComputedStyle(el);
+          if (r.width === 0 || r.height === 0 || s.display === "none" || s.visibility === "hidden") continue;
+          return el;
+        }
+        return null;
+      };
+      // Prefer a real, VISIBLE submit control; fall back to class-based guesses.
+      // Visibility matters: ct8.pl/small.pl has a hidden zero-size
+      // button[type=submit] ("Zapisz zmiany") in another form that appears BEFORE
+      // the real "Zaloguj się" button — picking the first match blindly grabbed
+      // the hidden one and the cf-proxy (Selenium) click threw "element not
+      // interactable". We also do NOT text-match login words (that clicked
+      // back4app's "Sign in with Google").
+      const btn =
+        firstVisible("button[type='submit'], input[type='submit']") ||
+        firstVisible("button.login-btn, button.btn-primary, button[class*='submit' i], button[class*='sign-in' i]");
+      if (btn) { btn.click(); return true; }
+      // Last resort: submit the form that owns the password field.
       const pw = document.querySelector('input[type="password"]') as HTMLInputElement | null;
       const form = pw?.form;
       if (form) {
