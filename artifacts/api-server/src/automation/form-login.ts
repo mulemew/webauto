@@ -517,6 +517,33 @@ import type { PageAdapter } from "./page-adapter";
     return null;
   }
 
+  // Read a visible login error/alert message. Called RIGHT AFTER submit and
+  // BEFORE dismissPopups — otherwise the popup cleanup clicks the alert's close
+  // button (e.g. wispbyte's auth-form-alert) and erases the real reason, leaving
+  // only a generic "login button still visible".
+  async function readLoginError(page: PageAdapter): Promise<string> {
+    try {
+      return (await page.evaluate(() => {
+        const sels = [
+          ".auth-form-alert", "[role='alert']", ".alert-danger", ".alert-error",
+          "[class*='error-message' i]", "[class*='login-error' i]", "[class*='form-error' i]",
+          ".invalid-feedback", "[class*='alert' i]", "[class*='invalid' i]",
+        ];
+        for (const sel of sels) {
+          for (const el of Array.from(document.querySelectorAll<HTMLElement>(sel))) {
+            const r = el.getBoundingClientRect();
+            const s = getComputedStyle(el);
+            if (r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden") {
+              const t = (el.textContent || "").trim();
+              if (t && t.length < 300) return t;
+            }
+          }
+        }
+        return "";
+      })) as string;
+    } catch { return ""; }
+  }
+
   export async function formLogin(
     page: PageAdapter,
     targetUrl: string,
@@ -600,6 +627,9 @@ import type { PageAdapter } from "./page-adapter";
 
       // Wait for page to fully settle (URL stops changing) — up to 15 s
       await waitForSettle(page, 8000);
+      // Capture any login error BEFORE dismissPopups clicks its close button.
+      let submitError = await readLoginError(page);
+      if (submitError) logger.warn({ submitError }, "Login page shows an error message after submit");
       await dismissPopups(page);
 
       // Check if a dialog popped up indicating captcha was required but not solved.
@@ -623,6 +653,7 @@ import type { PageAdapter } from "./page-adapter";
             await page.keyboard.press("Enter");
           }
           await waitForSettle(page, 8000);
+          submitError = (await readLoginError(page)) || submitError;
           await dismissPopups(page);
         }
       }
@@ -683,7 +714,7 @@ import type { PageAdapter } from "./page-adapter";
         captchaBlocked: false,
         message: outcome.success
           ? `Successfully logged in. ${outcome.reason}`
-          : `Login failed: ${outcome.reason}`,
+          : `Login failed: ${outcome.reason}${submitError ? ` — site said: "${submitError}"` : ""}`,
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
