@@ -879,11 +879,11 @@ async function clickByText(page: PageAdapter, text: string): Promise<boolean> {
   // "login" and "Log" never matches "Login". The click target must equal the
   // element's trimmed text (or value / aria-label) exactly.
   const target = text.trim();
-  // Find + tag the matching element in-page, then dispatch a REAL (trusted) click
-  // through the adapter. A synthetic el.click() (isTrusted=false) is silently
-  // ignored by framework/anti-bot buttons — e.g. minestrator's Vue "Spin the wheel"
-  // reward button reported success but never spun. Fall back to el.click() if the
-  // real click can't land (e.g. element not interactable behind an overlay).
+  // Find + tag the matching element, SCROLL IT INTO VIEW, then dispatch a real
+  // click through the adapter (trusted). Scrolling matters: buttons like
+  // minestrator's "Spin the wheel" render BELOW THE FOLD, and a click that doesn't
+  // bring the element into the viewport first can miss. Fall back to a synthetic
+  // el.click() if the real click can't land (element still not interactable).
   const found = await page.evaluate((btnText: unknown) => {
     document.querySelectorAll("[data-wa-textclick]").forEach((e) => e.removeAttribute("data-wa-textclick"));
     const candidates = Array.from(
@@ -901,6 +901,7 @@ async function clickByText(page: PageAdapter, text: string): Promise<boolean> {
     for (const el of candidates) {
       if (getElText(el) === (btnText as string) && isVisible(el)) {
         el.setAttribute("data-wa-textclick", "1");
+        try { el.scrollIntoView({ block: "center", inline: "center" }); } catch { /* ignore */ }
         return true;
       }
     }
@@ -908,6 +909,7 @@ async function clickByText(page: PageAdapter, text: string): Promise<boolean> {
   }, target as never) as boolean;
 
   if (!found) return false;
+  await new Promise((r) => setTimeout(r, 200)); // let the scroll settle
 
   try {
     await page.click("[data-wa-textclick='1']"); // real, trusted click via the backend
