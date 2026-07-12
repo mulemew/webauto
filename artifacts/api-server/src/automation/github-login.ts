@@ -75,55 +75,56 @@ import type { PageAdapter } from "./page-adapter";
   ];
 
   async function clickGitHubOAuthButton(page: PageAdapter): Promise<boolean> {
-    // CSS selectors first
-    for (const sel of GITHUB_CSS_PATTERNS) {
-      try {
-        const el = await page.$(sel);
-        if (el) {
-          const visible = await el.evaluate((e: Element) => {
-            const s = window.getComputedStyle(e);
-            const r = e.getBoundingClientRect();
-            return s.display !== "none" && s.visibility !== "hidden" && r.width > 0;
-          });
-          if (visible) {
-            logger.info({ selector: sel }, "Clicking GitHub OAuth button (CSS)");
-            await el.click();
-            return true;
-          }
-        }
-      } catch { /* try next */ }
-    }
-
-    // Text-based search — click the element directly in-page (JS click), exactly
-    // like google-login's clickGoogleButton. A JS el.click() runs the button's
-    // own onclick (OAuth state/nonce/PKCE setup) and navigates <a> links, so it's
-    // a real activation. The old coordinate mouse-click was unreliable on the
-    // cf-proxy backend — the <a href="/login/github"> didn't navigate, leaving the
-    // flow stuck on the provider chooser and reported as "redirected back to login".
-    const found = await page.evaluate((patterns: unknown) => {
-      const candidates = Array.from(
-        document.querySelectorAll<HTMLElement>("a, button, [role='button'], [role='link'], div[onclick]"),
-      );
-      for (const el of candidates) {
-        const text = (el.textContent || el.getAttribute("aria-label") || "").toLowerCase().trim();
-        if ((patterns as string[]).some((p) => text.includes(p))) {
-          const s = window.getComputedStyle(el);
-          const r = el.getBoundingClientRect();
-          if (s.display !== "none" && s.visibility !== "hidden" && r.width > 0 && r.height > 0) {
-            el.click();
-            return el.textContent?.trim() ?? "GitHub button";
-          }
+    const before = safeUrl(page);
+    // Find the GitHub trigger (CSS patterns first, then text), click it in-page,
+    // and capture the anchor href if it is / is inside an <a href>. A JS el.click()
+    // runs any onclick AND navigates <a> links — verified to reach github.com in a
+    // real browser.
+    const info = await page.evaluate((arg: unknown) => {
+      const { css, texts } = arg as { css: string[]; texts: string[] };
+      const isVis = (e: Element) => {
+        const el = e as HTMLElement;
+        const s = window.getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        return s.display !== "none" && s.visibility !== "hidden" && r.width > 0 && r.height > 0;
+      };
+      let el: HTMLElement | null = null;
+      for (const sel of css) {
+        const c = document.querySelector<HTMLElement>(sel);
+        if (c && isVis(c)) { el = c; break; }
+      }
+      if (!el) {
+        const cands = Array.from(document.querySelectorAll<HTMLElement>("a, button, [role='button'], [role='link'], div[onclick]"));
+        for (const c of cands) {
+          const t = (c.textContent || c.getAttribute("aria-label") || "").toLowerCase().trim();
+          if (texts.some((p) => t.includes(p)) && isVis(c)) { el = c; break; }
         }
       }
-      return null;
-    }, GITHUB_TEXT_PATTERNS as never) as string | null;
+      if (!el) return { found: false, href: null as string | null, text: "" };
+      const anchor = el.closest("a") as HTMLAnchorElement | null;
+      const href = anchor?.href || null;
+      const text = el.textContent?.trim() ?? "GitHub button";
+      el.click();
+      return { found: true, href, text };
+    }, { css: GITHUB_CSS_PATTERNS, texts: GITHUB_TEXT_PATTERNS } as never) as { found: boolean; href: string | null; text: string };
 
-    if (found) {
-      logger.info({ text: found }, "Clicking GitHub OAuth button (text match, JS click)");
-      return true;
+    if (!info.found) return false;
+    logger.info({ text: info.text, href: info.href }, "Clicked GitHub OAuth trigger (JS click)");
+
+    // Reliability fallback: on the SeleniumBase/cf-proxy backend a synthetic
+    // .click() on a plain <a href> often does NOT start a navigation (verified:
+    // the flow stayed on /login and never reached github.com). If we're still on
+    // the same URL shortly after, navigate to the captured OAuth href directly.
+    // bot-hosting's /login/github mints the OAuth state server-side, so a direct
+    // nav loses nothing the click would have set up.
+    if (info.href) {
+      await sleep(1500);
+      if (safeUrl(page) === before) {
+        logger.info({ href: info.href }, "Click did not navigate — opening OAuth href directly");
+        await page.goto(info.href, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+      }
     }
-
-    return false;
+    return true;
   }
 
   // ── Fill GitHub login form ────────────────────────────────────────────────────
