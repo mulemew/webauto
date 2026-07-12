@@ -879,34 +879,45 @@ async function clickByText(page: PageAdapter, text: string): Promise<boolean> {
   // "login" and "Log" never matches "Login". The click target must equal the
   // element's trimmed text (or value / aria-label) exactly.
   const target = text.trim();
-  // Find + tag the matching element, SCROLL IT INTO VIEW, then dispatch a real
-  // click through the adapter (trusted). Scrolling matters: buttons like
-  // minestrator's "Spin the wheel" render BELOW THE FOLD, and a click that doesn't
-  // bring the element into the viewport first can miss. Fall back to a synthetic
-  // el.click() if the real click can't land (element still not interactable).
-  const found = await page.evaluate((btnText: unknown) => {
-    document.querySelectorAll("[data-wa-textclick]").forEach((e) => e.removeAttribute("data-wa-textclick"));
-    const candidates = Array.from(
-      document.querySelectorAll<HTMLElement>(
-        "button, a, input[type='button'], input[type='submit'], [role='button']",
-      ),
-    );
-    const isVisible = (el: HTMLElement): boolean => {
-      const style = window.getComputedStyle(el);
-      const rect = el.getBoundingClientRect();
-      return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0;
-    };
-    const getElText = (el: HTMLElement): string =>
-      (el.textContent || (el instanceof HTMLInputElement ? el.value : "") || el.getAttribute("aria-label") || "").trim();
-    for (const el of candidates) {
-      if (getElText(el) === (btnText as string) && isVisible(el)) {
-        el.setAttribute("data-wa-textclick", "1");
-        try { el.scrollIntoView({ block: "center", inline: "center" }); } catch { /* ignore */ }
+  // Find a VISIBLE **and ENABLED** match, tag it, scroll it into view, then click.
+  // Retry for a few seconds: buttons often render DISABLED until their state
+  // loads — e.g. minestrator's "Spin the wheel" keeps the text "Spin the wheel"
+  // but stays disabled until the wheel-availability API resolves. clicking a
+  // disabled button silently does nothing, yet the old code (which only checked
+  // visibility, not disabled) "found" it and reported success. Waiting for it to
+  // become enabled is what makes the click actually land.
+  const deadline = Date.now() + 8000;
+  let found = false;
+  while (Date.now() < deadline) {
+    found = await page.evaluate((btnText: unknown) => {
+      document.querySelectorAll("[data-wa-textclick]").forEach((e) => e.removeAttribute("data-wa-textclick"));
+      const candidates = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          "button, a, input[type='button'], input[type='submit'], [role='button']",
+        ),
+      );
+      const isClickable = (el: HTMLElement): boolean => {
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        if (style.display === "none" || style.visibility === "hidden" || rect.width === 0 || rect.height === 0) return false;
+        if ((el as HTMLButtonElement | HTMLInputElement).disabled) return false;
+        if (el.getAttribute("aria-disabled") === "true") return false;
         return true;
+      };
+      const getElText = (el: HTMLElement): string =>
+        (el.textContent || (el instanceof HTMLInputElement ? el.value : "") || el.getAttribute("aria-label") || "").trim();
+      for (const el of candidates) {
+        if (getElText(el) === (btnText as string) && isClickable(el)) {
+          el.setAttribute("data-wa-textclick", "1");
+          try { el.scrollIntoView({ block: "center", inline: "center" }); } catch { /* ignore */ }
+          return true;
+        }
       }
-    }
-    return false;
-  }, target as never) as boolean;
+      return false;
+    }, target as never) as boolean;
+    if (found) break;
+    await new Promise((r) => setTimeout(r, 400));
+  }
 
   if (!found) return false;
   await new Promise((r) => setTimeout(r, 200)); // let the scroll settle
