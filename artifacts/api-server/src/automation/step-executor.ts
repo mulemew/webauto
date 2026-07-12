@@ -510,17 +510,19 @@ async function executeStep(
             if (solved) {
               return { message: "Cloudflare verification cleared via cf-proxy native Turnstile click." };
             }
-            // The native clicker already clicked (and, with the window fix, landed
-            // on the widget). Do NOT fall through to clearCloudflareInterstitial +
-            // detectAndHandleCaptcha — those would re-click the SAME Turnstile and
-            // mash it into "Verification failed". A Turnstile the native clicker
-            // can't pass is an IP/fingerprint wall, not a click problem.
-            logger.warn("cfVerify — native clickTurnstile did not solve the Turnstile; not re-clicking (avoids mashing). Likely an IP/fingerprint wall.");
-            return {
-              message:
-                "Turnstile widget present but not solved by the native clicker — not re-clicking to avoid a 'Verification failed' from mashing. " +
-                "If it used to pass, try enabling FINGERPRINT_OS=windows or a residential proxy.",
-            };
+            // The native clicker already clicked but the token never populated. Do
+            // NOT fall through to clearCloudflareInterstitial + detectAndHandleCaptcha
+            // (those would re-click the SAME Turnstile and mash it into "Verification
+            // failed"). Crucially, FAIL the step instead of returning success: an
+            // unsolved Turnstile means the gate is still up, so a later "Renew"/submit
+            // step would run against a blocked page. Surface it as a captcha block
+            // (task → needs_attention), the same way login treats an unsolved gate.
+            logger.warn("cfVerify — native clickTurnstile did not solve the Turnstile; failing the step (gate still up). Likely an IP/fingerprint wall.");
+            throw new CaptchaBlockedError(
+              "Turnstile widget present but not solved by the native clicker (gate still up). " +
+                "Not re-clicking to avoid a 'Verification failed' from mashing. " +
+                "If it used to pass, try FINGERPRINT_OS=windows or a residential/cleaner proxy IP.",
+            );
           }
         } catch (err) {
           logger.debug({ err }, "cfVerify native clickTurnstile fast-path threw — falling back");
