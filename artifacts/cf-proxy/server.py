@@ -544,9 +544,22 @@ try{
 function patchGL(proto){
   if(!proto||!proto.getParameter)return;
   var g=proto.getParameter;
-  function getParameter(x){if(x===37445)return GLV;if(x===37446)return GLR;return g.apply(this,arguments);}
-  try{getParameter.toString=function(){return 'function getParameter() { [native code] }';};}catch(e){}
-  proto.getParameter=getParameter;
+  // Wrap the NATIVE getParameter in a Proxy: Function.prototype.toString.call()
+  // on the proxy reports the target's (native) source, so the override is not
+  // detectable as a patched/non-native function (which is what trips WebGL
+  // spoofing checks). Fall back to a plain override if Proxy/Reflect is missing.
+  try{
+    proto.getParameter=new Proxy(g,{apply:function(t,thisArg,args){
+      var p=args[0];
+      if(p===37445)return GLV;
+      if(p===37446)return GLR;
+      return Reflect.apply(t,thisArg,args);
+    }});
+  }catch(e){
+    var f=function(x){if(x===37445)return GLV;if(x===37446)return GLR;return g.apply(this,arguments);};
+    try{f.toString=function(){return g.toString();};}catch(e2){}
+    proto.getParameter=f;
+  }
 }
 try{patchGL(window.WebGLRenderingContext&&WebGLRenderingContext.prototype);}catch(e){}
 try{patchGL(window.WebGL2RenderingContext&&WebGL2RenderingContext.prototype);}catch(e){}
