@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useRoute, useLocation, Link } from "wouter";
-import { ArrowLeft, ChevronDown, Play, Settings2, Trash2, Edit, Calendar, Link as LinkIcon, Shield, Terminal, Clock, Image as ImageIcon, AlertTriangle, RefreshCw, Maximize2, Navigation, MousePointer, Keyboard, Eye, Camera, FlaskConical, Radio, Square, Zap, Loader2, CheckCircle2, XCircle } from "lucide-react";
+import { ArrowLeft, ChevronDown, Play, Settings2, Trash2, Edit, Calendar, Link as LinkIcon, Shield, Terminal, Clock, Image as ImageIcon, AlertTriangle, RefreshCw, Maximize2, Navigation, MousePointer, Keyboard, Eye, Camera, FlaskConical, Radio, Square, Zap, Loader2, CheckCircle2, XCircle, Globe, Fingerprint } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 
@@ -119,6 +119,31 @@ export default function TaskDetail() {
 
   const lastUpdatedAt = Math.max(taskUpdatedAt || 0, logsUpdatedAt || 0) || undefined;
   const updatedAgo = useTimeSince(lastUpdatedAt);
+
+  // ── Browser config (fingerprint + proxy) for the right-column info cards ──
+  const bcfg = (stableTask?.browserConfig ?? null) as
+    | { proxyUrl?: string | null; proxyType?: string | null;
+        fingerprint?: { os?: string | null; timezone?: string | null; locale?: string | null; autoGeo?: boolean | null } | null }
+    | null;
+  const hasProxy = !!(bcfg && ((bcfg.proxyUrl && bcfg.proxyUrl.trim()) || bcfg.proxyType === "warp"));
+
+  type ProxyGeo = { configured: boolean; ok?: boolean; error?: string; proxyType?: string;
+    exitIp?: string; country?: string; countryCode?: string; region?: string; city?: string; isp?: string; timezone?: string };
+  // Live exit-IP geolocation through the configured proxy. Gated on !isRunning so
+  // it doesn't compete with an active run for the sing-box helper. Fetched once
+  // per mount (cached 5m); the card has a manual refresh button.
+  const { data: proxyGeo, isFetching: isFetchingGeo, refetch: refetchGeo } = useQuery<ProxyGeo>({
+    queryKey: ["proxy-geo", taskId],
+    queryFn: () => fetch(`/api/tasks/${taskId}/proxy-geo`).then((r) => r.json()),
+    enabled: !!taskId && hasProxy && !isRunning,
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+  const countryFlag = (cc?: string) =>
+    cc && cc.length === 2
+      ? String.fromCodePoint(...[...cc.toUpperCase()].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65))
+      : "";
 
   // ── Persisted timeline (sessionStorage per task) ─────────────────────────
     const persistedKey = `task-stream-${taskId}`;
@@ -1067,6 +1092,116 @@ export default function TaskDetail() {
                 </CardContent>
               </Card>
             )}
+
+            {/* Proxy Exit IP geolocation — live lookup through the configured proxy */}
+            <Card className="border-border shadow-sm">
+              <CardHeader className="bg-muted/20 border-b border-border pb-4 flex flex-row items-center justify-between">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Globe className="h-4 w-4 text-primary" /> Proxy Exit IP
+                </CardTitle>
+                {hasProxy && (
+                  <button
+                    type="button"
+                    onClick={() => refetchGeo()}
+                    disabled={isFetchingGeo}
+                    title="Re-detect exit IP"
+                    className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-40"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${isFetchingGeo ? "animate-spin" : ""}`} />
+                  </button>
+                )}
+              </CardHeader>
+              <CardContent className="pt-4 space-y-3 text-sm">
+                {!hasProxy ? (
+                  <p className="text-xs text-muted-foreground font-mono">No proxy configured — traffic uses the host IP.</p>
+                ) : isFetchingGeo && !proxyGeo ? (
+                  <div className="space-y-2">
+                    <Skeleton className="h-4 w-2/3" />
+                    <Skeleton className="h-4 w-1/2" />
+                  </div>
+                ) : proxyGeo?.ok ? (
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-muted-foreground">Exit IP</span>
+                      <span className="text-sm font-mono font-semibold break-all">{proxyGeo.exitIp}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-muted-foreground">Location</span>
+                      <span className="text-sm font-mono text-right">
+                        {countryFlag(proxyGeo.countryCode)} {[proxyGeo.city, proxyGeo.region, proxyGeo.country].filter(Boolean).join(", ")}
+                      </span>
+                    </div>
+                    {proxyGeo.timezone && (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-muted-foreground">Timezone</span>
+                        <span className="text-sm font-mono">{proxyGeo.timezone}</span>
+                      </div>
+                    )}
+                    {proxyGeo.isp && (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-muted-foreground">ISP</span>
+                        <span className="text-xs font-mono text-right text-muted-foreground break-all max-w-[60%]">{proxyGeo.isp}</span>
+                      </div>
+                    )}
+                    {proxyGeo.proxyType && (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-muted-foreground">Protocol</span>
+                        <Badge variant="secondary" className="font-mono text-[10px] uppercase">{proxyGeo.proxyType}</Badge>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-xs text-destructive font-mono break-all">
+                      {proxyGeo?.error ? `Lookup failed: ${proxyGeo.error}` : "Could not detect the exit IP through this proxy."}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => refetchGeo()}
+                      disabled={isFetchingGeo}
+                      className="text-xs font-mono text-primary hover:underline disabled:opacity-40"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Fingerprint — the spoof configuration applied to this task's browser */}
+            <Card className="border-border shadow-sm">
+              <CardHeader className="bg-muted/20 border-b border-border pb-4">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Fingerprint className="h-4 w-4 text-primary" /> Fingerprint
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4 space-y-3 text-sm">
+                {bcfg?.fingerprint?.os ? (
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-muted-foreground">OS spoof</span>
+                      <span className="text-sm font-mono font-semibold capitalize">{bcfg.fingerprint.os}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-muted-foreground">Timezone</span>
+                      <span className="text-sm font-mono">{bcfg.fingerprint.timezone?.trim() || (bcfg.fingerprint.autoGeo !== false ? "auto (from exit IP)" : "browser default")}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-muted-foreground">Locale</span>
+                      <span className="text-sm font-mono">{bcfg.fingerprint.locale?.trim() || (bcfg.fingerprint.autoGeo !== false ? "auto (from exit IP)" : "browser default")}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-muted-foreground">Auto geo</span>
+                      <Badge variant={bcfg.fingerprint.autoGeo !== false ? "default" : "secondary"} className="font-mono text-[10px]">
+                        {bcfg.fingerprint.autoGeo !== false ? "ON" : "OFF"}
+                      </Badge>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground font-mono">No fingerprint spoofing — the browser's native fingerprint is used.</p>
+                )}
+              </CardContent>
+            </Card>
 
         </div>
       </div>

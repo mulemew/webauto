@@ -56,6 +56,10 @@ FROM node:20-bookworm-slim AS runner
 # These are the libraries Playwright's Chromium needs at runtime.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
+    # curl — used by the /tasks/:id/proxy-geo endpoint to query the exit IP's
+    # geolocation THROUGH the configured proxy (handles socks5:// and http://
+    # uniformly, which Node's built-in undici cannot do for SOCKS).
+    curl \
     # xdotool + Xvfb + window manager — required for OS-level mouse clicks (bypasses CF Turnstile)
     xdotool xvfb x11-utils fluxbox \
     # Chromium runtime dependencies

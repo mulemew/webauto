@@ -655,11 +655,23 @@ async function executeStep(
             };
         }
 
-        // Condition IS met — execute the then-action as a sub-step.
+        // Condition IS met — execute the then-action as a sub-step. Wrap it so a
+        // failing then-action (target vanished between check and act, empty/misconfigured
+        // selector, etc.) does NOT hard-fail the whole task: a conditional step is
+        // branch/best-effort by design, mirroring the "not met is not a failure" rule above.
         const subStep = thenAction as unknown as WorkflowStep;
-        const subResult = await executeStep(page, subStep, dataDir, taskId, stepIndex, creds, solver, targetUrl);
-        const condMetShot = subResult.screenshotPath ?? await saveStepScreenshot(subResult.newPage ?? page, dataDir, taskId, stepIndex, "cond");
+        try {
+          const subResult = await executeStep(page, subStep, dataDir, taskId, stepIndex, creds, solver, targetUrl);
+          const condMetShot = subResult.screenshotPath ?? await saveStepScreenshot(subResult.newPage ?? page, dataDir, taskId, stepIndex, "cond");
           return { message: `Condition met (${conditionType}: "${conditionValue}") → ${subResult.message}`, newPage: subResult.newPage, screenshotPath: condMetShot };
+        } catch (actionErr) {
+          const actionMsg = actionErr instanceof Error ? actionErr.message : String(actionErr);
+          const failShot = await saveStepScreenshot(page, dataDir, taskId, stepIndex, "cond");
+          return {
+            message: `Condition met (${conditionType}: "${conditionValue}") but then-action failed — continuing: ${actionMsg}`,
+            screenshotPath: failShot,
+          };
+        }
       }
   
     default: {

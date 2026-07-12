@@ -17,7 +17,9 @@ import {
   GetTaskLogResponse,
   GetTasksSummaryResponse,
 } from "@workspace/api-zod";
+import { execFile } from "child_process";
 import { encrypt, decrypt } from "../lib/encryption";
+import { startLocalProxy } from "../automation/proxy-manager";
 import { runTask, isTaskRunning, requestCancelTask } from "../automation/runner";
 import { getTaskEmitter, getTaskEventBuffer, type TaskStreamEvent } from "../lib/taskEvents";
 import { rescheduleTask, unscheduleTask } from "../scheduler";
@@ -413,6 +415,79 @@ router.get("/tasks/:id/logs/history", async (req, res): Promise<void> => {
 
   res.json({ ...GetTaskResponse.parse({ ...task, credentials: credentialsData }), loginCredentials });
 });
+
+  // Resolve the EXIT IP + geolocation of the task's configured proxy, live. The
+  // lookup is routed THROUGH the proxy (starting a local sing-box helper for
+  // advanced protocols) so the returned IP/country is what target sites actually
+  // see — used by the TaskDetail "Proxy Exit IP" card. Best-effort: returns
+  // { configured:false } when no proxy is set, or { ok:false, error } on failure.
+  router.get("/tasks/:id/proxy-geo", async (req, res): Promise<void> => {
+    const params = GetTaskParams.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({ error: params.error.message });
+      return;
+    }
+    const [task] = await db.select().from(tasksTable).where(eq(tasksTable.id, params.data.id));
+    if (!task) {
+      res.status(404).json({ error: "Task not found" });
+      return;
+    }
+
+    const bc = (task.browserConfig ?? {}) as { proxyUrl?: string; proxyType?: string };
+    const proxyUrl = (bc.proxyUrl ?? "").trim();
+    const proxyType = (bc.proxyType ?? "").trim();
+    // A proxyType with no URL (except WARP) means "no proxy" — mirror startLocalProxy.
+    if (!proxyUrl && proxyType !== "warp") {
+      res.json({ configured: false });
+      return;
+    }
+
+    let resolved: Awaited<ReturnType<typeof startLocalProxy>> = null;
+    try {
+      resolved = await startLocalProxy({ proxyUrl: proxyUrl || undefined, proxyType: (proxyType || undefined) as never });
+      if (!resolved) {
+        res.json({ configured: false });
+        return;
+      }
+      // socks5:// → socks5h:// so DNS is resolved at the exit, not locally.
+      const curlProxy = resolved.serverUrl.replace(/^socks5:\/\//i, "socks5h://");
+      const geoUrl =
+        "http://ip-api.com/json/?fields=status,message,query,country,countryCode,regionName,city,isp,timezone";
+      const stdout = await new Promise<string>((resolve, reject) => {
+        execFile(
+          "curl",
+          ["-s", "--max-time", "15", "-x", curlProxy, geoUrl],
+          { timeout: 20_000 },
+          (err, out) => (err ? reject(err) : resolve(out)),
+        );
+      });
+      const data = JSON.parse(stdout) as {
+        status?: string; message?: string; query?: string; country?: string;
+        countryCode?: string; regionName?: string; city?: string; isp?: string; timezone?: string;
+      };
+      if (data.status !== "success") {
+        res.json({ configured: true, ok: false, error: data.message || "geo lookup failed", proxyType });
+        return;
+      }
+      res.json({
+        configured: true,
+        ok: true,
+        proxyType,
+        exitIp: data.query,
+        country: data.country,
+        countryCode: data.countryCode,
+        region: data.regionName,
+        city: data.city,
+        isp: data.isp,
+        timezone: data.timezone,
+      });
+    } catch (err) {
+      req.log.warn({ err, taskId: task.id }, "proxy-geo lookup failed");
+      res.json({ configured: true, ok: false, error: err instanceof Error ? err.message : String(err), proxyType });
+    } finally {
+      if (resolved) { try { await resolved.stop(); } catch { /* ignore */ } }
+    }
+  });
 
 router.put("/tasks/:id", async (req, res): Promise<void> => {
   const params = UpdateTaskParams.safeParse(req.params);

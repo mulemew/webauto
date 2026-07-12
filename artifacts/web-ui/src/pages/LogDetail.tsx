@@ -232,7 +232,7 @@ export default function LogDetail() {
                     {log.message.split("\n").filter(l => l.trim()).map((line, i) => {
                       const isFail = /FAILED:/i.test(line);
                       return (
-                        <p key={i} className={"text-xs font-mono " + (isFail ? "text-red-500" : "text-muted-foreground")}>
+                        <p key={i} className={"text-xs font-mono whitespace-pre-wrap break-all " + (isFail ? "text-red-500" : "text-muted-foreground")}>
                           {line}
                         </p>
                       );
@@ -292,7 +292,7 @@ export default function LogDetail() {
                               </span>
                             )}
                           </div>
-                          <p className={"text-xs font-mono " + (step.success ? "text-muted-foreground" : "text-red-400")}>
+                          <p className={"text-xs font-mono whitespace-pre-wrap break-all " + (step.success ? "text-muted-foreground" : "text-red-400")}>
                             {step.message.replace(/^Step d+ [.+?](?:s*FAILED)?:s*/i, "")}
                           </p>
                           {shotSrc && (

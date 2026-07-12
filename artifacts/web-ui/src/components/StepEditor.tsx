@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { useLang } from "@/contexts/lang-context";
 import type { Translations } from "@/i18n/translations";
 import { Plus, Trash2, ChevronUp, ChevronDown, MousePointer, Navigation, Keyboard, Clock, Eye, Camera, ExternalLink, ListFilter, ArrowDown, Hand, Command, LogIn, GitBranch, Eraser, ShieldCheck } from "lucide-react";
@@ -101,6 +102,9 @@ const PRESET_KEYS = [
   { label: "Ctrl+Z", key: "Control+z" },
   { label: "F5", key: "F5" },
 ];
+
+let _stepKeySeq = 0;
+function genStepKey(): string { return `step-${Date.now().toString(36)}-${_stepKeySeq++}`; }
 
 function defaultStep(type: StepType, taskTargetUrl = ""): WorkflowStep {
   switch (type) {
@@ -717,11 +721,19 @@ function StepCard({
 export function StepEditor({ steps, onChange, taskTargetUrl = "", savedCredentials = [] }: StepEditorProps) {
   const { t } = useLang();
   const STEP_META = getStepMeta(t);
-  const add = (type: StepType = "navigate") => onChange([...steps, defaultStep(type, taskTargetUrl)]);
+  // Stable React key per step, kept in a ref and reordered in lockstep with the
+  // steps. Using the array index as the key made React reuse DOM by position, so
+  // reordering two ADJACENT SAME-TYPE steps didn't visibly swap. New/loaded steps
+  // get a fresh key here.
+  const keysRef = useRef<string[]>([]);
+  while (keysRef.current.length < steps.length) keysRef.current.push(genStepKey());
+  if (keysRef.current.length > steps.length) keysRef.current.length = steps.length;
+
+  const add = (type: StepType = "navigate") => { keysRef.current.push(genStepKey()); onChange([...steps, defaultStep(type, taskTargetUrl)]); };
   const update = (index: number, step: WorkflowStep) => { const next = [...steps]; next[index] = step; onChange(next); };
-  const remove = (index: number) => onChange(steps.filter((_, i) => i !== index));
-  const moveUp = (index: number) => { if (index === 0) return; const next = [...steps]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; onChange(next); };
-  const moveDown = (index: number) => { if (index === steps.length - 1) return; const next = [...steps]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; onChange(next); };
+  const remove = (index: number) => { keysRef.current.splice(index, 1); onChange(steps.filter((_, i) => i !== index)); };
+  const moveUp = (index: number) => { if (index === 0) return; const next = [...steps]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; const k = keysRef.current; [k[index - 1], k[index]] = [k[index], k[index - 1]]; onChange(next); };
+  const moveDown = (index: number) => { if (index === steps.length - 1) return; const next = [...steps]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; const k = keysRef.current; [k[index], k[index + 1]] = [k[index + 1], k[index]]; onChange(next); };
 
   return (
     <div className="space-y-2">
@@ -732,7 +744,7 @@ export function StepEditor({ steps, onChange, taskTargetUrl = "", savedCredentia
       ) : (
         <div className="space-y-2">
           {steps.map((step, i) => (
-            <StepCard key={i} step={step} index={i} total={steps.length}
+            <StepCard key={keysRef.current[i] ?? i} step={step} index={i} total={steps.length}
               savedCredentials={savedCredentials}
               onChange={(s) => update(i, s)} onDelete={() => remove(i)}
               onMoveUp={() => moveUp(i)} onMoveDown={() => moveDown(i)} />

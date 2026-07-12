@@ -198,6 +198,17 @@
     @apply border-border;
   }
 
+  /* Give the root chain a real height so the app shell can size to 100%
+     instead of 100vh. 100vh includes the horizontal-scrollbar gutter and can
+     exceed the actual root height, which made a body-level scrollbar appear in
+     addition to the layout's inner overflow-auto scroller (the "inner + outer"
+     double scrollbar seen when a page gets tall). */
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
   body {
     @apply font-sans antialiased bg-background text-foreground;
   }
