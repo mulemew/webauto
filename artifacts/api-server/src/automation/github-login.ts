@@ -366,10 +366,17 @@ import type { PageAdapter } from "./page-adapter";
             return { success: false, captchaBlocked: false, message: `GitHub OAuth failed — redirected back to login: ${currentUrl}` };
           }
 
-          // GitHub login form (needs credentials)
+          // GitHub login form (needs credentials). The "skip the authorize page"
+          // guard MUST check the URL PATH, not the whole URL: the /login page's
+          // return_to query param contains "/login/oauth/authorize", so the old
+          // `!currentUrl.includes("oauth/authorize")` wrongly treated the login
+          // page as the authorize page and never filled — the state machine spun
+          // all 12 ticks with the form left blank.
+        let ghPath = "";
+        try { ghPath = new URL(currentUrl).pathname; } catch { ghPath = currentUrl; }
         if (
           (currentUrl.includes("github.com/login") || currentUrl.includes("github.com/session")) &&
-          !currentUrl.includes("oauth/authorize") &&
+          !ghPath.includes("/oauth/authorize") &&
           !credentialsFilled
         ) {
           const captcha = await detectAndHandleCaptcha(page, solver);
@@ -407,8 +414,10 @@ import type { PageAdapter } from "./page-adapter";
           continue;
         }
 
-        // OAuth authorize screen
-        if (currentUrl.includes("login/oauth/authorize")) {
+        // OAuth authorize screen — match on PATH (the login page's return_to query
+        // param also contains "login/oauth/authorize", which would otherwise make
+        // us hunt for an Authorize button on the plain login page).
+        if (ghPath.includes("/login/oauth/authorize") || ghPath.endsWith("/oauth/authorize")) {
           await clickAuthorize(page);
           await sleep(2000);
           continue;
