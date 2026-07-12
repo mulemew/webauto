@@ -431,26 +431,90 @@ import type { PageAdapter } from "./page-adapter";
       const SUBMIT = "button[type='submit'], input[type='submit']";
       const CLASSY = "button.login-btn, button.btn-primary, button[class*='submit' i], button[class*='sign-in' i]";
 
-      // Scope to the password field's OWN <form> first — that is the login form.
-      // This prevents clicking an unrelated visible button elsewhere on the page
-      // (a register/search/save button in a different form), which is the generic
-      // risk of "guess the submit button" across arbitrary sites.
-      const pw = document.querySelector('input[type="password"]') as HTMLInputElement | null;
+      // Anchor on the marked login password field (set by locateLoginFields) so
+      // we target the right form even when a register form is also present.
+      const pw = (document.querySelector("input[data-wa-pass='1']")
+        ?? document.querySelector('input[type="password"]')) as HTMLInputElement | null;
       const form = (pw?.form ?? null) as HTMLFormElement | null;
+
+      // 1. Visible submit INSIDE the login form (preferred — avoids a sibling
+      //    register/search/save button in another form).
       if (form) {
         const inForm = firstVisibleIn(form, SUBMIT) || firstVisibleIn(form, CLASSY);
         if (inForm) { inForm.click(); return true; }
-        // Form has no visible button (custom SPA control) — submit it directly.
-        if (typeof form.requestSubmit === "function") { form.requestSubmit(); return true; }
       }
-
-      // No password <form> (SPA divs) or nothing usable inside it — fall back to
-      // the first visible submit anywhere, then a bare form.submit().
+      // 2. Visible submit anywhere. Covers login buttons rendered OUTSIDE the
+      //    <form>, or pages with no <form>. Only VISIBLE controls, so a hidden
+      //    register-tab button is skipped. (Must come BEFORE requestSubmit: an
+      //    SPA login button's onclick won't fire from a bare form.requestSubmit.)
       const anyBtn = firstVisibleIn(document, SUBMIT) || firstVisibleIn(document, CLASSY);
       if (anyBtn) { anyBtn.click(); return true; }
-      if (form) { form.submit(); return true; }
+      // 3. Last resort: submit the login form programmatically.
+      if (form) {
+        if (typeof form.requestSubmit === "function") form.requestSubmit();
+        else form.submit();
+        return true;
+      }
       return false;
     }) as boolean);
+  }
+
+  /**
+   * Locate the LOGIN form's username + password fields, scoped so we can't pick
+   * fields from a sibling register/other form. Anchor on the first VISIBLE
+   * password input; the username is the best-matching visible input that comes
+   * BEFORE that password (login forms are always username-then-password) and
+   * isn't a honeypot. This fixes pages like minestrator that render both a Login
+   * and a Register form — where a global `input[type='email']` match grabbed the
+   * REGISTER email field and left the real Login username empty.
+   *
+   * Returns unique data-attribute selectors, or null if no visible password
+   * field exists yet (caller falls back to the global selector search).
+   */
+  async function locateLoginFields(page: PageAdapter): Promise<{ userSel: string; passSel: string } | null> {
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      const ok = await page.evaluate((pats: unknown) => {
+        const userPats = pats as string[];
+        const isVis = (e: Element) => {
+          const el = e as HTMLElement;
+          const r = el.getBoundingClientRect();
+          const s = getComputedStyle(el);
+          return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden";
+        };
+        const pw = Array.from(document.querySelectorAll<HTMLInputElement>("input[type='password']")).find(isVis);
+        if (!pw) return false;
+        const before = (e: Element) => !!(pw.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_PRECEDING);
+        const honeypot = /website|honeypot|confirm/i;
+        const skipTypes = ["password", "hidden", "checkbox", "radio", "submit", "button", "file", "range", "color"];
+        const cands = Array.from(document.querySelectorAll<HTMLInputElement>("input")).filter(
+          (e) =>
+            isVis(e) &&
+            before(e) &&
+            !skipTypes.includes(e.type) &&
+            !honeypot.test(e.name || "") &&
+            !honeypot.test(e.id || ""),
+        );
+        let user: HTMLInputElement | undefined;
+        for (const p of userPats) {
+          user = cands.find((e) => { try { return e.matches(p); } catch { return false; } });
+          if (user) break;
+        }
+        if (!user) user = cands[cands.length - 1]; // closest visible field before the password
+        if (!user) return false;
+        // Clear any stale marks, then tag this run's fields.
+        document.querySelectorAll("[data-wa-user],[data-wa-pass]").forEach((e) => {
+          e.removeAttribute("data-wa-user");
+          e.removeAttribute("data-wa-pass");
+        });
+        user.setAttribute("data-wa-user", "1");
+        pw.setAttribute("data-wa-pass", "1");
+        return true;
+      }, USERNAME_SELECTORS as never) as boolean;
+      if (ok) return { userSel: "input[data-wa-user='1']", passSel: "input[data-wa-pass='1']" };
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    return null;
   }
 
   export async function formLogin(
@@ -503,13 +567,18 @@ import type { PageAdapter } from "./page-adapter";
       // Many sites (especially those using GeeTest/click-to-verify captchas)
       // expect form fields to be populated before the captcha is interacted with.
       // Filling first also avoids wasting time if fields can't be found.
-      const usernameSel = await findSelector(page, USERNAME_SELECTORS);
+      // Prefer form-scoped field detection (anchors on the visible password so a
+      // sibling register form can't steal the username). Fall back to the global
+      // selector search when there's no visible password field (e.g. two-step
+      // "username first" logins).
+      const scoped = await locateLoginFields(page);
+      const usernameSel = scoped?.userSel ?? (await findSelector(page, USERNAME_SELECTORS));
       if (!usernameSel) {
         return { success: false, captchaBlocked: false, message: "Could not find username/email input field on the page" };
       }
       await jsFillInput(page, usernameSel, credentials.username);
 
-      const passwordSel = await findSelector(page, PASSWORD_SELECTORS);
+      const passwordSel = scoped?.passSel ?? (await findSelector(page, PASSWORD_SELECTORS));
       if (!passwordSel) {
         return { success: false, captchaBlocked: false, message: "Could not find password input field on the page" };
       }
