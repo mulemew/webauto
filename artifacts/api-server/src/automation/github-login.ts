@@ -94,8 +94,13 @@ import type { PageAdapter } from "./page-adapter";
       } catch { /* try next */ }
     }
 
-    // Text-based search
-    const pos = await page.evaluate((patterns: unknown) => {
+    // Text-based search — click the element directly in-page (JS click), exactly
+    // like google-login's clickGoogleButton. A JS el.click() runs the button's
+    // own onclick (OAuth state/nonce/PKCE setup) and navigates <a> links, so it's
+    // a real activation. The old coordinate mouse-click was unreliable on the
+    // cf-proxy backend — the <a href="/login/github"> didn't navigate, leaving the
+    // flow stuck on the provider chooser and reported as "redirected back to login".
+    const found = await page.evaluate((patterns: unknown) => {
       const candidates = Array.from(
         document.querySelectorAll<HTMLElement>("a, button, [role='button'], [role='link'], div[onclick]"),
       );
@@ -105,16 +110,16 @@ import type { PageAdapter } from "./page-adapter";
           const s = window.getComputedStyle(el);
           const r = el.getBoundingClientRect();
           if (s.display !== "none" && s.visibility !== "hidden" && r.width > 0 && r.height > 0) {
-            return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: el.textContent?.trim() ?? "" };
+            el.click();
+            return el.textContent?.trim() ?? "GitHub button";
           }
         }
       }
       return null;
-    }, GITHUB_TEXT_PATTERNS as never) as { x: number; y: number; text: string } | null;
+    }, GITHUB_TEXT_PATTERNS as never) as string | null;
 
-    if (pos) {
-      logger.info({ text: pos.text, x: pos.x, y: pos.y }, "Clicking GitHub OAuth button (text match)");
-      await page.mouse.click(pos.x, pos.y);
+    if (found) {
+      logger.info({ text: found }, "Clicking GitHub OAuth button (text match, JS click)");
       return true;
     }
 
