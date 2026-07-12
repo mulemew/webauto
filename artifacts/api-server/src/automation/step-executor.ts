@@ -843,36 +843,46 @@ async function clickByText(page: PageAdapter, text: string): Promise<boolean> {
   // "login" and "Log" never matches "Login". The click target must equal the
   // element's trimmed text (or value / aria-label) exactly.
   const target = text.trim();
-  return page.evaluate((btnText: unknown) => {
+  // Find + tag the matching element in-page, then dispatch a REAL (trusted) click
+  // through the adapter. A synthetic el.click() (isTrusted=false) is silently
+  // ignored by framework/anti-bot buttons — e.g. minestrator's Vue "Spin the wheel"
+  // reward button reported success but never spun. Fall back to el.click() if the
+  // real click can't land (e.g. element not interactable behind an overlay).
+  const found = await page.evaluate((btnText: unknown) => {
+    document.querySelectorAll("[data-wa-textclick]").forEach((e) => e.removeAttribute("data-wa-textclick"));
     const candidates = Array.from(
       document.querySelectorAll<HTMLElement>(
         "button, a, input[type='button'], input[type='submit'], [role='button']",
       ),
     );
-
-    function isVisible(el: HTMLElement): boolean {
+    const isVisible = (el: HTMLElement): boolean => {
       const style = window.getComputedStyle(el);
       const rect = el.getBoundingClientRect();
       return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0;
-    }
-
-    function getElText(el: HTMLElement): string {
-      return (
-        el.textContent ||
-        (el instanceof HTMLInputElement ? el.value : "") ||
-        el.getAttribute("aria-label") ||
-        ""
-      ).trim();
-    }
-
-    // Exact, case-sensitive match only.
+    };
+    const getElText = (el: HTMLElement): string =>
+      (el.textContent || (el instanceof HTMLInputElement ? el.value : "") || el.getAttribute("aria-label") || "").trim();
     for (const el of candidates) {
       if (getElText(el) === (btnText as string) && isVisible(el)) {
-        el.click();
+        el.setAttribute("data-wa-textclick", "1");
         return true;
       }
     }
-
     return false;
-  }, target as never) as Promise<boolean>;
+  }, target as never) as boolean;
+
+  if (!found) return false;
+
+  try {
+    await page.click("[data-wa-textclick='1']"); // real, trusted click via the backend
+  } catch {
+    await page.evaluate(() => {
+      const el = document.querySelector<HTMLElement>("[data-wa-textclick='1']");
+      if (el) el.click(); // synthetic fallback
+    }).catch(() => {});
+  }
+  await page.evaluate(() => {
+    document.querySelector("[data-wa-textclick]")?.removeAttribute("data-wa-textclick");
+  }).catch(() => {});
+  return true;
 }
