@@ -627,10 +627,13 @@ import type { PageAdapter } from "./page-adapter";
 
       // Wait for page to fully settle (URL stops changing) — up to 15 s
       await waitForSettle(page, 8000);
-      // Capture any login error BEFORE dismissPopups clicks its close button.
+      // Read any login error, but DON'T run dismissPopups here: after submit it
+      // was clicking the site's own login-result alert (e.g. wispbyte's
+      // auth-form-alert), which erased the real reason and could reset the form /
+      // Turnstile. Overlays that block the FORM/captcha are already cleared before
+      // fill (dismissCookieConsent). Post-submit, we only observe — don't touch.
       let submitError = await readLoginError(page);
       if (submitError) logger.warn({ submitError }, "Login page shows an error message after submit");
-      await dismissPopups(page);
 
       // Check if a dialog popped up indicating captcha was required but not solved.
       // Chinese sites commonly show alerts like "请先完成验证码验证".
