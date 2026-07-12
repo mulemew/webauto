@@ -164,6 +164,40 @@ interface StepExecResult {
   screenshotPath?: string;
 }
 
+/**
+ * Poll for a captcha widget (reCAPTCHA / Turnstile / hCaptcha / ALTCHA) to appear
+ * in the DOM, up to `timeoutMs`. Captcha widgets in modals (e.g. host2play's
+ * "Verify that you're not a robot" dialog that opens after clicking Renew) load
+ * asynchronously — checking once, too early, finds nothing and the step gives up.
+ * Returns true as soon as any widget is present.
+ */
+async function waitForCaptchaWidget(page: PageAdapter, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ("fetchFrames" in page && typeof (page as { fetchFrames?: unknown }).fetchFrames === "function") {
+      await (page as unknown as { fetchFrames: () => Promise<unknown> }).fetchFrames().catch(() => {});
+    }
+    const present = await page.evaluate(() => {
+      const sels = [
+        "iframe[src*='recaptcha']", "iframe[src*='api2/anchor']", ".g-recaptcha", "[data-sitekey]",
+        ".cf-turnstile", "iframe[src*='turnstile']", "iframe[src*='challenges.cloudflare.com']",
+        "input[name='cf-turnstile-response']", "iframe[src*='hcaptcha']", ".h-captcha", "[class*='altcha' i]",
+      ];
+      return sels.some((s) => {
+        const el = document.querySelector(s);
+        if (!el) return false;
+        const r = (el as HTMLElement).getBoundingClientRect();
+        // Present in DOM is enough for iframes (they may be 0-size until scored);
+        // for container elements require some size so we don't match a hidden stub.
+        return (el as HTMLElement).tagName === "IFRAME" || (r.width > 0 && r.height > 0);
+      });
+    }).catch(() => false) as boolean;
+    if (present) return true;
+    await new Promise((r) => setTimeout(r, 600));
+  }
+  return false;
+}
+
 async function executeStep(
   page: PageAdapter,
   step: WorkflowStep,
@@ -394,6 +428,14 @@ async function executeStep(
       //     GeeTest, etc.) — e.g. the "Protected by ALTCHA" checkbox on the
       //     ikuuu renew dialog, which is NOT a Cloudflare challenge.
 
+      // Give a slow-loading widget time to render before we look for it. Modals
+      // (e.g. host2play's "Verify that you're not a robot" dialog opened by a
+      // Renew click) inject the reCAPTCHA a moment after opening — checking once,
+      // too early, found nothing and the step silently did nothing.
+      const appeared = await waitForCaptchaWidget(page, 15000);
+      if (appeared) logger.info("cfVerify — captcha widget appeared");
+      else logger.info("cfVerify — no captcha widget appeared within wait; proceeding (may be a full-page CF interstitial or already clear)");
+
       // ── cf-proxy (SeleniumBase) fast-path ────────────────────────────────
       // Under the SeleniumBase backend the login step solves embedded Turnstile
       // widgets through cf-proxy's NATIVE uc_gui_click_captcha clicker
@@ -569,12 +611,22 @@ async function executeStep(
             }
             if (loginResult.captchaBlocked) throw new CaptchaBlockedError(loginResult.message);
             if (!loginResult.success) {
-              if (attempt < MAX_LOGIN_RETRIES) {
+              // GitHub OAuth: a CONCLUDED failure (redirected back to login /
+              // rate-limited) won't fix itself on an immediate retry, and hammering
+              // a rate-limited GitHub only deepens the block. Fail fast rather than
+              // burning MAX_LOGIN_RETRIES. (Thrown/transient errors still retry via
+              // the catch below.)
+              const failFast = step.loginMethod === "github";
+              if (!failFast && attempt < MAX_LOGIN_RETRIES) {
                 lastLoginErr = new Error(`Login attempt ${attempt + 1} failed: ${loginResult.message}`);
                 logger.warn({ taskId, stepIndex, attempt, msg: loginResult.message }, "Login attempt failed, retrying");
                 continue;
               }
-              throw new Error(`Login failed after ${MAX_LOGIN_RETRIES + 1} attempts: ${loginResult.message}`);
+              throw new Error(
+                failFast
+                  ? `Login failed: ${loginResult.message}`
+                  : `Login failed after ${MAX_LOGIN_RETRIES + 1} attempts: ${loginResult.message}`,
+              );
             }
             return { message: attempt > 0 ? `${loginResult.message} (attempt ${attempt + 1})` : loginResult.message };
           } catch (retryErr) {
