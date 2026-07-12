@@ -368,13 +368,18 @@ def _detect_geo(proxy):
     # Cloudflare's shared IPs, which ip-api.com often rate-limits/blocks (that is
     # why France-over-WARP silently fell back to UTC/en-US), and a fresh proxy
     # tunnel may not be up on the first try — so retry and try a fallback source.
+    # Order matters: query the two more-accurate sources FIRST so the fast-path
+    # (below) stops as soon as they agree, before ip-api.com can skew the vote.
+    # ip-api.com mislabels some IPs (78.154.103.36 is UK but ip-api says Belgium
+    # -> Europe/Brussels); ipwho.is + ipapi.co both say UK. Putting ip-api last
+    # makes it only a tiebreaker when the first two disagree.
     endpoints = [
-        ("http://ip-api.com/json/?fields=status,message,timezone,countryCode",
-         lambda d: (d.get("timezone"), (d.get("countryCode") or "").upper())),
         ("https://ipwho.is/",
          lambda d: ((d.get("timezone") or {}).get("id"), (d.get("country_code") or "").upper())),
         ("https://ipapi.co/json/",
          lambda d: (d.get("timezone"), (d.get("country_code") or d.get("country") or "").upper())),
+        ("http://ip-api.com/json/?fields=status,message,timezone,countryCode",
+         lambda d: (d.get("timezone"), (d.get("countryCode") or "").upper())),
     ]
     # Query MULTIPLE sources and MAJORITY-VOTE the timezone. A single geo DB is
     # wrong for some IPs (e.g. 78.154.103.36 is UK but ip-api.com reports it as
@@ -544,22 +549,14 @@ try{
 function patchGL(proto){
   if(!proto||!proto.getParameter)return;
   var g=proto.getParameter;
-  // Wrap the NATIVE getParameter in a Proxy: Function.prototype.toString.call()
-  // on the proxy reports the target's (native) source, so the override is not
-  // detectable as a patched/non-native function (which is what trips WebGL
-  // spoofing checks). Fall back to a plain override if Proxy/Reflect is missing.
-  try{
-    proto.getParameter=new Proxy(g,{apply:function(t,thisArg,args){
-      var p=args[0];
-      if(p===37445)return GLV;
-      if(p===37446)return GLR;
-      return Reflect.apply(t,thisArg,args);
-    }});
-  }catch(e){
-    var f=function(x){if(x===37445)return GLV;if(x===37446)return GLR;return g.apply(this,arguments);};
-    try{f.toString=function(){return g.toString();};}catch(e2){}
-    proto.getParameter=f;
-  }
+  // Plain override (known-good with CF). The Proxy-wrapped variant was reverted:
+  // wrapping getParameter in a Proxy coincided with CF Turnstile no longer
+  // passing on the cf-proxy backend (wispbyte), and it only ever targeted a
+  // cosmetic BrowserScan "-5% WebGL exception" that JS can't truly fix anyway
+  // (SwiftShader vs the spoofed renderer). Passing CF matters more.
+  function getParameter(x){if(x===37445)return GLV;if(x===37446)return GLR;return g.apply(this,arguments);}
+  try{getParameter.toString=function(){return 'function getParameter() { [native code] }';};}catch(e){}
+  proto.getParameter=getParameter;
 }
 try{patchGL(window.WebGLRenderingContext&&WebGLRenderingContext.prototype);}catch(e){}
 try{patchGL(window.WebGL2RenderingContext&&WebGL2RenderingContext.prototype);}catch(e){}

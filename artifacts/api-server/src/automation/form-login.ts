@@ -372,61 +372,54 @@ import type { PageAdapter } from "./page-adapter";
     } catch { /* ignore */ }
   }
 
-  // Fill an input the way the known-good reference (eooce/katabump-renew) does:
-  // set the value through the NATIVE HTMLInputElement value setter and dispatch
-  // input+change, instead of click()+keyboard.type(). This avoids "element not
-  // interactable" / "click intercepted" and garbled/partial typing (focus
-  // stealing), and React/Vue-controlled inputs actually register the value.
+  // Fill an input with REAL keyboard interaction (known-good): click to focus,
+  // clear, then type char-by-char. Real key events are what framework-controlled
+  // inputs (React/Vue) and picky forms (GitHub, minestrator) require to register
+  // the value — a bare native-setter fill left those fields "empty" at submit
+  // ("Please fill in all required fields") or made GitHub reject the login.
+  // Self-healing net: if focus-stealing/overlays garble the typed value, set it
+  // directly via the native setter and fire input/change.
   async function jsFillInput(page: PageAdapter, selector: string, text: string): Promise<void> {
+    let clicked = true;
+    try { await page.click(selector); } catch { clicked = false; }
+    if (clicked) {
+      await page.evaluate((sel: unknown) => {
+        const el = document.querySelector<HTMLInputElement>(sel as string);
+        if (el) el.value = "";
+      }, selector as never);
+      await page.keyboard.type(text, { delay: 50 });
+    }
+    // Runs when the field wasn't clickable (typing skipped so stray keystrokes
+    // don't land elsewhere) OR when the typed value didn't fully land.
     await page.evaluate((arg: unknown) => {
       const { sel, val } = arg as { sel: string; val: string };
       const el = document.querySelector(sel) as HTMLInputElement | null;
-      if (!el) return;
-      try { el.focus(); } catch { /* ignore */ }
+      if (!el || el.value === val) return;
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
       if (setter) setter.call(el, val); else el.value = val;
       el.dispatchEvent(new Event("input", { bubbles: true }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
-      // Keep focus on the field (do NOT blur) so a fallback Enter-key submit
-      // still lands on the form.
     }, { sel: selector, val: text } as never);
   }
 
-  // Click the real submit/login control. Prefers <button|input type=submit>,
-  // else a visible button whose text is a login word — and SKIPS theme/language/
-  // nav toggles (Wispbyte's theme-toggle-btn has "login" in its class, which the
-  // old `button[class*='login']` selector wrongly matched and clicked). Returns
-  // false if nothing suitable was found (caller falls back to Enter).
+  // Click the real submit/login control via CSS selectors (known-good). We do
+  // NOT text-match login words: matching "sign in" hit "Sign in with Google" and
+  // sent back4app to an OAuth redirect. We also drop the loose `[class*='login']`
+  // that matched Wispbyte's `login-nav-theme-toggle`. When no submit control is
+  // found, return false so the caller presses Enter (which submits the form the
+  // focused password field belongs to). As a last resort, requestSubmit() the
+  // password field's own form — this fires onSubmit WITHOUT clicking any button,
+  // so it can never trip a social-login button.
   async function jsClickSubmit(page: PageAdapter): Promise<boolean> {
+    const submitSel =
+      "button[type='submit'], input[type='submit'], button.btn-primary, button.login-btn, " +
+      "button[class*='submit' i], button[class*='sign-in' i]";
+    const btn = await page.$(submitSel);
+    if (btn) {
+      await btn.click();
+      return true;
+    }
     return (await page.evaluate(() => {
-      // Login words across common languages (the text match is only a FALLBACK —
-      // type=submit and form.requestSubmit below are language-agnostic and cover
-      // most sites regardless of UI language).
-      const words = [
-        "log in", "login", "sign in", "signin", "submit", "continue", "next",
-        "登录", "登陆", "登入", "登録", "ログイン", "로그인",
-        "anmelden", "connexion", "se connecter", "iniciar", "acceder", "entrar",
-        "accedi", "zaloguj", "войти", "prihlásiť", "prihlasit", "inloggen",
-      ];
-      const skip = ["theme", "toggle", "lang", "language", "menu", "hamburger", "cookie", "consent"];
-      let cands = Array.from(document.querySelectorAll('button[type="submit"], input[type="submit"]'));
-      if (cands.length === 0) {
-        cands = Array.from(document.querySelectorAll('button, input[type="button"], a[role="button"], [role="button"]'));
-      }
-      for (const el of cands) {
-        const cls = ((el as HTMLElement).className || "").toString().toLowerCase();
-        if (skip.some((s) => cls.includes(s))) continue;
-        const r = (el as HTMLElement).getBoundingClientRect();
-        if (r.width === 0 || r.height === 0) continue;
-        const isSubmit = (el as HTMLInputElement).type === "submit";
-        const txt = (((el as HTMLElement).textContent || (el as HTMLInputElement).value || "") + "").trim().toLowerCase();
-        if (isSubmit || words.some((w) => txt === w || txt.includes(w))) {
-          (el as HTMLElement).click();
-          return true;
-        }
-      }
-      // Language-agnostic last resort: submit the form that owns the password
-      // field (fires the submit event so SPA onSubmit handlers still run).
       const pw = document.querySelector('input[type="password"]') as HTMLInputElement | null;
       const form = pw?.form;
       if (form) {
