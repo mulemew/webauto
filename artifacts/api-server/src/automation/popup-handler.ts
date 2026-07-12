@@ -1,4 +1,4 @@
-import type { PageAdapter, DialogAdapter } from "./page-adapter";
+import type { PageAdapter, DialogAdapter, ElementAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
 
 /**
@@ -61,6 +61,17 @@ const CONSENT_SELECTORS = [
   ".cookie-banner button", ".cookie-notice button",
   "#cookie-banner button", "#cookie-notice button", ".gdpr-banner button",
   "[aria-label*='accept cookies' i]",
+  // Google / YouTube consent ("Accept all"): the button id is stable across
+  // locales; it lives in the main doc on some pages and inside a
+  // consent.google.com iframe on others (handled by the frame pass below).
+  "#L2AGLb", "button#L2AGLb", "form[action^='https://consent.'] button[jsname]",
+  "[aria-label='Accept all']", "button[aria-label*='Accept all' i]",
+];
+
+/** Strong, unambiguous consent phrases safe to match by prefix (label starts-with). */
+const CONSENT_TEXTS_PREFIX = [
+  "accept all", "allow all", "accept cookies", "accept & continue", "accept and continue",
+  "全部接受", "接受全部", "全部允许", "同意并继续",
 ];
 
 /**
@@ -88,31 +99,61 @@ const CLOSE_SELECTORS = [
  * Kept as a named export because form-login calls it before typing.
  */
 export async function dismissCookieConsent(page: PageAdapter): Promise<boolean> {
-  // Precise CSS selectors first.
-  for (const sel of CONSENT_SELECTORS) {
+  // Try the precise CSS selectors in a given scope (main frame or an iframe).
+  const clickFirstVisible = async (
+    scope: { $: (s: string) => Promise<ElementAdapter | null> },
+  ): Promise<string | null> => {
+    for (const sel of CONSENT_SELECTORS) {
+      try {
+        const el = await scope.$(sel);
+        if (!el) continue;
+        const visible = await el
+          .evaluate((e: Element) => {
+            const r = e.getBoundingClientRect();
+            const s = window.getComputedStyle(e);
+            return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden";
+          })
+          .catch(() => false) as boolean;
+        if (visible) {
+          await el.click().catch(() => {});
+          return sel;
+        }
+      } catch { /* ignore */ }
+    }
+    return null;
+  };
+
+  // 1. Precise CSS selectors in the main frame.
+  const mainHit = await clickFirstVisible(page);
+  if (mainHit) {
+    logger.debug({ selector: mainHit }, "Dismissed cookie/consent overlay (selector)");
+    await sleep(300);
+    return true;
+  }
+
+  // 2. Same selectors inside each iframe — Google/YouTube serve the consent
+  //    dialog from a consent.google.com iframe, which the main-frame query and
+  //    the text fallback (which only sees the top document) both miss.
+  for (const frame of page.frames()) {
     try {
-      const el = await page.$(sel);
-      if (!el) continue;
-      const visible = await el
-        .evaluate((e: Element) => {
-          const r = e.getBoundingClientRect();
-          const s = window.getComputedStyle(e);
-          return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden";
-        })
-        .catch(() => false) as boolean;
-      if (visible) {
-        await el.click().catch(() => {});
-        logger.debug({ selector: sel }, "Dismissed cookie/consent overlay (selector)");
+      const url = frame.url();
+      if (!/consent|cookie|gdpr|privacy|google\.com/i.test(url)) continue;
+      const frameHit = await clickFirstVisible(frame);
+      if (frameHit) {
+        logger.debug({ selector: frameHit, frame: url }, "Dismissed cookie/consent overlay (iframe)");
         await sleep(300);
         return true;
       }
     } catch { /* ignore */ }
   }
 
-  // Text-based fallback — works across arbitrary consent frameworks.
+  // 3. Text-based fallback (main frame) — works across arbitrary consent
+  //    frameworks. Exact match on the broad list, plus a prefix match on a few
+  //    unambiguous accept phrases so "Accept all cookies", "Accept & continue",
+  //    etc. are caught too.
   try {
-    const clicked = await page.evaluate((texts: unknown) => {
-      const accepts = texts as string[];
+    const clicked = await page.evaluate((arg: unknown) => {
+      const { exact, prefix } = arg as { exact: string[]; prefix: string[] };
       const nodes = Array.from(
         document.querySelectorAll<HTMLElement>("button, a[role='button'], [role='button'], input[type='button'], input[type='submit'], [class*='btn']"),
       );
@@ -127,13 +168,13 @@ export async function dismissCookieConsent(page: PageAdapter): Promise<boolean> 
           ""
         ).trim().toLowerCase();
         if (!label || label.length > 40) continue;
-        if (accepts.some((tx) => label === tx)) {
+        if (exact.some((tx) => label === tx) || prefix.some((tx) => label.startsWith(tx))) {
           btn.click();
           return true;
         }
       }
       return false;
-    }, CONSENT_TEXTS as never) as boolean;
+    }, { exact: CONSENT_TEXTS, prefix: CONSENT_TEXTS_PREFIX } as never) as boolean;
     if (clicked) {
       logger.debug("Dismissed cookie/consent overlay (text match)");
       await sleep(300);

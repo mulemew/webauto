@@ -368,54 +368,62 @@ def _detect_geo(proxy):
     # Cloudflare's shared IPs, which ip-api.com often rate-limits/blocks (that is
     # why France-over-WARP silently fell back to UTC/en-US), and a fresh proxy
     # tunnel may not be up on the first try — so retry and try a fallback source.
-    # Order matters: query the two more-accurate sources FIRST so the fast-path
-    # (below) stops as soon as they agree, before ip-api.com can skew the vote.
-    # ip-api.com mislabels some IPs (78.154.103.36 is UK but ip-api says Belgium
-    # -> Europe/Brussels); ipwho.is + ipapi.co both say UK. Putting ip-api last
-    # makes it only a tiebreaker when the first two disagree.
+    # Five independent geo databases. No single one is authoritative — e.g.
+    # 78.154.103.36 is UK but ip-api.com reports Belgium (Europe/Brussels), while
+    # the others say UK. So we take a MAJORITY VOTE across all of them; the more
+    # sources, the more reliable. Order does NOT matter (see the clinch check
+    # below) — every reachable source gets one vote regardless of who answers
+    # first. Each returns a plain JSON with an IANA timezone + a 2-letter country.
+    from collections import Counter
     endpoints = [
         ("https://ipwho.is/",
          lambda d: ((d.get("timezone") or {}).get("id"), (d.get("country_code") or "").upper())),
         ("https://ipapi.co/json/",
          lambda d: (d.get("timezone"), (d.get("country_code") or d.get("country") or "").upper())),
+        ("https://ipinfo.io/json",
+         lambda d: (d.get("timezone"), (d.get("country") or "").upper())),
+        ("https://get.geojs.io/v1/ip/geo.json",
+         lambda d: (d.get("timezone"), (d.get("country_code") or "").upper())),
         ("http://ip-api.com/json/?fields=status,message,timezone,countryCode",
          lambda d: (d.get("timezone"), (d.get("countryCode") or "").upper())),
     ]
-    # Query MULTIPLE sources and MAJORITY-VOTE the timezone. A single geo DB is
-    # wrong for some IPs (e.g. 78.154.103.36 is UK but ip-api.com reports it as
-    # Belgium, while ipwho.is + ipapi.co both say UK). Taking the first success
-    # let one bad source win; a majority vote across sources fixes it. Fast path:
-    # if the first two sources already agree, stop (don't hit the third).
-    results = []  # list of (tz, cc)
-    for url, parse in endpoints:
+    results = []  # list of (tz, cc), one vote per reachable source
+    n = len(endpoints)
+    for i, (url, parse) in enumerate(endpoints):
         host = url.split("/")[2]
-        got = None
-        for attempt in range(2):
+        for attempt in range(2):  # a fresh proxy tunnel may miss the first try
             try:
-                r = _rq.get(url, proxies=proxies, timeout=12, headers={"User-Agent": "curl/8"})
+                r = _rq.get(url, proxies=proxies, timeout=10, headers={"User-Agent": "curl/8"})
                 _tz, cc = parse(r.json())
                 if _tz:
-                    got = (_tz, cc)
-                    print(f"[fingerprint] geo via {host} proxy={pmask} -> tz={_tz} cc={cc}", flush=True)
+                    results.append((_tz, cc))
+                    print(f"[fingerprint] geo vote via {host} proxy={pmask} -> tz={_tz} cc={cc}", flush=True)
                     break
             except Exception as e:
                 print(f"[fingerprint] geo {host} proxy={pmask} attempt {attempt+1} failed: {e}", flush=True)
             time.sleep(1)
-        if got:
-            results.append(got)
-            if len(results) >= 2 and results[0][0] == results[1][0]:
-                break  # first two agree -> consensus, skip the rest
+        # Clinch check (order-independent): stop only when the leader's margin
+        # over the runner-up already exceeds the votes left to cast, i.e. the
+        # remaining sources cannot change the winner. This saves requests without
+        # letting "who answered first" decide anything.
+        if results:
+            counts = Counter(t for t, _ in results)
+            ranked = counts.most_common(2)
+            top_n = ranked[0][1]
+            second_n = ranked[1][1] if len(ranked) > 1 else 0
+            if top_n - second_n > (n - (i + 1)):
+                break
 
     tz, locale = None, None
     if results:
-        from collections import Counter
-        tz = Counter(t for t, _ in results).most_common(1)[0][0]
+        counts = Counter(t for t, _ in results)
+        tz = counts.most_common(1)[0][0]
         cc = next((c for t, c in results if t == tz), "")
         locale = _CC_LOCALE.get(cc)
-        if len({t for t, _ in results}) > 1:
+        if len(counts) > 1:
             print(f"[fingerprint] geo sources DISAGREED {results} -> majority tz={tz}", flush=True)
         print(f"[fingerprint] geo proxy={pmask} -> tz={tz} cc={cc} locale={locale} "
-              f"(from {len(results)} source(s))", flush=True)
+              f"(majority of {len(results)} source(s))", flush=True)
 
     if not tz:
         print(f"[fingerprint] geo detect FAILED for proxy={pmask} — "
