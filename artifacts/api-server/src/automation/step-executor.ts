@@ -911,14 +911,24 @@ async function clickByText(page: PageAdapter, text: string): Promise<boolean> {
   if (!found) return false;
   await new Promise((r) => setTimeout(r, 200)); // let the scroll settle
 
+  // Track which path landed. A real adapter click is a TRUSTED event
+  // (isTrusted=true); the synthetic fallback is NOT — buttons that gate an action
+  // on event.isTrusted (e.g. a reward-wheel spin) fire their handler either way
+  // but silently skip the real action on an untrusted click. Logging this makes
+  // "step succeeded but nothing happened" diagnosable.
+  let clickPath = "real";
   try {
     await page.click("[data-wa-textclick='1']"); // real, trusted click via the backend
-  } catch {
+  } catch (err) {
+    clickPath = "synthetic-fallback";
+    logger.warn({ text: target, err: err instanceof Error ? err.message : String(err) },
+      "clickByText: real click threw — falling back to a synthetic (untrusted) click");
     await page.evaluate(() => {
       const el = document.querySelector<HTMLElement>("[data-wa-textclick='1']");
       if (el) el.click(); // synthetic fallback
     }).catch(() => {});
   }
+  logger.info({ text: target, clickPath }, "clickByText click dispatched");
   await page.evaluate(() => {
     document.querySelector("[data-wa-textclick]")?.removeAttribute("data-wa-textclick");
   }).catch(() => {});
