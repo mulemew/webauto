@@ -126,24 +126,30 @@ import type { PageAdapter } from "./page-adapter";
   async function fillGitHubLoginForm(page: PageAdapter, creds: GitHubCredentials): Promise<void> {
     logger.info("Filling GitHub login form");
 
+    // JS-native fill (native value setter + input/change) instead of
+    // click()+keyboard.type — the latter is unreliable on the cf-proxy backend
+    // (focus/typing over the adapter), which is why GitHub login stalled on the
+    // login page in cf-proxy mode while Playwright worked.
+    const jsFill = (sel: string, val: string) =>
+      page.evaluate((arg: unknown) => {
+        const { s, v } = arg as { s: string; v: string };
+        const el = document.querySelector(s) as HTMLInputElement | null;
+        if (!el) return;
+        try { el.focus(); } catch { /* ignore */ }
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+        if (setter) setter.call(el, v); else el.value = v;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      }, { s: sel, v: val } as never);
+
     const userSel = "#login_field, input[name='login'], input[autocomplete='username']";
     await page.waitForSelector(userSel, { timeout: 15000 });
-    await page.click(userSel);
-    await page.evaluate((sel: unknown) => {
-      const el = document.querySelector<HTMLInputElement>(sel as string);
-      if (el) el.value = "";
-    }, userSel as never);
-    await page.keyboard.type(creds.username, { delay: 50 });
-    await sleep(300);
+    await jsFill(userSel, creds.username);
+    await sleep(200);
 
     const passSel = "#password, input[name='password'], input[type='password']";
-    await page.click(passSel);
-    await page.evaluate((sel: unknown) => {
-      const el = document.querySelector<HTMLInputElement>(sel as string);
-      if (el) el.value = "";
-    }, passSel as never);
-    await page.keyboard.type(creds.password, { delay: 50 });
-    await sleep(300);
+    await jsFill(passSel, creds.password);
+    await sleep(200);
 
     const submitSel = "input[type='submit'], button[type='submit'], .js-sign-in-button";
     const submitBtn = await page.$(submitSel);

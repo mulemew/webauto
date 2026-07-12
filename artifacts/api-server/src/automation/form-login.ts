@@ -349,6 +349,27 @@ import type { PageAdapter } from "./page-adapter";
         }
       });
     } catch { /* ignore */ }
+
+    // Language-agnostic fallback: if a consent overlay is STILL up (its button
+    // text wasn't English/Chinese, or clicking didn't dismiss it), remove the
+    // banner/overlay by its class/id — never relies on button language. Guarded
+    // so we never nuke a container that actually holds the login form.
+    try {
+      await page.evaluate(() => {
+        const sels =
+          "[class*='cookie' i],[id*='cookie' i],[class*='consent' i],[id*='consent' i]," +
+          "[class*='gdpr' i],[id*='gdpr' i],[aria-label*='cookie' i],.cky-consent-container,.cky-overlay,.cc-window";
+        document.querySelectorAll<HTMLElement>(sels).forEach((e) => {
+          const r = e.getBoundingClientRect();
+          const st = window.getComputedStyle(e);
+          if (r.width > 0 && r.height > 0 && st.display !== "none") {
+            if (!e.querySelector("input[type='password'], input[type='email'], input[name='email' i]")) {
+              e.remove();
+            }
+          }
+        });
+      });
+    } catch { /* ignore */ }
   }
 
   // Fill an input the way the known-good reference (eooce/katabump-renew) does:
@@ -366,7 +387,8 @@ import type { PageAdapter } from "./page-adapter";
       if (setter) setter.call(el, val); else el.value = val;
       el.dispatchEvent(new Event("input", { bubbles: true }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
-      try { el.blur(); } catch { /* ignore */ }
+      // Keep focus on the field (do NOT blur) so a fallback Enter-key submit
+      // still lands on the form.
     }, { sel: selector, val: text } as never);
   }
 
@@ -377,8 +399,16 @@ import type { PageAdapter } from "./page-adapter";
   // false if nothing suitable was found (caller falls back to Enter).
   async function jsClickSubmit(page: PageAdapter): Promise<boolean> {
     return (await page.evaluate(() => {
-      const words = ["log in", "login", "sign in", "signin", "submit", "登录", "登陆", "登入", "log in"];
-      const skip = ["theme", "toggle", "lang", "language", "menu", "hamburger"];
+      // Login words across common languages (the text match is only a FALLBACK —
+      // type=submit and form.requestSubmit below are language-agnostic and cover
+      // most sites regardless of UI language).
+      const words = [
+        "log in", "login", "sign in", "signin", "submit", "continue", "next",
+        "登录", "登陆", "登入", "登録", "ログイン", "로그인",
+        "anmelden", "connexion", "se connecter", "iniciar", "acceder", "entrar",
+        "accedi", "zaloguj", "войти", "prihlásiť", "prihlasit", "inloggen",
+      ];
+      const skip = ["theme", "toggle", "lang", "language", "menu", "hamburger", "cookie", "consent"];
       let cands = Array.from(document.querySelectorAll('button[type="submit"], input[type="submit"]'));
       if (cands.length === 0) {
         cands = Array.from(document.querySelectorAll('button, input[type="button"], a[role="button"], [role="button"]'));
@@ -394,6 +424,15 @@ import type { PageAdapter } from "./page-adapter";
           (el as HTMLElement).click();
           return true;
         }
+      }
+      // Language-agnostic last resort: submit the form that owns the password
+      // field (fires the submit event so SPA onSubmit handlers still run).
+      const pw = document.querySelector('input[type="password"]') as HTMLInputElement | null;
+      const form = pw?.form;
+      if (form) {
+        if (typeof (form as HTMLFormElement).requestSubmit === "function") form.requestSubmit();
+        else form.submit();
+        return true;
       }
       return false;
     }) as boolean);
