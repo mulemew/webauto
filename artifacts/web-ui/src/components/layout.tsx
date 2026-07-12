@@ -54,7 +54,7 @@ import { useLang } from "@/contexts/lang-context";
           : "bg-muted-foreground/30";
 
     return (
-      <div className="flex h-full w-full bg-background overflow-hidden selection:bg-primary/20">
+      <div className="fixed inset-0 flex bg-background overflow-hidden selection:bg-primary/20">
         {/* Sidebar */}
         <div className="w-64 flex flex-col border-r border-border bg-card shadow-sm z-10 flex-shrink-0">
           <div className="h-16 flex items-center px-6 border-b border-border">
