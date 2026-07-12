@@ -2346,6 +2346,8 @@ def solve_recaptcha_audio(sid):
             except Exception as e:
                 d.switch_to.default_content()
                 return {"solved": False, "blocked": False, "message": f"transcription failed: {e}"}
+            print(f"[recaptcha] round {rnd + 1}/{max_rounds} audio={len(data)}B "
+                  f"engine={engine} transcribed={answer!r}", flush=True)
             if not answer:
                 time.sleep(1)
                 continue
@@ -2355,8 +2357,8 @@ def solve_recaptcha_audio(sid):
                 inp.clear()
                 inp.send_keys(answer)
                 find("#recaptcha-verify-button, button.rc-audiochallenge-verify-button").click()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[recaptcha] round {rnd + 1} type/submit failed: {e}", flush=True)
 
             # Validate the submitted answer with the driver DETACHED (reCAPTCHA
             # watches for the automation session while it verifies, same as CF).
@@ -2364,6 +2366,7 @@ def solve_recaptcha_audio(sid):
             _detached_wait(sb, 3)
             if token_present():
                 return {"solved": True, "blocked": False, "message": f"solved via audio (round {rnd + 1})"}
+            print(f"[recaptcha] round {rnd + 1} answer rejected (no token yet)", flush=True)
             # Re-enter bframe for the next clip.
             try:
                 bframe = find("iframe[src*='api2/bframe'], iframe[src*='recaptcha/api2/bframe'], iframe[src*='enterprise/bframe']")
