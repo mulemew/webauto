@@ -211,19 +211,25 @@ async function waitForCaptchaWidget(page: PageAdapter, timeoutMs: number): Promi
       await (page as unknown as { fetchFrames: () => Promise<unknown> }).fetchFrames().catch(() => {});
     }
     const present = await page.evaluate(() => {
-      const sels = [
-        "iframe[src*='recaptcha']", "iframe[src*='api2/anchor']", ".g-recaptcha", "[data-sitekey]",
-        ".cf-turnstile", "iframe[src*='turnstile']", "iframe[src*='challenges.cloudflare.com']",
-        "input[name='cf-turnstile-response']", "iframe[src*='hcaptcha']", ".h-captcha", "[class*='altcha' i]",
+      // Require a RENDERED captcha iframe (width/height > 0), not just the
+      // container (.g-recaptcha / [data-sitekey] / .cf-turnstile exist immediately,
+      // before the widget script injects and renders its iframe — matching those
+      // made cfVerify judge "not solved" before the reCAPTCHA had even appeared).
+      const iframeSels = [
+        "iframe[src*='recaptcha']", "iframe[src*='api2/anchor']", "iframe[src*='api2/bframe']",
+        "iframe[src*='turnstile']", "iframe[src*='challenges.cloudflare.com']", "iframe[src*='hcaptcha']",
       ];
-      return sels.some((s) => {
-        const el = document.querySelector(s);
-        if (!el) return false;
-        const r = (el as HTMLElement).getBoundingClientRect();
-        // Present in DOM is enough for iframes (they may be 0-size until scored);
-        // for container elements require some size so we don't match a hidden stub.
-        return (el as HTMLElement).tagName === "IFRAME" || (r.width > 0 && r.height > 0);
-      });
+      for (const s of iframeSels) {
+        const el = document.querySelector(s) as HTMLElement | null;
+        if (el) {
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) return true;
+        }
+      }
+      // Token input / ALTCHA controls only exist once the widget has mounted.
+      if (document.querySelector("input[name='cf-turnstile-response']")) return true;
+      if (document.querySelector("[class*='altcha' i] input, [class*='altcha' i] button")) return true;
+      return false;
     }).catch(() => false) as boolean;
     if (present) return true;
     await new Promise((r) => setTimeout(r, 600));
@@ -465,9 +471,15 @@ async function executeStep(
       // (e.g. host2play's "Verify that you're not a robot" dialog opened by a
       // Renew click) inject the reCAPTCHA a moment after opening — checking once,
       // too early, found nothing and the step silently did nothing.
-      const appeared = await waitForCaptchaWidget(page, 15000);
-      if (appeared) logger.info("cfVerify — captcha widget appeared");
-      else logger.info("cfVerify — no captcha widget appeared within wait; proceeding (may be a full-page CF interstitial or already clear)");
+      const appeared = await waitForCaptchaWidget(page, 25000);
+      if (appeared) {
+        logger.info("cfVerify — captcha widget rendered");
+        // Give the freshly-rendered widget a moment to become interactive before
+        // we click/solve it (avoids acting on a half-mounted iframe).
+        await new Promise((r) => setTimeout(r, 1200));
+      } else {
+        logger.info("cfVerify — no captcha widget rendered within wait; proceeding (may be a full-page CF interstitial or already clear)");
+      }
 
       // ── cf-proxy (SeleniumBase) fast-path ────────────────────────────────
       // Under the SeleniumBase backend the login step solves embedded Turnstile
