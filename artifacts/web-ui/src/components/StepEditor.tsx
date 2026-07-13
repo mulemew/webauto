@@ -82,7 +82,7 @@ function getStepMeta(t: Translations): Record<StepType, { label: string; icon: R
   wait:            { label: t.stepWait,              icon: <Clock className="h-3.5 w-3.5" />,         description: t.stepWaitDesc },
   waitFor:         { label: t.stepWaitFor,          icon: <Eye className="h-3.5 w-3.5" />,           description: t.stepWaitForDesc },
   screenshot:      { label: t.stepScreenshotType,        icon: <Camera className="h-3.5 w-3.5" />,        description: t.stepScreenshotTypeDesc },
-  dismissPopups:   { label: "关闭弹窗/遮罩",        icon: <Eraser className="h-3.5 w-3.5" />,        description: "清理 cookie 弹窗、遮罩层和广告浮层" },
+  dismissPopups:   { label: t.stepDismissPopups,      icon: <Eraser className="h-3.5 w-3.5" />,        description: t.stepDismissPopupsDesc },
   switchToNewPage: { label: t.stepSwitchTab, icon: <ExternalLink className="h-3.5 w-3.5" />,  description: t.stepSwitchTabDesc },
   keypress:        { label: t.stepKeyPress,         icon: <Command className="h-3.5 w-3.5" />,        description: t.stepKeyPressDesc },
   condition:       { label: t.stepCondition,         icon: <GitBranch className="h-3.5 w-3.5" />,     description: t.stepConditionDesc },
