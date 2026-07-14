@@ -226,8 +226,19 @@ async function waitForCaptchaWidget(page: PageAdapter, timeoutMs: number): Promi
           if (r.width > 0 && r.height > 0) return true;
         }
       }
-      // Token input / ALTCHA controls only exist once the widget has mounted.
-      if (document.querySelector("input[name='cf-turnstile-response']")) return true;
+      // Turnstile: some panels (bot-hosting) render the widget so it isn't
+      // findable as an <iframe> (shadow DOM / hidden). The hidden
+      // cf-turnstile-response input appears IMMEDIATELY (before the checkbox is
+      // drawn), so its mere presence is NOT "rendered" — wait until its container
+      // (parent element) actually has a size, i.e. the clickable checkbox is up.
+      const cfInput = document.querySelector("input[name='cf-turnstile-response']") as HTMLElement | null;
+      if (cfInput) {
+        const host = cfInput.parentElement;
+        if (host) {
+          const r = host.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) return true;
+        }
+      }
       if (document.querySelector("[class*='altcha' i] input, [class*='altcha' i] button")) return true;
       return false;
     }).catch(() => false) as boolean;
