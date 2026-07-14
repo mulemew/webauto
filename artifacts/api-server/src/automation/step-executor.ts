@@ -916,18 +916,26 @@ async function clickByText(
   // "login" and "Log" never matches "Login". The click target must equal the
   // element's trimmed text (or value / aria-label) exactly.
   const target = text.trim();
-  // Find a VISIBLE **and ENABLED** match, tag it, scroll it into view, then click.
+  // Find a VISIBLE **and ENABLED** match, then click it via a STABLE unique
+  // selector derived from the element ITSELF — not a custom marker attribute.
+  //
+  // Why not tag the element? The old code set data-wa-textclick="1" and clicked
+  // "[data-wa-textclick='1']". On reactive frameworks (minestrator's wheel is
+  // Vue) the button re-renders right as it flips disabled→enabled — exactly when
+  // we're about to click — and that patch drops the foreign attribute (or swaps
+  // the node). The follow-up click then resolves to nothing, yet the step still
+  // reports success because the earlier "found" was true. A plain CSS click on
+  // the button's own stable class (e.g. button.wheel-cta) never had this problem.
+  // So we mirror the CSS path: locate the element, derive a selector from its own
+  // stable identity, and click THAT.
+  //
   // Retry for a few seconds: buttons often render DISABLED until their state
-  // loads — e.g. minestrator's "Spin the wheel" keeps the text "Spin the wheel"
-  // but stays disabled until the wheel-availability API resolves. clicking a
-  // disabled button silently does nothing, yet the old code (which only checked
-  // visibility, not disabled) "found" it and reported success. Waiting for it to
-  // become enabled is what makes the click actually land.
+  // loads (the wheel stays disabled until its availability API resolves), and
+  // clicking a disabled button silently does nothing.
   const deadline = Date.now() + 8000;
-  let found = false;
+  let sel: string | null = null;
   while (Date.now() < deadline) {
-    found = await page.evaluate((btnText: unknown) => {
-      document.querySelectorAll("[data-wa-textclick]").forEach((e) => e.removeAttribute("data-wa-textclick"));
+    sel = (await page.evaluate((btnText: unknown) => {
       const candidates = Array.from(
         document.querySelectorAll<HTMLElement>(
           "button, a, input[type='button'], input[type='submit'], [role='button']",
@@ -943,27 +951,58 @@ async function clickByText(
       };
       const getElText = (el: HTMLElement): string =>
         (el.textContent || (el instanceof HTMLInputElement ? el.value : "") || el.getAttribute("aria-label") || "").trim();
+      // Build a selector that pins down THIS element via its own stable identity:
+      // id → a single distinctive class → structural nth-of-type path.
+      const uniqueSelector = (el: Element): string | null => {
+        const esc = (s: string): string =>
+          window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+        const tag = el.tagName.toLowerCase();
+        if (el.id && document.querySelectorAll(`#${esc(el.id)}`).length === 1) return `#${esc(el.id)}`;
+        // a single class that uniquely identifies it — skip Tailwind state
+        // variants ("disabled:opacity-75") whose escaped colons are brittle.
+        for (const c of Array.from(el.classList)) {
+          if (c.includes(":")) continue;
+          const s = `${tag}.${esc(c)}`;
+          if (document.querySelectorAll(s).length === 1) return s;
+        }
+        // structural fallback: shortest nth-of-type path that is unique
+        const parts: string[] = [];
+        let node: Element | null = el;
+        while (node && node.nodeType === 1 && node !== document.body) {
+          const cur: Element = node;
+          let part = cur.tagName.toLowerCase();
+          const parent: Element | null = cur.parentElement;
+          if (parent) {
+            const sibs = Array.from(parent.children).filter((c) => c.tagName === cur.tagName);
+            if (sibs.length > 1) part += `:nth-of-type(${sibs.indexOf(cur) + 1})`;
+          }
+          parts.unshift(part);
+          if (document.querySelectorAll(parts.join(" > ")).length === 1) return parts.join(" > ");
+          node = parent;
+        }
+        return parts.length ? parts.join(" > ") : null;
+      };
       for (const el of candidates) {
         if (getElText(el) === (btnText as string) && isClickable(el)) {
-          el.setAttribute("data-wa-textclick", "1");
           try { el.scrollIntoView({ block: "center", inline: "center" }); } catch { /* ignore */ }
-          return true;
+          return uniqueSelector(el);
         }
       }
-      return false;
-    }, target as never) as boolean;
-    if (found) break;
+      return null;
+    }, target as never)) as string | null;
+    if (sel) break;
     await new Promise((r) => setTimeout(r, 400));
   }
 
-  if (!found) return { found: false, reacted: false, changes: 0, method: "none" };
+  if (!sel) return { found: false, reacted: false, changes: 0, method: "none" };
+  const stableSel = sel;
   await new Promise((r) => setTimeout(r, 200)); // let the scroll settle
 
   // Snapshot URL + install a mutation counter so we can tell whether the click
   // actually DID anything — surfaced in the step message so "clicked but nothing
   // happened" is visible without digging container logs. (Reward wheels animate an
   // SVG/IMG transform, which counts as mutations, so this catches them.)
-  const urlBefore = await page.evaluate(() => {
+  const urlBefore = (await page.evaluate(() => {
     const w = window as unknown as { __waMut?: number; __waMo?: MutationObserver };
     w.__waMut = 0;
     try { w.__waMo?.disconnect(); } catch { /* ignore */ }
@@ -971,19 +1010,21 @@ async function clickByText(
     mo.observe(document.body, { childList: true, subtree: true, attributes: true });
     w.__waMo = mo;
     return location.href;
-  }).catch(() => "") as string;
+  }).catch(() => "")) as string;
 
+  // Click the element through its OWN stable selector — the exact same robust
+  // path a CSS click step takes. Synthetic fallback only if the real click throws.
   const doClick = async (): Promise<string> => {
     try {
-      await page.click("[data-wa-textclick='1']"); // real, trusted click via the backend
+      await page.click(stableSel); // real, trusted click via the backend
       return "real";
     } catch (err) {
-      logger.warn({ text: target, err: err instanceof Error ? err.message : String(err) },
+      logger.warn({ text: target, sel: stableSel, err: err instanceof Error ? err.message : String(err) },
         "clickByText: real click threw — falling back to a synthetic click");
-      await page.evaluate(() => {
-        const el = document.querySelector<HTMLElement>("[data-wa-textclick='1']");
+      await page.evaluate((s: string) => {
+        const el = document.querySelector<HTMLElement>(s);
         if (el) el.click();
-      }).catch(() => {});
+      }, stableSel as never).catch(() => {});
       return "synthetic";
     }
   };
@@ -995,38 +1036,14 @@ async function clickByText(
     }).catch(() => ({ mut: 0, url: "" }))) as { mut: number; url: string };
   };
 
-  // Trusted click first, then check whether the page actually reacted.
-  let method = await doClick();
-  let r = await observe();
-  let reacted = r.mut > 5 || (!!r.url && r.url !== urlBefore);
-
-  // Synthetic fallback — ONLY when the trusted click produced NO reaction at all.
-  // Some handlers (minestrator's fortune wheel is the proven case) do not fire on
-  // the real trusted pointer sequence but DO fire on a plain `click` event
-  // dispatched straight at the element. We gate strictly on zero reaction, so a
-  // button that already responded to the trusted click is never clicked twice —
-  // that avoids double-submitting normal buttons while still rescuing the ones a
-  // trusted click can't drive.
-  if (!reacted) {
-    logger.warn({ text: target, changes: r.mut },
-      "clickByText: trusted click had no effect — dispatching a direct synthetic click");
-    await page.evaluate(() => {
-      const el = document.querySelector<HTMLElement>("[data-wa-textclick='1']");
-      if (el) el.click();
-    }).catch(() => {});
-    const r2 = await observe();
-    if (r2.mut > 5 || (!!r2.url && r2.url !== urlBefore)) {
-      reacted = true;
-      r = r2;
-      method = `${method}+synthetic`;
-    }
-  }
+  const method = await doClick();
+  const r = await observe();
+  const reacted = r.mut > 5 || (!!r.url && r.url !== urlBefore);
 
   await page.evaluate(() => {
     const w = window as unknown as { __waMo?: MutationObserver };
     try { w.__waMo?.disconnect(); } catch { /* ignore */ }
-    document.querySelector("[data-wa-textclick]")?.removeAttribute("data-wa-textclick");
   }).catch(() => {});
-  logger.info({ text: target, method, reacted, changes: r.mut }, "clickByText done");
+  logger.info({ text: target, sel: stableSel, method, reacted, changes: r.mut }, "clickByText done");
   return { found: true, reacted, changes: r.mut, method };
 }
