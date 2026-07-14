@@ -995,17 +995,13 @@ async function clickByText(
     }).catch(() => ({ mut: 0, url: "" }))) as { mut: number; url: string };
   };
 
-  let method = await doClick();
-  let r = await observe();
-  let reacted = r.mut > 5 || (!!r.url && r.url !== urlBefore);
-  // No reaction — the button's handler may attach late on a hydrating SPA. Retry
-  // the click once before giving up.
-  if (!reacted) {
-    logger.warn({ text: target, changes: r.mut }, "clickByText: no page reaction — retrying click once");
-    method = await doClick();
-    r = await observe();
-    reacted = r.mut > 5 || (!!r.url && r.url !== urlBefore);
-  }
+  // Click ONCE and observe. We deliberately do NOT auto-retry on "no reaction":
+  // plenty of buttons legitimately cause no visible DOM change (toggles, submits
+  // that only fire a background request), and re-clicking them would double-submit
+  // or toggle back. The reaction result is reported for visibility only.
+  const method = await doClick();
+  const r = await observe();
+  const reacted = r.mut > 5 || (!!r.url && r.url !== urlBefore);
 
   await page.evaluate(() => {
     const w = window as unknown as { __waMo?: MutationObserver };
