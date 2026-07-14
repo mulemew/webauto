@@ -305,17 +305,20 @@ async function executeStep(
       const urlBefore = page.url();
 
       if (step.selectorType === "text") {
-        let found = await clickByText(page, step.selector);
-        if (!found) {
+        let res = await clickByText(page, step.selector);
+        if (!res.found) {
           // The target may be gated behind a Cloudflare challenge/Turnstile that
           // only clears once passed. Clear it and retry the click once.
           if (await clearCloudflareIfPresent(page)) {
-            found = await clickByText(page, step.selector);
+            res = await clickByText(page, step.selector);
           }
         }
-        if (!found) throw new Error(`No visible element with text "${step.selector}" found`);
+        if (!res.found) throw new Error(`No visible element with text "${step.selector}" found`);
         await settleAfterClick(page, urlBefore);
-        return { message: `Clicked element matching text "${step.selector}"` };
+        const reaction = res.reacted
+          ? `page reacted (${res.changes} DOM changes)`
+          : `NO page reaction (${res.changes} DOM changes — the button may ignore automated clicks or the spin was rejected)`;
+        return { message: `Clicked element matching text "${step.selector}" [${res.method} click] — ${reaction}` };
       }
 
       if (step.selectorType === "xpath") {
@@ -950,29 +953,62 @@ async function clickByText(page: PageAdapter, text: string): Promise<boolean> {
     await new Promise((r) => setTimeout(r, 400));
   }
 
-  if (!found) return false;
+  if (!found) return { found: false, reacted: false, changes: 0, method: "none" };
   await new Promise((r) => setTimeout(r, 200)); // let the scroll settle
 
-  // Track which path landed. A real adapter click is a TRUSTED event
-  // (isTrusted=true); the synthetic fallback is NOT — buttons that gate an action
-  // on event.isTrusted (e.g. a reward-wheel spin) fire their handler either way
-  // but silently skip the real action on an untrusted click. Logging this makes
-  // "step succeeded but nothing happened" diagnosable.
-  let clickPath = "real";
-  try {
-    await page.click("[data-wa-textclick='1']"); // real, trusted click via the backend
-  } catch (err) {
-    clickPath = "synthetic-fallback";
-    logger.warn({ text: target, err: err instanceof Error ? err.message : String(err) },
-      "clickByText: real click threw — falling back to a synthetic (untrusted) click");
-    await page.evaluate(() => {
-      const el = document.querySelector<HTMLElement>("[data-wa-textclick='1']");
-      if (el) el.click(); // synthetic fallback
-    }).catch(() => {});
+  // Snapshot URL + install a mutation counter so we can tell whether the click
+  // actually DID anything — surfaced in the step message so "clicked but nothing
+  // happened" is visible without digging container logs. (Reward wheels animate an
+  // SVG/IMG transform, which counts as mutations, so this catches them.)
+  const urlBefore = await page.evaluate(() => {
+    const w = window as unknown as { __waMut?: number; __waMo?: MutationObserver };
+    w.__waMut = 0;
+    try { w.__waMo?.disconnect(); } catch { /* ignore */ }
+    const mo = new MutationObserver((ms) => { w.__waMut = (w.__waMut || 0) + ms.length; });
+    mo.observe(document.body, { childList: true, subtree: true, attributes: true });
+    w.__waMo = mo;
+    return location.href;
+  }).catch(() => "") as string;
+
+  const doClick = async (): Promise<string> => {
+    try {
+      await page.click("[data-wa-textclick='1']"); // real, trusted click via the backend
+      return "real";
+    } catch (err) {
+      logger.warn({ text: target, err: err instanceof Error ? err.message : String(err) },
+        "clickByText: real click threw — falling back to a synthetic click");
+      await page.evaluate(() => {
+        const el = document.querySelector<HTMLElement>("[data-wa-textclick='1']");
+        if (el) el.click();
+      }).catch(() => {});
+      return "synthetic";
+    }
+  };
+  const observe = async (): Promise<{ mut: number; url: string }> => {
+    await new Promise((r) => setTimeout(r, 1200));
+    return (await page.evaluate(() => {
+      const w = window as unknown as { __waMut?: number };
+      return { mut: w.__waMut || 0, url: location.href };
+    }).catch(() => ({ mut: 0, url: "" }))) as { mut: number; url: string };
+  };
+
+  let method = await doClick();
+  let r = await observe();
+  let reacted = r.mut > 5 || (!!r.url && r.url !== urlBefore);
+  // No reaction — the button's handler may attach late on a hydrating SPA. Retry
+  // the click once before giving up.
+  if (!reacted) {
+    logger.warn({ text: target, changes: r.mut }, "clickByText: no page reaction — retrying click once");
+    method = await doClick();
+    r = await observe();
+    reacted = r.mut > 5 || (!!r.url && r.url !== urlBefore);
   }
-  logger.info({ text: target, clickPath }, "clickByText click dispatched");
+
   await page.evaluate(() => {
+    const w = window as unknown as { __waMo?: MutationObserver };
+    try { w.__waMo?.disconnect(); } catch { /* ignore */ }
     document.querySelector("[data-wa-textclick]")?.removeAttribute("data-wa-textclick");
   }).catch(() => {});
-  return true;
+  logger.info({ text: target, method, reacted, changes: r.mut }, "clickByText done");
+  return { found: true, reacted, changes: r.mut, method };
 }
