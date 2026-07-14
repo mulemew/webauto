@@ -214,7 +214,7 @@ interface StepExecResult {
 async function waitForCaptchaWidget(page: PageAdapter, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   const started = Date.now();
-  const GRACE_MS = 2000; // give a late-loading captcha this long to at least start
+  const GRACE_MS = 5000; // give a late-loading captcha this long to at least start
   while (Date.now() < deadline) {
     if ("fetchFrames" in page && typeof (page as { fetchFrames?: unknown }).fetchFrames === "function") {
       await (page as unknown as { fetchFrames: () => Promise<unknown> }).fetchFrames().catch(() => {});
@@ -490,7 +490,7 @@ async function executeStep(
       // (e.g. host2play's "Verify that you're not a robot" dialog opened by a
       // Renew click) inject the reCAPTCHA a moment after opening — checking once,
       // too early, found nothing and the step silently did nothing.
-      const appeared = await waitForCaptchaWidget(page, 25000);
+      const appeared = await waitForCaptchaWidget(page, 15000);
       if (appeared) {
         logger.info("cfVerify — captcha widget rendered");
         // Give the freshly-rendered widget a moment to become interactive before
