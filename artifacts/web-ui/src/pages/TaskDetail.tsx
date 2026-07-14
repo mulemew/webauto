@@ -22,6 +22,7 @@ import { useTimeSince } from "@/hooks/use-time-since";
 import { useTaskLogStream, type StreamEntry } from "@/hooks/use-task-log-stream";
 
 import TaskHistoryChart from "@/components/TaskHistoryChart";
+import { stepTypeLabel } from "@/components/StepEditor";
 
 function LogScreenshotCell({ taskId, logId }: { taskId: number; logId: number }) {
   const [loaded, setLoaded] = useState(false);
@@ -829,7 +830,7 @@ export default function TaskDetail() {
                                       status === "success" ? "border-green-500/30 bg-green-500/10 text-green-600 dark:text-green-400" :
                                       "border-muted-foreground/20 bg-muted/30 text-muted-foreground"
                                     }`}>
-                                      {configStep.type}
+                                      {stepTypeLabel(configStep.type, t)}
                                     </span>
                                     <span className="text-muted-foreground/50">{stepIcon}</span>
                                     {status === "success" && <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0" />}
@@ -974,14 +975,14 @@ export default function TaskDetail() {
                                         : "bg-destructive/10 border-destructive/30 text-destructive";
                                       return (
                                         <span key={si} className={"inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-mono border " + pillClass}>
-                                          {step.success ? "✓" : "✗"} {step.type}
+                                          {step.success ? "✓" : "✗"} {stepTypeLabel(step.type, t)}
                                         </span>
                                       );
                                     })}
                                   </div>
                                 ) : (
-                                  <p className="text-xs font-mono text-muted-foreground truncate">
-                                    {(isDryRunLog ? log.message.slice("[DRY RUN] ".length) : log.message).split("\n")[0]}
+                                  <p className="text-xs font-mono text-muted-foreground whitespace-pre-wrap break-words">
+                                    {isDryRunLog ? log.message.slice("[DRY RUN] ".length) : log.message}
                                   </p>
                                 )}
                               </div>

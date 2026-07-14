@@ -90,6 +90,17 @@ function getStepMeta(t: Translations): Record<StepType, { label: string; icon: R
 };
 }
 
+/**
+ * Localized display label for a step type — reused by the Run Timeline and the
+ * Execution Logs step pills so they show a translated name ("机器人验证" / "Bot
+ * Verify") instead of the raw English type ("cfVerify"). Unknown types (precheck /
+ * postcheck) fall back to the raw string.
+ */
+export function stepTypeLabel(type: string, t: Translations): string {
+  const meta = getStepMeta(t) as Record<string, { label: string } | undefined>;
+  return meta[type]?.label ?? type;
+}
+
 const PRESET_KEYS = [
   { label: "Enter", key: "Enter" },
   { label: "Tab", key: "Tab" },

@@ -14,6 +14,7 @@ import { useTimeSince } from "@/hooks/use-time-since";
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 import { usePollingInterval } from "@/hooks/use-polling-interval";
 import { useLang } from "@/contexts/lang-context";
+import { stepTypeLabel } from "@/components/StepEditor";
 import { usePollPaused } from "@/contexts/poll-paused-context";
 
 // ── Per-step log viewer ───────────────────────────────────────────────────────
@@ -283,7 +284,7 @@ export default function LogDetail() {
                         <div className="flex-1 pb-4 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap mb-0.5">
                             <span className={"text-[10px] font-mono px-1.5 py-0.5 rounded border font-medium " + pillClass}>
-                              {step.type}
+                              {stepTypeLabel(step.type, t)}
                             </span>
                             {!isPrecheck && !isPostcheck && <span className="text-[10px] font-mono text-muted-foreground/60">#{step.stepIndex + 1}</span>}
                             {step.durationMs != null && (
