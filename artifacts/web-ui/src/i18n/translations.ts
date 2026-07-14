@@ -334,6 +334,7 @@ export interface Translations {
       thenExecute: string;
       moveUp: string;
       moveDown: string;
+      dragToReorder: string;
       removeStep: string;
       importJson: string;
       clearAll: string;
@@ -653,6 +654,7 @@ export interface Translations {
       thenExecute: "满足条件时执行",
       moveUp: "上移",
       moveDown: "下移",
+      dragToReorder: "拖拽调整顺序",
       removeStep: "删除步骤",
       importJson: "导入 JSON",
       clearAll: "清空全部",
@@ -971,6 +973,7 @@ export interface Translations {
       thenExecute: "Then execute",
       moveUp: "Move up",
       moveDown: "Move down",
+      dragToReorder: "Drag to reorder",
       removeStep: "Remove step",
       importJson: "Import JSON",
       clearAll: "Clear all",

@@ -23,7 +23,7 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 
   // ── Snake Metro Map ──────────────────────────────────────────────────────────
-  const METRO_DOTS_PER_ROW = 10;
+  const METRO_DOTS_PER_ROW = 20;
 
   interface MetroDot {
     stepIndex: number;
@@ -63,7 +63,7 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
                     const lineColor = lineActive ? "rgba(34,197,94,0.4)" : "rgba(100,116,139,0.15)";
                     const tooltipLabel = dot?.type ? ("Step " + (stepIdx + 1) + " · " + dot.type) : ("Step " + (stepIdx + 1));
                     return (
-                      <div key={stepIdx} style={{ display: "flex", alignItems: "center", flex: isLastDotInRow ? "0 0 auto" : 1, minWidth: isLastDotInRow ? "auto" : 20 }}>
+                      <div key={stepIdx} style={{ display: "flex", alignItems: "center", flex: isLastDotInRow ? "0 0 auto" : 1, minWidth: isLastDotInRow ? "auto" : 10 }}>
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <div style={{ position: "relative", width: DOT_SIZE, height: DOT_SIZE, flexShrink: 0, cursor: "default" }}>
@@ -85,7 +85,7 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
                           </TooltipContent>
                         </Tooltip>
                         {!isLastDotInRow && (
-                          <div style={{ flex: 1, height: 2, backgroundColor: lineColor, minWidth: 12 }} />
+                          <div style={{ flex: 1, height: 2, backgroundColor: lineColor, minWidth: 6 }} />
                         )}
                       </div>
                     );

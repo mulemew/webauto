@@ -1,7 +1,7 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { useLang } from "@/contexts/lang-context";
 import type { Translations } from "@/i18n/translations";
-import { Plus, Trash2, ChevronUp, ChevronDown, MousePointer, Navigation, Keyboard, Clock, Eye, Camera, ExternalLink, ListFilter, ArrowDown, Hand, Command, LogIn, GitBranch, Eraser, ShieldCheck } from "lucide-react";
+import { Plus, Trash2, ChevronUp, ChevronDown, MousePointer, Navigation, Keyboard, Clock, Eye, Camera, ExternalLink, ListFilter, ArrowDown, Hand, Command, LogIn, GitBranch, Eraser, ShieldCheck, GripVertical } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -255,6 +255,8 @@ function StepCard({
   onDelete,
   onMoveUp,
   onMoveDown,
+  onDragStart,
+  onDragEnd,
 }: {
   step: WorkflowStep;
   index: number;
@@ -264,6 +266,8 @@ function StepCard({
   onDelete: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  onDragStart: () => void;
+  onDragEnd: () => void;
 }) {
   const { t } = useLang();
   const STEP_META = getStepMeta(t);
@@ -274,6 +278,17 @@ function StepCard({
     <div className="border border-border rounded-lg bg-card overflow-hidden">
       {/* Card header */}
       <div className="flex items-center gap-2 px-3 py-2 bg-muted/30 border-b border-border">
+        {/* Drag handle — only this element is draggable, so inputs inside the card
+            stay fully interactive (native HTML5 DnD hijacks whatever is draggable). */}
+        <div
+          draggable
+          onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; onDragStart(); }}
+          onDragEnd={onDragEnd}
+          className="cursor-grab active:cursor-grabbing text-muted-foreground/40 hover:text-muted-foreground shrink-0 touch-none"
+          title={t.dragToReorder}
+        >
+          <GripVertical className="h-3.5 w-3.5" />
+        </div>
         <span className="text-xs font-mono text-muted-foreground w-5 text-center shrink-0">{index + 1}</span>
         <Select
           value={step.type}
@@ -786,6 +801,16 @@ export function StepEditor({ steps, onChange, taskTargetUrl = "", savedCredentia
   const remove = (index: number) => { keysRef.current.splice(index, 1); onChange(steps.filter((_, i) => i !== index)); };
   const moveUp = (index: number) => { if (index === 0) return; const next = [...steps]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; const k = keysRef.current; [k[index - 1], k[index]] = [k[index], k[index - 1]]; onChange(next); };
   const moveDown = (index: number) => { if (index === steps.length - 1) return; const next = [...steps]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; const k = keysRef.current; [k[index], k[index + 1]] = [k[index + 1], k[index]]; onChange(next); };
+  // Drag-to-reorder: splice the dragged step (and its stable key) out and back in
+  // at the drop position, so dropping many positions away works in one gesture.
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+  const move = (from: number, to: number) => {
+    if (from === to || from < 0 || to < 0 || from >= steps.length || to >= steps.length) return;
+    const next = [...steps]; const [s] = next.splice(from, 1); next.splice(to, 0, s);
+    const k = keysRef.current; const [kk] = k.splice(from, 1); k.splice(to, 0, kk);
+    onChange(next);
+  };
 
   return (
     <div className="space-y-2">
@@ -796,10 +821,23 @@ export function StepEditor({ steps, onChange, taskTargetUrl = "", savedCredentia
       ) : (
         <div className="space-y-2">
           {steps.map((step, i) => (
-            <StepCard key={keysRef.current[i] ?? i} step={step} index={i} total={steps.length}
-              savedCredentials={savedCredentials}
-              onChange={(s) => update(i, s)} onDelete={() => remove(i)}
-              onMoveUp={() => moveUp(i)} onMoveDown={() => moveDown(i)} />
+            <div
+              key={keysRef.current[i] ?? i}
+              onDragOver={(e) => { if (dragIndex === null) return; e.preventDefault(); if (overIndex !== i) setOverIndex(i); }}
+              onDrop={(e) => { e.preventDefault(); if (dragIndex !== null) move(dragIndex, i); setDragIndex(null); setOverIndex(null); }}
+              className={
+                dragIndex !== null && overIndex === i && dragIndex !== i
+                  ? "rounded-lg ring-2 ring-primary/50 transition-shadow"
+                  : dragIndex === i ? "opacity-40" : ""
+              }
+            >
+              <StepCard step={step} index={i} total={steps.length}
+                savedCredentials={savedCredentials}
+                onChange={(s) => update(i, s)} onDelete={() => remove(i)}
+                onMoveUp={() => moveUp(i)} onMoveDown={() => moveDown(i)}
+                onDragStart={() => setDragIndex(i)}
+                onDragEnd={() => { setDragIndex(null); setOverIndex(null); }} />
+            </div>
           ))}
         </div>
       )}
