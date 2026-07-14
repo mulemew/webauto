@@ -197,9 +197,17 @@ export async function dismissPopups(page: PageAdapter): Promise<PopupCleanupResu
   const details: string[] = [];
   let dismissed = 0;
 
-  // 1. Cookie / consent banners.
+  // 1. Cookie / consent banners. Retry for a few seconds: some consent dialogs
+  //    (e.g. Google's "Accept all") render a beat AFTER the page loads, so a
+  //    single early check finds nothing and the banner pops up right after.
   try {
-    if (await dismissCookieConsent(page)) {
+    const deadline = Date.now() + 4000;
+    let hit = false;
+    do {
+      if (await dismissCookieConsent(page)) { hit = true; break; }
+      await sleep(500); // let a still-loading banner appear, then re-check
+    } while (Date.now() < deadline);
+    if (hit) {
       dismissed++;
       details.push("cookie/consent banner");
     }
