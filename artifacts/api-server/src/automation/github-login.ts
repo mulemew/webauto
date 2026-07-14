@@ -100,6 +100,22 @@ import type { PageAdapter } from "./page-adapter";
           if (texts.some((p) => t.includes(p)) && isVis(c)) { el = c; break; }
         }
       }
+      if (!el) {
+        // Icon-only providers with no text/href/onclick attribute — e.g. wispbyte
+        // renders <div class="continue-via"><i class="fa-brands fa-github"></i></div>
+        // and wires the click via a JS listener. Locate the GitHub icon, then click
+        // its nearest clickable ancestor (its own provider container), which scopes
+        // the match to GitHub and not the sibling Discord/Google icons.
+        const icon = document.querySelector<HTMLElement>(
+          "i.fa-github, [class*='fa-github'], i[class*='github'], svg[class*='github'], [aria-label*='github' i]",
+        );
+        if (icon) {
+          const clickable = (icon.closest(
+            "a, button, [role='button'], [onclick], .continue-via, [class*='provider'], [class*='social'], [class*='oauth'], [class*='continue']",
+          ) as HTMLElement | null) || icon.parentElement || icon;
+          if (clickable && isVis(clickable)) el = clickable;
+        }
+      }
       if (!el) return { found: false, href: null as string | null, text: "" };
       const anchor = el.closest("a") as HTMLAnchorElement | null;
       const href = anchor?.href || null;
@@ -253,8 +269,26 @@ import type { PageAdapter } from "./page-adapter";
         }
 
         if (!clicked) {
-          // If we're not on a login page, maybe we're already logged in
-          if (!currentUrl.includes("/login") && !currentUrl.includes("/signin") && !currentUrl.includes("/auth")) {
+          // Before assuming "already logged in", make SURE this isn't a login page.
+          // A URL check alone is not enough: wispbyte serves its login screen at
+          // /client with the title "Log In" — no login/signin/auth keyword anywhere
+          // in the URL — so the old URL-only heuristic falsely reported success and
+          // the next steps ran unauthenticated. Detect login affordances directly.
+          const looksLikeLogin = await page.evaluate(() => {
+            const hasPw = !!document.querySelector("input[type='password']");
+            const t = (document.body?.innerText ?? "").toLowerCase();
+            const title = (document.title ?? "").toLowerCase();
+            return (
+              hasPw ||
+              /log ?in|sign ?in/.test(title) ||
+              t.includes("continue with") ||
+              t.includes("continue via")
+            );
+          }).catch(() => false) as boolean;
+          const onLoginUrl =
+            currentUrl.includes("/login") || currentUrl.includes("/signin") || currentUrl.includes("/auth");
+
+          if (!onLoginUrl && !looksLikeLogin) {
             // 检查是否是 Cloudflare WAF 拦截页——拦截页无 GitHub 按钮且 URL 不含 login，容易误判为已登录
             const isWafBlocked = await page.evaluate(() => {
               const bodyText = document.body?.innerText ?? "";
@@ -268,10 +302,11 @@ import type { PageAdapter } from "./page-adapter";
               logger.warn({ url: currentUrl }, "Cloudflare WAF block detected — not authenticated");
               return { success: false, captchaBlocked: false, message: `Target site is Cloudflare WAF blocked. URL: ${currentUrl}` };
             }
-            logger.info({ url: currentUrl }, "No GitHub button found but not on login page — already logged in?");
+            logger.info({ url: currentUrl }, "No GitHub button found and no login affordances — already logged in?");
             return { success: true, captchaBlocked: false, message: `Already authenticated. URL: ${currentUrl}` };
           }
-          return { success: false, captchaBlocked: false, message: `Could not find "Sign in with GitHub" button on: ${currentUrl}` };
+          logger.warn({ url: currentUrl, looksLikeLogin }, "Login page detected but GitHub button not found");
+          return { success: false, captchaBlocked: false, message: `Could not find "Sign in with GitHub" button on login page: ${currentUrl}` };
         }
 
         logger.info("Clicked GitHub OAuth button — waiting for navigation");
