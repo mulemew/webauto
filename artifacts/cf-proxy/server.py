@@ -1932,17 +1932,21 @@ def _human_mouse_drift(target_x=None, target_y=None):
         time.sleep(random.uniform(0.04, 0.18))  # brief pause at each waypoint
 
 
-def _element_abs_xy(sb, css, dx=0, dy_frac=0.5, wid=None):
+def _element_abs_xy(sb, css, dx=0, dy_frac=0.5, wid=None, parent=False):
     """Absolute Xvfb-screen coords of a point inside a TOP-LEVEL element (e.g. the
     reCAPTCHA anchor iframe) for an OS-level xdotool click. dx = px from the
-    element's left edge, dy_frac = fraction of its height for y. Returns (x, y) or
-    None. Call on default_content with the driver CONNECTED."""
+    element's left edge, dy_frac = fraction of its height for y. When parent=True,
+    measure the element's PARENT instead (used for the 0x0 hidden
+    cf-turnstile-response input, whose parent is the rendered widget). Returns
+    (x, y) or None. Call on default_content with the driver CONNECTED."""
     import subprocess
     try:
         rect = sb.execute_script(
             "var e=document.querySelector(arguments[0]);"
-            "if(!e)return null;var r=e.getBoundingClientRect();"
-            "return {x:r.x,y:r.y,w:r.width,h:r.height};", css)
+            "if(!e)return null;"
+            "if(arguments[1]&&e.parentElement)e=e.parentElement;"
+            "var r=e.getBoundingClientRect();"
+            "return {x:r.x,y:r.y,w:r.width,h:r.height};", css, parent)
     except Exception:
         rect = None
     if not rect or not rect.get("w"):
@@ -2118,6 +2122,41 @@ def click_turnstile(sid):
                 time.sleep(0.5)
                 if _turnstile_token(sb):
                     return {"solved": True, "method": "uc_gui", "attempt": attempt + 1}
+
+        # ── Coordinate fallback ──────────────────────────────────────────────
+        # uc_gui_click_captcha finds the checkbox by an on-screen IMAGE search,
+        # which misses widgets some panels (e.g. bot-hosting's renew modal) render
+        # so they aren't a findable <iframe> (shadow DOM / hidden). The hidden
+        # cf-turnstile-response input IS in the light DOM though, and its PARENT is
+        # the rendered widget — so click its checkbox (left side, vertically
+        # centered) at OS level with human drift, the same primitives as the
+        # reCAPTCHA anchor click. Generic: works on any such shadow/hidden widget.
+        if not _turnstile_token(sb):
+            import subprocess
+            try:
+                _wid = _find_session_window(sb)
+            except Exception:
+                _wid = None
+            cbxy = _element_abs_xy(sb, 'input[name="cf-turnstile-response"]',
+                                   dx=28, dy_frac=0.5, wid=_wid, parent=True)
+            if cbxy:
+                print(f"[turnstile] coordinate fallback: checkbox at {cbxy}", flush=True)
+                for attempt in range(3):
+                    if _turnstile_token(sb):
+                        break
+                    try:
+                        with _gui_lock:
+                            _raise_window(_wid)
+                            _human_mouse_drift(cbxy[0], cbxy[1])
+                            subprocess.run(["xdotool", "mousemove", str(cbxy[0]), str(cbxy[1])],
+                                           timeout=2, capture_output=True)
+                            subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
+                    except Exception as e:
+                        print(f"[turnstile] coord click err: {e}", flush=True)
+                    for _ in range(16):
+                        time.sleep(0.5)
+                        if _turnstile_token(sb):
+                            return {"solved": True, "method": "coord", "attempt": attempt + 1}
 
         return {"solved": False, "method": "none", "attempt": 6}
 
