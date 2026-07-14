@@ -198,52 +198,60 @@ interface StepExecResult {
 }
 
 /**
- * Poll for a captcha widget (reCAPTCHA / Turnstile / hCaptcha / ALTCHA) to appear
- * in the DOM, up to `timeoutMs`. Captcha widgets in modals (e.g. host2play's
- * "Verify that you're not a robot" dialog that opens after clicking Renew) load
- * asynchronously — checking once, too early, finds nothing and the step gives up.
- * Returns true as soon as any widget is present.
+ * Wait for a captcha to be actionable before cfVerify tries to solve it — but
+ * without wasting the full timeout on pages that have no captcha at all.
+ *
+ * Each poll returns one of three signals so the loop can exit as EARLY as
+ * possible: `verified` (already solved — nothing to do), `rendered` (the clickable
+ * widget is drawn — go click it), and `marker` (some captcha element exists but the
+ * clickable part isn't drawn yet — keep waiting). If, after a short grace period,
+ * there's NO marker at all, we bail immediately rather than sit for `timeoutMs`.
+ * So fast sites return in ~1s, no-captcha pages bail in ~2s, and only genuinely
+ * slow-loading widgets use the long timeout as a fallback.
+ *
+ * Returns true when a captcha appeared (or is already solved), false otherwise.
  */
 async function waitForCaptchaWidget(page: PageAdapter, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
+  const started = Date.now();
+  const GRACE_MS = 2000; // give a late-loading captcha this long to at least start
   while (Date.now() < deadline) {
     if ("fetchFrames" in page && typeof (page as { fetchFrames?: unknown }).fetchFrames === "function") {
       await (page as unknown as { fetchFrames: () => Promise<unknown> }).fetchFrames().catch(() => {});
     }
-    const present = await page.evaluate(() => {
-      // Require a RENDERED captcha iframe (width/height > 0), not just the
-      // container (.g-recaptcha / [data-sitekey] / .cf-turnstile exist immediately,
-      // before the widget script injects and renders its iframe — matching those
-      // made cfVerify judge "not solved" before the reCAPTCHA had even appeared).
-      const iframeSels = [
-        "iframe[src*='recaptcha']", "iframe[src*='api2/anchor']", "iframe[src*='api2/bframe']",
-        "iframe[src*='turnstile']", "iframe[src*='challenges.cloudflare.com']", "iframe[src*='hcaptcha']",
-      ];
-      for (const s of iframeSels) {
-        const el = document.querySelector(s) as HTMLElement | null;
-        if (el) {
-          const r = el.getBoundingClientRect();
-          if (r.width > 0 && r.height > 0) return true;
-        }
-      }
-      // Turnstile: some panels (bot-hosting) render the widget so it isn't
-      // findable as an <iframe> (shadow DOM / hidden). The hidden
-      // cf-turnstile-response input appears IMMEDIATELY (before the checkbox is
-      // drawn), so its mere presence is NOT "rendered" — wait until its container
-      // (parent element) actually has a size, i.e. the clickable checkbox is up.
-      const cfInput = document.querySelector("input[name='cf-turnstile-response']") as HTMLElement | null;
-      if (cfInput) {
-        const host = cfInput.parentElement;
-        if (host) {
-          const r = host.getBoundingClientRect();
-          if (r.width > 0 && r.height > 0) return true;
-        }
-      }
-      if (document.querySelector("[class*='altcha' i] input, [class*='altcha' i] button")) return true;
-      return false;
-    }).catch(() => false) as boolean;
-    if (present) return true;
-    await new Promise((r) => setTimeout(r, 600));
+    const state = await page.evaluate(() => {
+      const sized = (el: Element | null): boolean => {
+        if (!el) return false;
+        const r = (el as HTMLElement).getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      };
+      // Already solved? Then there's nothing to wait for.
+      const cfInput = document.querySelector("input[name='cf-turnstile-response']") as HTMLInputElement | null;
+      const rcResp = document.querySelector("textarea[name='g-recaptcha-response'], textarea#g-recaptcha-response") as HTMLTextAreaElement | null;
+      if ((cfInput?.value?.length ?? 0) > 20 || (rcResp?.value?.length ?? 0) > 20) return "verified";
+
+      // A RENDERED, clickable widget (iframe with a size, or the Turnstile widget's
+      // container — the parent of the 0x0 cf-turnstile-response input — once it has
+      // a size). The bare container (.g-recaptcha / [data-sitekey]) is NOT enough:
+      // it exists before the widget draws.
+      const iframeSels = "iframe[src*='recaptcha'], iframe[src*='api2/anchor'], iframe[src*='api2/bframe'], iframe[src*='turnstile'], iframe[src*='challenges.cloudflare.com'], iframe[src*='hcaptcha']";
+      if (Array.from(document.querySelectorAll(iframeSels)).some(sized)) return "rendered";
+      if (cfInput && sized(cfInput.parentElement)) return "rendered";
+      if (sized(document.querySelector("[class*='altcha' i] input, [class*='altcha' i] button"))) return "rendered";
+
+      // Some captcha element exists but isn't drawn yet → keep waiting.
+      if (
+        cfInput ||
+        document.querySelector(".cf-turnstile, [data-sitekey], .g-recaptcha, .h-captcha, [class*='altcha' i], iframe[src*='recaptcha'], iframe[src*='hcaptcha'], iframe[src*='turnstile'], iframe[src*='challenges.cloudflare.com']")
+      ) return "marker";
+
+      return "none";
+    }).catch(() => "none") as "verified" | "rendered" | "marker" | "none";
+
+    if (state === "verified" || state === "rendered") return true;
+    // No captcha element at all after the grace period — don't sit out the timeout.
+    if (state === "none" && Date.now() - started > GRACE_MS) return false;
+    await new Promise((r) => setTimeout(r, 500));
   }
   return false;
 }
