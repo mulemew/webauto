@@ -907,7 +907,10 @@ async function waitForSelectorWithCf(
   }
 }
 
-async function clickByText(page: PageAdapter, text: string): Promise<boolean> {
+async function clickByText(
+  page: PageAdapter,
+  text: string,
+): Promise<{ found: boolean; reacted: boolean; changes: number; method: string }> {
   // #fix-clickByText — STRICT matching: exact text, case-sensitive.
   // No lowercasing and no partial/`includes` fallback, so "Login" never matches
   // "login" and "Log" never matches "Login". The click target must equal the
