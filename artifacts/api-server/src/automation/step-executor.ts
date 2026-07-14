@@ -995,13 +995,32 @@ async function clickByText(
     }).catch(() => ({ mut: 0, url: "" }))) as { mut: number; url: string };
   };
 
-  // Click ONCE and observe. We deliberately do NOT auto-retry on "no reaction":
-  // plenty of buttons legitimately cause no visible DOM change (toggles, submits
-  // that only fire a background request), and re-clicking them would double-submit
-  // or toggle back. The reaction result is reported for visibility only.
-  const method = await doClick();
-  const r = await observe();
-  const reacted = r.mut > 5 || (!!r.url && r.url !== urlBefore);
+  // Trusted click first, then check whether the page actually reacted.
+  let method = await doClick();
+  let r = await observe();
+  let reacted = r.mut > 5 || (!!r.url && r.url !== urlBefore);
+
+  // Synthetic fallback — ONLY when the trusted click produced NO reaction at all.
+  // Some handlers (minestrator's fortune wheel is the proven case) do not fire on
+  // the real trusted pointer sequence but DO fire on a plain `click` event
+  // dispatched straight at the element. We gate strictly on zero reaction, so a
+  // button that already responded to the trusted click is never clicked twice —
+  // that avoids double-submitting normal buttons while still rescuing the ones a
+  // trusted click can't drive.
+  if (!reacted) {
+    logger.warn({ text: target, changes: r.mut },
+      "clickByText: trusted click had no effect — dispatching a direct synthetic click");
+    await page.evaluate(() => {
+      const el = document.querySelector<HTMLElement>("[data-wa-textclick='1']");
+      if (el) el.click();
+    }).catch(() => {});
+    const r2 = await observe();
+    if (r2.mut > 5 || (!!r2.url && r2.url !== urlBefore)) {
+      reacted = true;
+      r = r2;
+      method = `${method}+synthetic`;
+    }
+  }
 
   await page.evaluate(() => {
     const w = window as unknown as { __waMo?: MutationObserver };
