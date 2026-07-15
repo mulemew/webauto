@@ -436,9 +436,41 @@ router.get("/tasks/:id/logs/history", async (req, res): Promise<void> => {
     const bc = (task.browserConfig ?? {}) as { proxyUrl?: string; proxyType?: string };
     const proxyUrl = (bc.proxyUrl ?? "").trim();
     const proxyType = (bc.proxyType ?? "").trim();
+
+    const geoUrl =
+      "http://ip-api.com/json/?fields=status,message,query,country,countryCode,regionName,city,isp,timezone";
+    type GeoData = {
+      status?: string; message?: string; query?: string; country?: string;
+      countryCode?: string; regionName?: string; city?: string; isp?: string; timezone?: string;
+    };
+    const runGeo = async (proxyArg?: string): Promise<GeoData> => {
+      const args = ["-s", "--max-time", "15", ...(proxyArg ? ["-x", proxyArg] : []), geoUrl];
+      const stdout = await new Promise<string>((resolve, reject) => {
+        execFile("curl", args, { timeout: 20_000 }, (err, out) => (err ? reject(err) : resolve(out)));
+      });
+      return JSON.parse(stdout) as GeoData;
+    };
+
     // A proxyType with no URL (except WARP) means "no proxy" — mirror startLocalProxy.
+    // Instead of reporting nothing, look up the HOST's own exit IP directly so the UI
+    // can still show where traffic egresses on the default network. `direct: true`
+    // tells the client this is the host IP, not a proxy exit.
     if (!proxyUrl && proxyType !== "warp") {
-      res.json({ configured: false });
+      try {
+        const data = await runGeo();
+        if (data.status !== "success") {
+          res.json({ configured: false, direct: true, ok: false, error: data.message || "geo lookup failed" });
+          return;
+        }
+        res.json({
+          configured: false, direct: true, ok: true,
+          exitIp: data.query, country: data.country, countryCode: data.countryCode,
+          region: data.regionName, city: data.city, isp: data.isp, timezone: data.timezone,
+        });
+      } catch (err) {
+        req.log.warn({ err, taskId: task.id }, "host-geo lookup failed");
+        res.json({ configured: false, direct: true, ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
       return;
     }
 
@@ -451,20 +483,7 @@ router.get("/tasks/:id/logs/history", async (req, res): Promise<void> => {
       }
       // socks5:// → socks5h:// so DNS is resolved at the exit, not locally.
       const curlProxy = resolved.serverUrl.replace(/^socks5:\/\//i, "socks5h://");
-      const geoUrl =
-        "http://ip-api.com/json/?fields=status,message,query,country,countryCode,regionName,city,isp,timezone";
-      const stdout = await new Promise<string>((resolve, reject) => {
-        execFile(
-          "curl",
-          ["-s", "--max-time", "15", "-x", curlProxy, geoUrl],
-          { timeout: 20_000 },
-          (err, out) => (err ? reject(err) : resolve(out)),
-        );
-      });
-      const data = JSON.parse(stdout) as {
-        status?: string; message?: string; query?: string; country?: string;
-        countryCode?: string; regionName?: string; city?: string; isp?: string; timezone?: string;
-      };
+      const data = await runGeo(curlProxy);
       if (data.status !== "success") {
         res.json({ configured: true, ok: false, error: data.message || "geo lookup failed", proxyType });
         return;

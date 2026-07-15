@@ -117,6 +117,52 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
   }
   // ────────────────────────────────────────────────────────────────────────────
 
+  // ── Exit-IP flag + fingerprint OS badge (task list) ──────────────────────────
+  // ISO 3166-1 alpha-2 country code → flag emoji (regional-indicator letters).
+  function countryFlag(cc?: string | null): string {
+    if (!cc || cc.length !== 2) return "";
+    const A = 0x1f1e6;
+    return String.fromCodePoint(A + (cc.toUpperCase().charCodeAt(0) - 65), A + (cc.toUpperCase().charCodeAt(1) - 65));
+  }
+
+  // fingerprint OS → { emoji, label }. Mirrors the platform values the backend sets.
+  function osMeta(os?: string | null): { emoji: string; label: string } | null {
+    const v = (os ?? "").toLowerCase();
+    if (!v) return null;
+    if (v.includes("win")) return { emoji: "🪟", label: "Windows" };
+    if (v.includes("mac") || v.includes("darwin") || v.includes("apple")) return { emoji: "🍎", label: "macOS" };
+    if (v.includes("linux") || v.includes("ubuntu") || v.includes("debian")) return { emoji: "🐧", label: "Linux" };
+    if (v.includes("android")) return { emoji: "🤖", label: "Android" };
+    if (v.includes("ios") || v.includes("iphone")) return { emoji: "📱", label: "iOS" };
+    return { emoji: "🖥️", label: os as string };
+  }
+
+  type TaskGeo = { direct?: boolean; ok?: boolean; exitIp?: string; country?: string; countryCode?: string; city?: string; region?: string };
+
+  // Small country-flag badge for a task row. Queries the SAME /proxy-geo endpoint
+  // (and cache key) the task detail page uses — no proxy configured resolves the
+  // host exit IP. Looked up lazily and cached for 10 min so the list stays cheap.
+  function TaskExitFlag({ taskId, running }: { taskId: number; running: boolean }) {
+    const { data } = useQuery<TaskGeo>({
+      queryKey: ["proxy-geo", taskId],
+      queryFn: () => fetch(`${BASE}/api/tasks/${taskId}/proxy-geo`).then((r) => r.json()),
+      enabled: !running,
+      staleTime: 10 * 60 * 1000,
+      refetchOnWindowFocus: false,
+      retry: false,
+    });
+    const flag = countryFlag(data?.countryCode);
+    if (!data?.ok || !flag) return null;
+    const loc = [data.city, data.region, data.country].filter(Boolean).join(", ");
+    return (
+      <span className="flex items-center gap-1 border-l border-border pl-3" title={`${data.direct ? "Host exit IP" : "Proxy exit IP"}: ${data.exitIp ?? ""}${loc ? " · " + loc : ""}`}>
+        <span className="text-sm leading-none">{flag}</span>
+        {data.countryCode && <span className="uppercase">{data.countryCode}</span>}
+      </span>
+    );
+  }
+  // ────────────────────────────────────────────────────────────────────────────
+
   // ── Next-run countdown ────────────────────────────────────────────────────────
 
 interface NextRun { taskId: number; nextRunAt: string | null }
@@ -527,6 +573,16 @@ export default function Home() {
                             return { form: 'Form Login', github: 'GitHub OAuth', google: 'Google OAuth' }[method as string] ?? method ?? '—';
                           })()}
                       </span>
+                      {(() => {
+                        const os = osMeta((task as unknown as { browserConfig?: { fingerprint?: { os?: string | null } | null } }).browserConfig?.fingerprint?.os);
+                        return os ? (
+                          <span className="flex items-center gap-1 border-l border-border pl-3" title={`Fingerprint: ${os.label}`}>
+                            <span className="text-sm leading-none">{os.emoji}</span>
+                            <span>{os.label}</span>
+                          </span>
+                        ) : null;
+                      })()}
+                      <TaskExitFlag taskId={task.id} running={isCardRunning} />
                       <span className="flex items-center gap-1 border-l border-border pl-3">
                         <LastRunBadge lastRun={lastRunMap.get(task.id)} />
                       </span>

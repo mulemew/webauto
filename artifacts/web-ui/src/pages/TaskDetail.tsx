@@ -128,7 +128,7 @@ export default function TaskDetail() {
     | null;
   const hasProxy = !!(bcfg && ((bcfg.proxyUrl && bcfg.proxyUrl.trim()) || bcfg.proxyType === "warp"));
 
-  type ProxyGeo = { configured: boolean; ok?: boolean; error?: string; proxyType?: string;
+  type ProxyGeo = { configured: boolean; direct?: boolean; ok?: boolean; error?: string; proxyType?: string;
     exitIp?: string; country?: string; countryCode?: string; region?: string; city?: string; isp?: string; timezone?: string };
   // Live exit-IP geolocation through the configured proxy. Gated on !isRunning so
   // it doesn't compete with an active run for the sing-box helper. Fetched once
@@ -136,7 +136,7 @@ export default function TaskDetail() {
   const { data: proxyGeo, isFetching: isFetchingGeo, refetch: refetchGeo } = useQuery<ProxyGeo>({
     queryKey: ["proxy-geo", taskId],
     queryFn: () => fetch(`/api/tasks/${taskId}/proxy-geo`).then((r) => r.json()),
-    enabled: !!taskId && hasProxy && !isRunning,
+    enabled: !!taskId && !isRunning,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
     retry: false,
@@ -1098,30 +1098,32 @@ export default function TaskDetail() {
             <Card className="border-border shadow-sm">
               <CardHeader className="bg-muted/20 border-b border-border pb-4 flex flex-row items-center justify-between">
                 <CardTitle className="text-base flex items-center gap-2">
-                  <Globe className="h-4 w-4 text-primary" /> Proxy Exit IP
+                  <Globe className="h-4 w-4 text-primary" /> {hasProxy ? "Proxy Exit IP" : "Exit IP"}
                 </CardTitle>
-                {hasProxy && (
-                  <button
-                    type="button"
-                    onClick={() => refetchGeo()}
-                    disabled={isFetchingGeo}
-                    title="Re-detect exit IP"
-                    className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-40"
-                  >
-                    <RefreshCw className={`h-3.5 w-3.5 ${isFetchingGeo ? "animate-spin" : ""}`} />
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => refetchGeo()}
+                  disabled={isFetchingGeo}
+                  title="Re-detect exit IP"
+                  className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-40"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${isFetchingGeo ? "animate-spin" : ""}`} />
+                </button>
               </CardHeader>
               <CardContent className="pt-4 space-y-3 text-sm">
-                {!hasProxy ? (
-                  <p className="text-xs text-muted-foreground font-mono">No proxy configured — traffic uses the host IP.</p>
-                ) : isFetchingGeo && !proxyGeo ? (
+                {isFetchingGeo && !proxyGeo ? (
                   <div className="space-y-2">
                     <Skeleton className="h-4 w-2/3" />
                     <Skeleton className="h-4 w-1/2" />
                   </div>
                 ) : proxyGeo?.ok ? (
                   <>
+                    {proxyGeo.direct && (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-muted-foreground">Source</span>
+                        <Badge variant="secondary" className="font-mono text-[10px]">Host (no proxy)</Badge>
+                      </div>
+                    )}
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs text-muted-foreground">Exit IP</span>
                       <span className="text-sm font-mono font-semibold break-all">{proxyGeo.exitIp}</span>
@@ -1154,7 +1156,7 @@ export default function TaskDetail() {
                 ) : (
                   <div className="space-y-2">
                     <p className="text-xs text-destructive font-mono break-all">
-                      {proxyGeo?.error ? `Lookup failed: ${proxyGeo.error}` : "Could not detect the exit IP through this proxy."}
+                      {proxyGeo?.error ? `Lookup failed: ${proxyGeo.error}` : hasProxy ? "Could not detect the exit IP through this proxy." : "Could not detect the host exit IP."}
                     </p>
                     <button
                       type="button"
