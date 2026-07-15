@@ -966,7 +966,7 @@ export default function TaskDetail() {
                                   <span className="text-[11px] text-muted-foreground shrink-0">View →</span>
                                 </div>
                                 {/* Horizontal step pills */}
-                                {stepLogs.length > 0 ? (
+                                {stepLogs.length > 0 && (
                                   <div className="flex items-center gap-1 flex-wrap">
                                     {stepLogs.map((step, si) => {
                                       const isPrecheck = step.type === "precheck";
@@ -985,11 +985,25 @@ export default function TaskDetail() {
                                       );
                                     })}
                                   </div>
-                                ) : (
-                                  <p className="text-xs font-mono text-muted-foreground whitespace-pre-wrap break-words">
-                                    {isDryRunLog ? log.message.slice("[DRY RUN] ".length) : log.message}
-                                  </p>
                                 )}
+                                {/* Full text of the FAILED step (or the last step; or the
+                                    top-level message when the task failed before any step
+                                    ran) — untruncated so the reason is readable in the list. */}
+                                {(() => {
+                                  let msg: string;
+                                  if (stepLogs.length > 0) {
+                                    const rel = stepLogs.find((s) => !s.success) ?? stepLogs[stepLogs.length - 1];
+                                    msg = rel?.message ?? "";
+                                  } else {
+                                    msg = isDryRunLog ? log.message.slice("[DRY RUN] ".length) : log.message;
+                                  }
+                                  msg = (msg ?? "").trim();
+                                  return msg ? (
+                                    <p className={"text-xs font-mono whitespace-pre-wrap break-words mt-1.5 " + (log.success ? "text-muted-foreground" : "text-red-400")}>
+                                      {msg}
+                                    </p>
+                                  ) : null;
+                                })()}
                               </div>
                             </Link>
                           );

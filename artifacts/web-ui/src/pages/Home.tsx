@@ -125,16 +125,15 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
     return String.fromCodePoint(A + (cc.toUpperCase().charCodeAt(0) - 65), A + (cc.toUpperCase().charCodeAt(1) - 65));
   }
 
-  // fingerprint OS → { emoji, label }. Mirrors the platform values the backend sets.
-  function osMeta(os?: string | null): { emoji: string; label: string } | null {
+  // fingerprint OS → { emoji, label }. Empty/unknown defaults to Linux (the default
+  // fingerprint), so every task shows a platform icon.
+  function osMeta(os?: string | null): { emoji: string; label: string } {
     const v = (os ?? "").toLowerCase();
-    if (!v) return null;
     if (v.includes("win")) return { emoji: "🪟", label: "Windows" };
     if (v.includes("mac") || v.includes("darwin") || v.includes("apple")) return { emoji: "🍎", label: "macOS" };
-    if (v.includes("linux") || v.includes("ubuntu") || v.includes("debian")) return { emoji: "🐧", label: "Linux" };
     if (v.includes("android")) return { emoji: "🤖", label: "Android" };
     if (v.includes("ios") || v.includes("iphone")) return { emoji: "📱", label: "iOS" };
-    return { emoji: "🖥️", label: os as string };
+    return { emoji: "🐧", label: v ? "Linux" : "Linux (default)" };
   }
 
   type TaskGeo = { direct?: boolean; ok?: boolean; exitIp?: string; country?: string; countryCode?: string; city?: string; region?: string };
@@ -146,9 +145,8 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
     if (!geo?.ok || !flag) return null;
     const loc = [geo.city, geo.region, geo.country].filter(Boolean).join(", ");
     return (
-      <span className="flex items-center gap-1 border-l border-border pl-3" title={`${geo.direct ? "Host exit IP" : "Proxy exit IP"}: ${geo.exitIp ?? ""}${loc ? " · " + loc : ""}`}>
-        <span className="text-sm leading-none">{flag}</span>
-        {geo.countryCode && <span className="uppercase">{geo.countryCode}</span>}
+      <span className="flex items-center border-l border-border pl-3 text-sm leading-none" title={`${geo.direct ? "Host exit IP" : "Proxy exit IP"}: ${geo.exitIp ?? ""}${loc ? " · " + loc : ""}`}>
+        {flag}
       </span>
     );
   }
@@ -566,12 +564,11 @@ export default function Home() {
                       </span>
                       {(() => {
                         const os = osMeta((task as unknown as { browserConfig?: { fingerprint?: { os?: string | null } | null } }).browserConfig?.fingerprint?.os);
-                        return os ? (
-                          <span className="flex items-center gap-1 border-l border-border pl-3" title={`Fingerprint: ${os.label}`}>
-                            <span className="text-sm leading-none">{os.emoji}</span>
-                            <span>{os.label}</span>
+                        return (
+                          <span className="flex items-center border-l border-border pl-3 text-sm leading-none" title={`Fingerprint: ${os.label}`}>
+                            {os.emoji}
                           </span>
-                        ) : null;
+                        );
                       })()}
                       <TaskExitFlag geo={(task as unknown as { exitGeo?: TaskGeo | null }).exitGeo} />
                       <span className="flex items-center gap-1 border-l border-border pl-3">

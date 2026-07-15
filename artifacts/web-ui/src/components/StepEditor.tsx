@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { useLang } from "@/contexts/lang-context";
 import type { Translations } from "@/i18n/translations";
 import { Plus, Trash2, ChevronUp, ChevronDown, MousePointer, Navigation, Keyboard, Clock, Eye, Camera, ExternalLink, ListFilter, ArrowDown, Hand, Command, LogIn, GitBranch, Eraser, ShieldCheck, GripVertical } from "lucide-react";
@@ -275,14 +275,23 @@ function StepCard({
   const set = (patch: Partial<WorkflowStep>) => onChange({ ...step, ...patch });
 
   return (
-    <div className="border border-border rounded-lg bg-card overflow-hidden">
+    <div data-step-card className="border border-border rounded-lg bg-card overflow-hidden">
       {/* Card header */}
       <div className="flex items-center gap-2 px-3 py-2 bg-muted/30 border-b border-border">
         {/* Drag handle — only this element is draggable, so inputs inside the card
             stay fully interactive (native HTML5 DnD hijacks whatever is draggable). */}
         <div
           draggable
-          onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; onDragStart(); }}
+          onDragStart={(e) => {
+            e.dataTransfer.effectAllowed = "move";
+            // Use the WHOLE card as the drag image (not just the tiny grip icon).
+            const card = (e.currentTarget as HTMLElement).closest("[data-step-card]") as HTMLElement | null;
+            if (card) {
+              const r = card.getBoundingClientRect();
+              e.dataTransfer.setDragImage(card, e.clientX - r.left, e.clientY - r.top);
+            }
+            onDragStart();
+          }}
           onDragEnd={onDragEnd}
           className="cursor-grab active:cursor-grabbing text-muted-foreground/40 hover:text-muted-foreground shrink-0 touch-none"
           title={t.dragToReorder}
@@ -811,9 +820,34 @@ export function StepEditor({ steps, onChange, taskTargetUrl = "", savedCredentia
     const k = keysRef.current; const [kk] = k.splice(from, 1); k.splice(to, 0, kk);
     onChange(next);
   };
+  // Auto-scroll while dragging near the top/bottom edge, so a step can be dragged
+  // all the way to the start/end even when the list is taller than the viewport.
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (dragIndex === null) return;
+    let scroller: HTMLElement | null = rootRef.current?.parentElement ?? null;
+    while (scroller) {
+      const s = getComputedStyle(scroller);
+      if ((s.overflowY === "auto" || s.overflowY === "scroll") && scroller.scrollHeight > scroller.clientHeight) break;
+      scroller = scroller.parentElement;
+    }
+    const onDragOver = (e: DragEvent) => {
+      const EDGE = 90, STEP = 14;
+      if (scroller) {
+        const r = scroller.getBoundingClientRect();
+        if (e.clientY < r.top + EDGE) scroller.scrollTop -= STEP;
+        else if (e.clientY > r.bottom - EDGE) scroller.scrollTop += STEP;
+      } else {
+        if (e.clientY < EDGE) window.scrollBy(0, -STEP);
+        else if (e.clientY > window.innerHeight - EDGE) window.scrollBy(0, STEP);
+      }
+    };
+    document.addEventListener("dragover", onDragOver);
+    return () => document.removeEventListener("dragover", onDragOver);
+  }, [dragIndex]);
 
   return (
-    <div className="space-y-2">
+    <div ref={rootRef} className="space-y-2">
       {steps.length === 0 ? (
         <div className="text-center py-6 text-xs text-muted-foreground border border-dashed border-border rounded-lg bg-muted/5">
           No steps yet — add a Login step first if authentication is needed, then chain your actions.
