@@ -95,6 +95,25 @@ async function persistExitGeo(taskId: number): Promise<ExitGeo | null> {
   }
 }
 
+/** One-time background fill of exit_geo for tasks that don't have it yet (tasks that
+ *  existed before this feature). Runs sequentially so we never start many proxies at
+ *  once. Called from server startup; safe to run on every boot (no-op once filled). */
+export async function backfillExitGeo(): Promise<void> {
+  try {
+    const rows = await db.select({ id: tasksTable.id, exitGeo: tasksTable.exitGeo }).from(tasksTable);
+    const pending = rows.filter((r) => !r.exitGeo).map((r) => r.id);
+    if (pending.length === 0) return;
+    logger.info({ count: pending.length }, "Backfilling exit geo for existing tasks");
+    for (const id of pending) {
+      await persistExitGeo(id);
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    logger.info("Exit geo backfill complete");
+  } catch (err) {
+    logger.warn({ err }, "exit geo backfill failed");
+  }
+}
+
 /**
  * For each login step that has inline credentials (inlineUsername/inlinePassword),
  * create an entry in saved_credentials (encrypted), replace the inline fields

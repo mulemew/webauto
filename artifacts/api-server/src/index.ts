@@ -5,6 +5,7 @@
   import app from "./app";
   import { logger } from "./lib/logger";
   import { initScheduler } from "./scheduler";
+  import { backfillExitGeo } from "./routes/tasks";
   import { runMigrations } from "./lib/migrations";
   import { hasStoredPassword, initPassword } from "./lib/passwordStore";
   import { pool } from "@workspace/db";
@@ -60,5 +61,7 @@
     }
     logger.info({ port }, "Server listening");
     await initScheduler();
+    // Fill exit-geo for pre-existing tasks in the background (non-blocking).
+    void backfillExitGeo();
   });
   
