@@ -118,12 +118,6 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
   // ────────────────────────────────────────────────────────────────────────────
 
   // ── Exit-IP flag + fingerprint OS badge (task list) ──────────────────────────
-  // ISO 3166-1 alpha-2 country code → flag emoji (regional-indicator letters).
-  function countryFlag(cc?: string | null): string {
-    if (!cc || cc.length !== 2) return "";
-    const A = 0x1f1e6;
-    return String.fromCodePoint(A + (cc.toUpperCase().charCodeAt(0) - 65), A + (cc.toUpperCase().charCodeAt(1) - 65));
-  }
 
   // fingerprint OS → { emoji, label }. Empty/unknown defaults to Linux (the default
   // fingerprint), so every task shows a platform icon.
@@ -140,13 +134,23 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
   // Country-flag badge for a task row, read from the task's CACHED exit_geo
   // (resolved in the background on create/update). No live query on render.
+  // Rendered as an <img> (flagcdn) rather than a flag emoji — Windows browsers
+  // don't render regional-indicator flag emoji, they show the letters instead.
   function TaskExitFlag({ geo }: { geo?: TaskGeo | null }) {
-    const flag = countryFlag(geo?.countryCode);
-    if (!geo?.ok || !flag) return null;
+    const cc = geo?.countryCode?.toLowerCase();
+    if (!geo?.ok || !cc || cc.length !== 2) return null;
     const loc = [geo.city, geo.region, geo.country].filter(Boolean).join(", ");
     return (
-      <span className="flex items-center border-l border-border pl-3 text-sm leading-none" title={`${geo.direct ? "Host exit IP" : "Proxy exit IP"}: ${geo.exitIp ?? ""}${loc ? " · " + loc : ""}`}>
-        {flag}
+      <span className="flex items-center border-l border-border pl-3" title={`${geo.direct ? "Host exit IP" : "Proxy exit IP"}: ${geo.exitIp ?? ""}${loc ? " · " + loc : ""}`}>
+        <img
+          src={`https://flagcdn.com/20x15/${cc}.png`}
+          srcSet={`https://flagcdn.com/40x30/${cc}.png 2x`}
+          width={20}
+          height={15}
+          alt={geo.countryCode}
+          loading="lazy"
+          className="rounded-[1px]"
+        />
       </span>
     );
   }

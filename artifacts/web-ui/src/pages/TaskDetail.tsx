@@ -146,10 +146,21 @@ export default function TaskDetail() {
       setIsFetchingGeo(false);
     }
   };
-  const countryFlag = (cc?: string) =>
-    cc && cc.length === 2
-      ? String.fromCodePoint(...[...cc.toUpperCase()].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65))
-      : "";
+  // Flag as an <img> (flagcdn) — Windows browsers don't render flag emoji.
+  const countryFlag = (cc?: string) => {
+    const c = cc?.toLowerCase();
+    if (!c || c.length !== 2) return null;
+    return (
+      <img
+        src={`https://flagcdn.com/20x15/${c}.png`}
+        srcSet={`https://flagcdn.com/40x30/${c}.png 2x`}
+        width={20}
+        height={15}
+        alt={cc}
+        className="inline-block rounded-[1px] align-[-2px] mr-1"
+      />
+    );
+  };
 
   // ── Persisted timeline (sessionStorage per task) ─────────────────────────
     const persistedKey = `task-stream-${taskId}`;
