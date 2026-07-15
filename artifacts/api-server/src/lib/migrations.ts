@@ -40,6 +40,7 @@ import { pool } from "@workspace/db";
   ALTER TABLE "logs"  ADD COLUMN IF NOT EXISTS "step_logs"    jsonb;
   ALTER TABLE "saved_credentials" ADD COLUMN IF NOT EXISTS "updated_at" timestamptz NOT NULL DEFAULT now();
   ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "browser_config" jsonb;
+  ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "exit_geo" jsonb;
     CREATE TABLE IF NOT EXISTS "sessions" (
     "token"      text        PRIMARY KEY,
     "expires_at" timestamptz NOT NULL,
