@@ -139,25 +139,16 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
   type TaskGeo = { direct?: boolean; ok?: boolean; exitIp?: string; country?: string; countryCode?: string; city?: string; region?: string };
 
-  // Small country-flag badge for a task row. Queries the SAME /proxy-geo endpoint
-  // (and cache key) the task detail page uses — no proxy configured resolves the
-  // host exit IP. Looked up lazily and cached for 10 min so the list stays cheap.
-  function TaskExitFlag({ taskId, running }: { taskId: number; running: boolean }) {
-    const { data } = useQuery<TaskGeo>({
-      queryKey: ["proxy-geo", taskId],
-      queryFn: () => fetch(`${BASE}/api/tasks/${taskId}/proxy-geo`).then((r) => r.json()),
-      enabled: !running,
-      staleTime: 10 * 60 * 1000,
-      refetchOnWindowFocus: false,
-      retry: false,
-    });
-    const flag = countryFlag(data?.countryCode);
-    if (!data?.ok || !flag) return null;
-    const loc = [data.city, data.region, data.country].filter(Boolean).join(", ");
+  // Country-flag badge for a task row, read from the task's CACHED exit_geo
+  // (resolved in the background on create/update). No live query on render.
+  function TaskExitFlag({ geo }: { geo?: TaskGeo | null }) {
+    const flag = countryFlag(geo?.countryCode);
+    if (!geo?.ok || !flag) return null;
+    const loc = [geo.city, geo.region, geo.country].filter(Boolean).join(", ");
     return (
-      <span className="flex items-center gap-1 border-l border-border pl-3" title={`${data.direct ? "Host exit IP" : "Proxy exit IP"}: ${data.exitIp ?? ""}${loc ? " · " + loc : ""}`}>
+      <span className="flex items-center gap-1 border-l border-border pl-3" title={`${geo.direct ? "Host exit IP" : "Proxy exit IP"}: ${geo.exitIp ?? ""}${loc ? " · " + loc : ""}`}>
         <span className="text-sm leading-none">{flag}</span>
-        {data.countryCode && <span className="uppercase">{data.countryCode}</span>}
+        {geo.countryCode && <span className="uppercase">{geo.countryCode}</span>}
       </span>
     );
   }
@@ -582,7 +573,7 @@ export default function Home() {
                           </span>
                         ) : null;
                       })()}
-                      <TaskExitFlag taskId={task.id} running={isCardRunning} />
+                      <TaskExitFlag geo={(task as unknown as { exitGeo?: TaskGeo | null }).exitGeo} />
                       <span className="flex items-center gap-1 border-l border-border pl-3">
                         <LastRunBadge lastRun={lastRunMap.get(task.id)} />
                       </span>

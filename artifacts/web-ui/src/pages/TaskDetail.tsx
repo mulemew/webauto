@@ -130,17 +130,22 @@ export default function TaskDetail() {
 
   type ProxyGeo = { configured: boolean; direct?: boolean; ok?: boolean; error?: string; proxyType?: string;
     exitIp?: string; country?: string; countryCode?: string; region?: string; city?: string; isp?: string; timezone?: string };
-  // Live exit-IP geolocation through the configured proxy. Gated on !isRunning so
-  // it doesn't compete with an active run for the sing-box helper. Fetched once
-  // per mount (cached 5m); the card has a manual refresh button.
-  const { data: proxyGeo, isFetching: isFetchingGeo, refetch: refetchGeo } = useQuery<ProxyGeo>({
-    queryKey: ["proxy-geo", taskId],
-    queryFn: () => fetch(`/api/tasks/${taskId}/proxy-geo`).then((r) => r.json()),
-    enabled: !!taskId && !isRunning,
-    staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false,
-    retry: false,
-  });
+  // Exit-IP geo is read from the task's CACHED exit_geo (resolved server-side in the
+  // background on create/update) — NO live lookup on open. "Re-detect" forces a
+  // fresh lookup (?refresh=1) which the server also persists.
+  const storedGeo = (stableTask as unknown as { exitGeo?: ProxyGeo | null } | null)?.exitGeo ?? null;
+  const [detectedGeo, setDetectedGeo] = useState<ProxyGeo | null>(null);
+  const [isFetchingGeo, setIsFetchingGeo] = useState(false);
+  const proxyGeo = detectedGeo ?? storedGeo;
+  const refetchGeo = async () => {
+    setIsFetchingGeo(true);
+    try {
+      const g = (await fetch(`/api/tasks/${taskId}/proxy-geo?refresh=1`).then((r) => r.json())) as ProxyGeo;
+      setDetectedGeo(g);
+    } catch { /* ignore */ } finally {
+      setIsFetchingGeo(false);
+    }
+  };
   const countryFlag = (cc?: string) =>
     cc && cc.length === 2
       ? String.fromCodePoint(...[...cc.toUpperCase()].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65))
@@ -1156,7 +1161,7 @@ export default function TaskDetail() {
                 ) : (
                   <div className="space-y-2">
                     <p className="text-xs text-destructive font-mono break-all">
-                      {proxyGeo?.error ? `Lookup failed: ${proxyGeo.error}` : hasProxy ? "Could not detect the exit IP through this proxy." : "Could not detect the host exit IP."}
+                      {proxyGeo?.error ? `Lookup failed: ${proxyGeo.error}` : !proxyGeo ? "Not resolved yet — click Re-detect." : hasProxy ? "Could not detect the exit IP through this proxy." : "Could not detect the host exit IP."}
                     </p>
                     <button
                       type="button"

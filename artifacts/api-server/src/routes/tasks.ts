@@ -31,6 +31,70 @@ const DATA_DIR = process.env.DATA_DIR ?? path.join(process.cwd(), "data");
 
 const router: IRouter = Router();
 
+// ── Exit-IP geolocation (cached in tasks.exit_geo) ───────────────────────────
+// Resolved in the background on create/update (and on manual re-detect) so the
+// task list + detail card can show the exit country/flag without a live proxy
+// lookup every time a page is opened.
+export type ExitGeo = {
+  configured: boolean; direct?: boolean; ok?: boolean; error?: string; proxyType?: string;
+  exitIp?: string; country?: string; countryCode?: string; region?: string; city?: string;
+  isp?: string; timezone?: string; at?: string;
+};
+const GEO_URL =
+  "http://ip-api.com/json/?fields=status,message,query,country,countryCode,regionName,city,isp,timezone";
+type IpApi = {
+  status?: string; message?: string; query?: string; country?: string;
+  countryCode?: string; regionName?: string; city?: string; isp?: string; timezone?: string;
+};
+function runGeoCurl(proxyArg?: string): Promise<IpApi> {
+  const args = ["-s", "--max-time", "15", ...(proxyArg ? ["-x", proxyArg] : []), GEO_URL];
+  return new Promise((resolve, reject) => {
+    execFile("curl", args, { timeout: 20_000 }, (err, out) => (err ? reject(err) : resolve(JSON.parse(out) as IpApi)));
+  });
+}
+/** Resolve exit IP + geo for a task's browserConfig — proxy exit, or host IP when no proxy. */
+async function resolveExitGeo(browserConfig: unknown): Promise<ExitGeo> {
+  const bc = (browserConfig ?? {}) as { proxyUrl?: string; proxyType?: string };
+  const proxyUrl = (bc.proxyUrl ?? "").trim();
+  const proxyType = (bc.proxyType ?? "").trim();
+  const at = new Date().toISOString();
+  if (!proxyUrl && proxyType !== "warp") {
+    try {
+      const d = await runGeoCurl();
+      if (d.status !== "success") return { configured: false, direct: true, ok: false, error: d.message || "geo lookup failed", at };
+      return { configured: false, direct: true, ok: true, exitIp: d.query, country: d.country, countryCode: d.countryCode, region: d.regionName, city: d.city, isp: d.isp, timezone: d.timezone, at };
+    } catch (err) {
+      return { configured: false, direct: true, ok: false, error: err instanceof Error ? err.message : String(err), at };
+    }
+  }
+  let resolved: Awaited<ReturnType<typeof startLocalProxy>> = null;
+  try {
+    resolved = await startLocalProxy({ proxyUrl: proxyUrl || undefined, proxyType: (proxyType || undefined) as never });
+    if (!resolved) return { configured: false, at };
+    const curlProxy = resolved.serverUrl.replace(/^socks5:\/\//i, "socks5h://");
+    const d = await runGeoCurl(curlProxy);
+    if (d.status !== "success") return { configured: true, ok: false, error: d.message || "geo lookup failed", proxyType, at };
+    return { configured: true, ok: true, proxyType, exitIp: d.query, country: d.country, countryCode: d.countryCode, region: d.regionName, city: d.city, isp: d.isp, timezone: d.timezone, at };
+  } catch (err) {
+    return { configured: true, ok: false, error: err instanceof Error ? err.message : String(err), proxyType, at };
+  } finally {
+    if (resolved) { try { await resolved.stop(); } catch { /* ignore */ } }
+  }
+}
+/** Recompute a task's exit geo and store it in exit_geo. Best-effort (never throws). */
+async function persistExitGeo(taskId: number): Promise<ExitGeo | null> {
+  try {
+    const [task] = await db.select().from(tasksTable).where(eq(tasksTable.id, taskId));
+    if (!task) return null;
+    const geo = await resolveExitGeo(task.browserConfig);
+    await db.update(tasksTable).set({ exitGeo: geo }).where(eq(tasksTable.id, taskId));
+    return geo;
+  } catch (err) {
+    logger.warn({ err, taskId }, "persistExitGeo failed");
+    return null;
+  }
+}
+
 /**
  * For each login step that has inline credentials (inlineUsername/inlinePassword),
  * create an entry in saved_credentials (encrypted), replace the inline fields
@@ -180,7 +244,10 @@ router.get("/tasks/next-runs", async (_req, res): Promise<void> => {
 
 router.get("/tasks", async (req, res): Promise<void> => {
   const tasks = await db.select().from(tasksTable).orderBy(desc(tasksTable.createdAt));
-  res.json(ListTasksResponse.parse(tasks));
+  // Re-attach the cached exit geo after schema parse (the generated response schema
+  // doesn't model it) so the list can render the exit flag without a live lookup.
+  const parsed = ListTasksResponse.parse(tasks);
+  res.json(parsed.map((p, i) => ({ ...p, exitGeo: tasks[i]?.exitGeo ?? null })));
 });
 
 router.post("/tasks", async (req, res): Promise<void> => {
@@ -224,6 +291,8 @@ router.post("/tasks", async (req, res): Promise<void> => {
   }
 
   req.log.info({ taskId: task.id }, "Task created");
+  // Resolve + cache the exit geo in the background (don't block the create response).
+  void persistExitGeo(task.id);
   res.status(201).json(GetTaskResponse.parse(task));
 });
 
@@ -413,7 +482,7 @@ router.get("/tasks/:id/logs/history", async (req, res): Promise<void> => {
     credentialsData = { username: loginCredentials[0].username, hasTotpSecret: loginCredentials[0].hasTotpSecret };
   }
 
-  res.json({ ...GetTaskResponse.parse({ ...task, credentials: credentialsData }), loginCredentials });
+  res.json({ ...GetTaskResponse.parse({ ...task, credentials: credentialsData }), loginCredentials, exitGeo: task.exitGeo ?? null });
 });
 
   // Resolve the EXIT IP + geolocation of the task's configured proxy, live. The
@@ -421,6 +490,9 @@ router.get("/tasks/:id/logs/history", async (req, res): Promise<void> => {
   // advanced protocols) so the returned IP/country is what target sites actually
   // see — used by the TaskDetail "Proxy Exit IP" card. Best-effort: returns
   // { configured:false } when no proxy is set, or { ok:false, error } on failure.
+  // Returns the CACHED exit geo (tasks.exit_geo). Pass ?refresh=1 to recompute the
+  // live lookup and persist it — the detail card's "re-detect" button does this.
+  // Normal page opens read the cache, so no proxy is started on every view.
   router.get("/tasks/:id/proxy-geo", async (req, res): Promise<void> => {
     const params = GetTaskParams.safeParse(req.params);
     if (!params.success) {
@@ -432,80 +504,14 @@ router.get("/tasks/:id/logs/history", async (req, res): Promise<void> => {
       res.status(404).json({ error: "Task not found" });
       return;
     }
-
-    const bc = (task.browserConfig ?? {}) as { proxyUrl?: string; proxyType?: string };
-    const proxyUrl = (bc.proxyUrl ?? "").trim();
-    const proxyType = (bc.proxyType ?? "").trim();
-
-    const geoUrl =
-      "http://ip-api.com/json/?fields=status,message,query,country,countryCode,regionName,city,isp,timezone";
-    type GeoData = {
-      status?: string; message?: string; query?: string; country?: string;
-      countryCode?: string; regionName?: string; city?: string; isp?: string; timezone?: string;
-    };
-    const runGeo = async (proxyArg?: string): Promise<GeoData> => {
-      const args = ["-s", "--max-time", "15", ...(proxyArg ? ["-x", proxyArg] : []), geoUrl];
-      const stdout = await new Promise<string>((resolve, reject) => {
-        execFile("curl", args, { timeout: 20_000 }, (err, out) => (err ? reject(err) : resolve(out)));
-      });
-      return JSON.parse(stdout) as GeoData;
-    };
-
-    // A proxyType with no URL (except WARP) means "no proxy" — mirror startLocalProxy.
-    // Instead of reporting nothing, look up the HOST's own exit IP directly so the UI
-    // can still show where traffic egresses on the default network. `direct: true`
-    // tells the client this is the host IP, not a proxy exit.
-    if (!proxyUrl && proxyType !== "warp") {
-      try {
-        const data = await runGeo();
-        if (data.status !== "success") {
-          res.json({ configured: false, direct: true, ok: false, error: data.message || "geo lookup failed" });
-          return;
-        }
-        res.json({
-          configured: false, direct: true, ok: true,
-          exitIp: data.query, country: data.country, countryCode: data.countryCode,
-          region: data.regionName, city: data.city, isp: data.isp, timezone: data.timezone,
-        });
-      } catch (err) {
-        req.log.warn({ err, taskId: task.id }, "host-geo lookup failed");
-        res.json({ configured: false, direct: true, ok: false, error: err instanceof Error ? err.message : String(err) });
-      }
+    const refresh = req.query.refresh === "1" || req.query.refresh === "true";
+    const stored = (task.exitGeo ?? null) as ExitGeo | null;
+    if (!refresh && stored) {
+      res.json(stored);
       return;
     }
-
-    let resolved: Awaited<ReturnType<typeof startLocalProxy>> = null;
-    try {
-      resolved = await startLocalProxy({ proxyUrl: proxyUrl || undefined, proxyType: (proxyType || undefined) as never });
-      if (!resolved) {
-        res.json({ configured: false });
-        return;
-      }
-      // socks5:// → socks5h:// so DNS is resolved at the exit, not locally.
-      const curlProxy = resolved.serverUrl.replace(/^socks5:\/\//i, "socks5h://");
-      const data = await runGeo(curlProxy);
-      if (data.status !== "success") {
-        res.json({ configured: true, ok: false, error: data.message || "geo lookup failed", proxyType });
-        return;
-      }
-      res.json({
-        configured: true,
-        ok: true,
-        proxyType,
-        exitIp: data.query,
-        country: data.country,
-        countryCode: data.countryCode,
-        region: data.regionName,
-        city: data.city,
-        isp: data.isp,
-        timezone: data.timezone,
-      });
-    } catch (err) {
-      req.log.warn({ err, taskId: task.id }, "proxy-geo lookup failed");
-      res.json({ configured: true, ok: false, error: err instanceof Error ? err.message : String(err), proxyType });
-    } finally {
-      if (resolved) { try { await resolved.stop(); } catch { /* ignore */ } }
-    }
+    const geo = await persistExitGeo(task.id);
+    res.json(geo ?? { configured: false });
   });
 
 router.put("/tasks/:id", async (req, res): Promise<void> => {
@@ -612,7 +618,9 @@ router.put("/tasks/:id", async (req, res): Promise<void> => {
   }
 
   rescheduleTask(updated.id, updated.cronExpression);
-  res.json(GetTaskResponse.parse(updated));
+  // Re-resolve the exit geo in the background — proxy/config may have changed.
+  void persistExitGeo(updated.id);
+  res.json({ ...GetTaskResponse.parse(updated), exitGeo: updated.exitGeo ?? null });
 });
 
 router.delete("/tasks/:id", async (req, res): Promise<void> => {

@@ -22,6 +22,10 @@ export const tasksTable = pgTable("tasks", {
   enabled: boolean("enabled").notNull().default(true),
   // Per-task browser backend override. null = use global Settings config.
   browserConfig: jsonb("browser_config"),
+  // Cached exit-IP geolocation (country/flag/ISP) + a note of when it was resolved.
+  // Computed in the background on create/update (and manual re-detect) so the task
+  // list and detail card can show the flag without a live proxy lookup on every open.
+  exitGeo: jsonb("exit_geo"),
 });
 
 export const insertTaskSchema = createInsertSchema(tasksTable).omit({ id: true, createdAt: true, updatedAt: true });
