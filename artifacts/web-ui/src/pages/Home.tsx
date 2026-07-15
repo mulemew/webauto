@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useListTasks, useGetTasksSummary, useRunTask, useGetTasksHistory, useToggleTaskEnabled, getListTasksQueryKey, getGetTasksSummaryQueryKey, getGetTasksHistoryQueryKey } from "@workspace/api-client-react";
 import { Link } from "wouter";
 import { Plus, Play, Clock, CheckCircle2, XCircle, Activity, Loader2, ArrowRight, AlertTriangle, X, BarChart2, CalendarClock, Timer } from "lucide-react";
+import { FaWindows, FaApple, FaLinux, FaAndroid } from "react-icons/fa";
+import type { IconType } from "react-icons";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -119,15 +121,14 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
   // ── Exit-IP flag + fingerprint OS badge (task list) ──────────────────────────
 
-  // fingerprint OS → { emoji, label }. Empty/unknown defaults to Linux (the default
-  // fingerprint), so every task shows a platform icon.
-  function osMeta(os?: string | null): { emoji: string; label: string } {
+  // fingerprint OS → real brand logo (react-icons). Empty/unknown defaults to Linux
+  // (the default fingerprint), so every task shows a proper platform icon.
+  function osMeta(os?: string | null): { Icon: IconType; label: string } {
     const v = (os ?? "").toLowerCase();
-    if (v.includes("win")) return { emoji: "🪟", label: "Windows" };
-    if (v.includes("mac") || v.includes("darwin") || v.includes("apple")) return { emoji: "🍎", label: "macOS" };
-    if (v.includes("android")) return { emoji: "🤖", label: "Android" };
-    if (v.includes("ios") || v.includes("iphone")) return { emoji: "📱", label: "iOS" };
-    return { emoji: "🐧", label: v ? "Linux" : "Linux (default)" };
+    if (v.includes("win")) return { Icon: FaWindows, label: "Windows" };
+    if (v.includes("mac") || v.includes("darwin") || v.includes("apple") || v.includes("ios") || v.includes("iphone")) return { Icon: FaApple, label: "macOS / iOS" };
+    if (v.includes("android")) return { Icon: FaAndroid, label: "Android" };
+    return { Icon: FaLinux, label: v ? "Linux" : "Linux (default)" };
   }
 
   type TaskGeo = { direct?: boolean; ok?: boolean; exitIp?: string; country?: string; countryCode?: string; city?: string; region?: string };
@@ -567,10 +568,10 @@ export default function Home() {
                           })()}
                       </span>
                       {(() => {
-                        const os = osMeta((task as unknown as { browserConfig?: { fingerprint?: { os?: string | null } | null } }).browserConfig?.fingerprint?.os);
+                        const { Icon, label } = osMeta((task as unknown as { browserConfig?: { fingerprint?: { os?: string | null } | null } }).browserConfig?.fingerprint?.os);
                         return (
-                          <span className="flex items-center border-l border-border pl-3 text-sm leading-none" title={`Fingerprint: ${os.label}`}>
-                            {os.emoji}
+                          <span className="flex items-center border-l border-border pl-3" title={`Fingerprint: ${label}`}>
+                            <Icon className="h-3.5 w-3.5 text-muted-foreground" />
                           </span>
                         );
                       })()}
