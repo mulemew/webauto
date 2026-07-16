@@ -126,6 +126,7 @@ const stepSchema = z.object({
   successText: z.string().optional(),
   cookieMode: z.boolean().optional(),
   sessionKey: z.string().optional(),
+  cookies: z.string().optional(),
   conditionType: z
     .enum([
       "text_contains",

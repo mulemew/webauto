@@ -694,6 +694,14 @@ components:
             When true, persist th
         sessionKey:
           type: string
+        cookies:
+          type: string
+          description: >
+            Cookie-mode seed, in document.cookie format ("name=value; name2=value2").
+            Only the site's login-ticket cookie is needed — its name differs per site
+            (Pterodactyl/Laravel panels use remember_web_*, GitHub uses _github_session).
+            Used only when no session has been saved yet; once a run succeeds the live
+            cookie jar is persisted and takes over.
         successText:
           type: string
         credentialId:

@@ -282,6 +282,8 @@ export interface LoginStep {
    */
   cookieMode?: boolean;
   sessionKey?: string;
+  /** Cookie-mode seed in document.cookie format ("name=value; name2=value2"). Only the site's login-ticket cookie is needed (Pterodactyl/Laravel: remember_web_*). Used only until a session has been saved. */
+  cookies?: string;
   successText?: string;
   /** ID of a saved credential to use for this login step */
   credentialId?: number;

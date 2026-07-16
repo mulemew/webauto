@@ -12,6 +12,37 @@ import path from "path";
   import { executeWorkflowSteps, CaptchaBlockedError, type WorkflowStep, type StepResult } from "./step-executor";
   import { loadBrowserSession, saveBrowserSession, clearBrowserSession, taskUsesCookieMode } from "../lib/browserSessionStore";
 
+/**
+ * Parse a document.cookie-style string ("a=1; b=2") into driver cookie objects.
+ *
+ * Users paste only the site's login-ticket cookie (its name differs per site —
+ * Pterodactyl/Laravel panels use remember_web_*, GitHub uses _github_session), so we
+ * stay name-agnostic. The domain is derived from the task's target URL; values are
+ * left exactly as pasted (they're opaque tokens, and splitting on the FIRST "=" only
+ * matters because base64 values contain "=" padding).
+ */
+function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string, unknown>> {
+  if (!raw || !raw.trim()) return [];
+  let domain = "";
+  try {
+    domain = new URL(targetUrl).hostname;
+  } catch {
+    return [];
+  }
+  const out: Array<Record<string, unknown>> = [];
+  for (const part of raw.split(";")) {
+    const s = part.trim();
+    if (!s) continue;
+    const eq = s.indexOf("=");
+    if (eq <= 0) continue;
+    const name = s.slice(0, eq).trim();
+    const value = s.slice(eq + 1).trim();
+    if (!name) continue;
+    out.push({ name, value, domain, path: "/" });
+  }
+  return out;
+}
+
 /** After a post-completion interval run finishes, write the nextRunAt timestamp into the DB. */
   async function schedulePostCompletionIfNeeded(taskId: number, dryRun: boolean): Promise<void> {
     if (dryRun) return;
@@ -370,7 +401,22 @@ import path from "path";
           const saved = (await loadBrowserSession(taskId, cookieSessionKey)) as
             | { cookies?: Array<Record<string, unknown>> }
             | null;
-          const jar = saved?.cookies ?? [];
+          let jar = saved?.cookies ?? [];
+          // Nothing saved yet → seed from the cookies pasted on the login step.
+          // Only the site's login-ticket cookie is needed; its name is site-specific
+          // (Pterodactyl/Laravel: remember_web_*), so we take a document.cookie-style
+          // string rather than hard-coding names. Once a run succeeds the live jar is
+          // persisted and takes over from the pasted seed.
+          if (!jar.length) {
+            const seed = parseCookieHeader(
+              (cookieModeStep?.cookies as string | undefined) ?? "",
+              task.targetUrl,
+            );
+            if (seed.length) {
+              jar = seed;
+              logger.info({ taskId, count: seed.length }, "Cookie mode — seeding from manually configured cookies");
+            }
+          }
           if (jar.length) {
             const added = await (page as unknown as {
               setCookies: (c: Array<Record<string, unknown>>, url?: string) => Promise<number>;

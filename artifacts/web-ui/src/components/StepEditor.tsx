@@ -47,6 +47,8 @@ export interface WorkflowStep {
   successText?: string;
   cookieMode?: boolean;
   sessionKey?: string;
+  /** document.cookie-style seed, used only until a real session has been saved. */
+  cookies?: string;
   inlineUsername?: string;
   inlinePassword?: string;
   inlineTotp?: string;
@@ -455,6 +457,24 @@ function StepCard({
                     onChange={(e) => set({ sessionKey: e.target.value || undefined })}
                   />
                   <p className="text-[10px] text-muted-foreground leading-snug">同一任务可用不同 key 保存多个身份，留空使用 &quot;default&quot;。</p>
+                </div>
+              )}
+              {step.cookieMode && (
+                <div className="space-y-1">
+                  <Label className="text-xs">Cookie <span className="font-normal text-muted-foreground">(可选，首次种子)</span></Label>
+                  <textarea
+                    className="w-full rounded-md border border-input bg-background px-2 py-1.5 font-mono text-xs min-h-[56px]"
+                    placeholder="remember_web_xxx=yyy; other=zzz"
+                    value={step.cookies ?? ""}
+                    onChange={(e) => set({ cookies: e.target.value || undefined })}
+                  />
+                  <p className="text-[10px] text-muted-foreground leading-snug">
+                    只需填<b>登录票据那一条</b>，不用把所有 cookie 都复制。名字各站不同（Pterodactyl/Laravel 面板是
+                    <code className="mx-0.5">remember_web_*</code>，GitHub 是 <code className="mx-0.5">_github_session</code>）：
+                    F12 → Application → Cookies 里找。多条用 <code className="mx-0.5">;</code> 分隔。
+                    <br />
+                    仅在<b>还没存过会话时</b>用作种子；成功跑一次后会自动保存真实 cookie 并接管，之后失效会走登录流程重登。
+                  </p>
                 </div>
               )}
             </div>

@@ -241,6 +241,7 @@ export const ListTasksResponseItem = zod.object({
               .optional()
               .describe("When true, persist th\n"),
             sessionKey: zod.string().optional(),
+            cookies: zod.string().optional(),
             successText: zod.string().optional(),
             credentialId: zod
               .number()
@@ -537,6 +538,7 @@ export const CreateTaskBody = zod.object({
               .optional()
               .describe("When true, persist th\n"),
             sessionKey: zod.string().optional(),
+            cookies: zod.string().optional(),
             successText: zod.string().optional(),
             credentialId: zod
               .number()
@@ -818,6 +820,7 @@ export const GetTaskResponse = zod
                 .optional()
                 .describe("When true, persist th\n"),
               sessionKey: zod.string().optional(),
+              cookies: zod.string().optional(),
               successText: zod.string().optional(),
               credentialId: zod
                 .number()
@@ -1135,6 +1138,7 @@ export const UpdateTaskBody = zod.object({
               .optional()
               .describe("When true, persist th\n"),
             sessionKey: zod.string().optional(),
+            cookies: zod.string().optional(),
             successText: zod.string().optional(),
             credentialId: zod
               .number()
@@ -1408,6 +1412,7 @@ export const UpdateTaskResponse = zod.object({
               .optional()
               .describe("When true, persist th\n"),
             sessionKey: zod.string().optional(),
+            cookies: zod.string().optional(),
             successText: zod.string().optional(),
             credentialId: zod
               .number()
