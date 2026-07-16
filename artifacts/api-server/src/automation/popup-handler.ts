@@ -193,18 +193,56 @@ export async function dismissCookieConsent(page: PageAdapter): Promise<boolean> 
  * This is the function used both by the automatic pre-step hook and the
  * explicit "dismissPopups" workflow step.
  */
+/**
+ * Clear popups repeatedly until the page stops producing them.
+ *
+ * A single pass isn't enough on sites that stack overlays (closing one reveals the
+ * next) or that re-open a popup a moment later. We keep running passes until one
+ * dismisses nothing, capped by both a pass count and a wall-clock budget so a page
+ * that respawns popups forever can't hang the step.
+ *
+ * Captcha widgets (Turnstile / reCAPTCHA / hCaptcha) are never touched — the
+ * per-pass skip list protects them, so a CF verification modal survives cleanup.
+ */
 export async function dismissPopups(page: PageAdapter): Promise<PopupCleanupResult> {
+  const maxPasses = Number(process.env.POPUP_MAX_PASSES ?? 5);
+  const deadline = Date.now() + Number(process.env.POPUP_BUDGET_MS ?? 15_000);
+  const all: string[] = [];
+  let total = 0;
+
+  for (let pass = 1; pass <= maxPasses; pass++) {
+    const res = await dismissPopupsOnce(page, pass === 1);
+    total += res.dismissed;
+    all.push(...res.details);
+    // Nothing left to close — the page is clean.
+    if (res.dismissed === 0) break;
+    if (Date.now() > deadline) {
+      logger.warn({ pass, total }, "popup cleanup hit its time budget — stopping");
+      break;
+    }
+    // Give a stacked/re-opening popup a beat to render before the next pass.
+    await sleep(400);
+  }
+
+  if (total > 0) logger.info({ dismissed: total, details: all }, "Popup/overlay cleanup complete");
+  return { dismissed: total, details: all };
+}
+
+async function dismissPopupsOnce(page: PageAdapter, firstPass = true): Promise<PopupCleanupResult> {
   const details: string[] = [];
   let dismissed = 0;
 
-  // 1. Cookie / consent banners. Retry for a few seconds: some consent dialogs
-  //    (e.g. Google's "Accept all") render a beat AFTER the page loads, so a
-  //    single early check finds nothing and the banner pops up right after.
+  // 1. Cookie / consent banners. On the FIRST pass, retry for a few seconds: some
+  //    consent dialogs (e.g. Google's "Accept all") render a beat AFTER the page
+  //    loads, so a single early check finds nothing and the banner pops up right
+  //    after. Later passes check once — the caller's loop already re-runs us, and
+  //    re-waiting 4s per pass would just burn the budget.
   try {
-    const deadline = Date.now() + 4000;
+    const deadline = Date.now() + (firstPass ? 4000 : 0);
     let hit = false;
     do {
       if (await dismissCookieConsent(page)) { hit = true; break; }
+      if (Date.now() >= deadline) break;
       await sleep(500); // let a still-loading banner appear, then re-check
     } while (Date.now() < deadline);
     if (hit) {
@@ -300,7 +338,7 @@ export async function dismissPopups(page: PageAdapter): Promise<PopupCleanupResu
     logger.debug({ err }, "overlay removal pass failed");
   }
 
-  if (dismissed > 0) logger.info({ dismissed, details }, "Popup/overlay cleanup pass complete");
+  if (dismissed > 0) logger.debug({ dismissed, details }, "Popup/overlay cleanup pass complete");
   return { dismissed, details };
 }
 
