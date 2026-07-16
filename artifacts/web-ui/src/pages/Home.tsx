@@ -420,6 +420,7 @@ export default function Home() {
     : (tasks ?? []);
   // Search matches the name AND the target URL — with many tasks on the same panel,
   // the URL is often what you actually remember.
+  const [searchQuery, setSearchQuery] = useState("");
   const q = searchQuery.trim().toLowerCase();
   const displayedTasks = q
     ? statusFiltered.filter(
@@ -481,7 +482,6 @@ export default function Home() {
 
   /** Hidden <input type=file> driven by the Import menu item. */
   const importInputRef = useRef<HTMLInputElement>(null);
-  const [searchQuery, setSearchQuery] = useState("");
 
   /** Download a JSON backup (or a value-stripped template) of every task. */
   const handleExport = (template: boolean) => {
