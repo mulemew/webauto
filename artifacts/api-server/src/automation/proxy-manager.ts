@@ -43,6 +43,7 @@ import os from "os";
 import path from "path";
 import fs from "fs";
 import { logger } from "../lib/logger";
+import { trackChild } from "../lib/child-registry";
 
 export type ProxyType =
   | "http"
@@ -698,6 +699,7 @@ async function startSingBox(
   let child: ChildProcess = spawn(singBoxBin, ["run", "-c", cfgFile], {
     stdio: ["ignore", "ignore", "pipe"],
   });
+  trackChild(child, `sing-box:${type}`);
   child.stderr?.pipe(stderr, { end: false });
   child.on("error", (err) => logger.error({ err }, "sing-box process error"));
 
@@ -750,6 +752,7 @@ async function startSingBox(
       JSON.stringify({ ...config, outbounds: [nextOutbound, { type: "direct", tag: "direct" }] }),
     );
     child = spawn(singBoxBin, ["run", "-c", cfgFile], { stdio: ["ignore", "ignore", "pipe"] });
+    trackChild(child, `sing-box:${type}:rotated`);
     child.stderr?.pipe(stderr, { end: false });
     child.on("error", (err) => logger.error({ err }, "sing-box process error (after rotate)"));
     await waitForPort(port);

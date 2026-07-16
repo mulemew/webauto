@@ -3,6 +3,7 @@ import { SeleniumBaseProvider } from "./seleniumbase-adapter";
 import { wrapPuppeteerPage, wrapPlaywrightPage, puppeteer, chromium, patchrightChromium } from "./page-adapter";
 import type { PageAdapter } from "./page-adapter";
 import { execSync, spawn } from "child_process";
+import { trackChild } from "../lib/child-registry";
 import { startLocalProxy, type ProxyType, type ResolvedProxy } from "./proxy-manager";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -711,6 +712,10 @@ function ensureXvfb(): void {
       stdio: "ignore",
       detached: true,
     });
+    // detached+unref keeps Xvfb alive independently of the event loop, but it also
+    // means nothing ever reaped it: every restart spawned another on a fresh display
+    // and the old ones piled up. Track it so shutdown kills it.
+    trackChild(xvfb, `Xvfb${display}`);
     xvfb.unref();
     process.env.DISPLAY = display;
     _xvfbStarted = true;

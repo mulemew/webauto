@@ -6,6 +6,7 @@
   import { logger } from "./lib/logger";
   import { initScheduler } from "./scheduler";
   import { backfillExitGeo } from "./routes/tasks";
+  import { installSignalHandlers } from "./lib/child-registry";
   import { runMigrations } from "./lib/migrations";
   import { hasStoredPassword, initPassword } from "./lib/passwordStore";
   import { pool } from "@workspace/db";
@@ -60,6 +61,11 @@
       process.exit(1);
     }
     logger.info({ port }, "Server listening");
+    // Reap sing-box/Xvfb helpers on SIGTERM/SIGINT/fatal errors — nothing killed
+    // them before, so every restart left orphans behind.
+    installSignalHandlers(async () => {
+      await pool.end().catch(() => {});
+    });
     await initScheduler();
     // Fill exit-geo for pre-existing tasks in the background (non-blocking).
     void backfillExitGeo();
