@@ -1,4 +1,5 @@
-import { useRef, useState, useEffect } from "react";
+import { useRef } from "react";
+import { Reorder, useDragControls } from "framer-motion";
 import { useLang } from "@/contexts/lang-context";
 import type { Translations } from "@/i18n/translations";
 import { Plus, Trash2, ChevronUp, ChevronDown, MousePointer, Navigation, Keyboard, Clock, Eye, Camera, ExternalLink, ListFilter, ArrowDown, Hand, Command, LogIn, GitBranch, Eraser, ShieldCheck, GripVertical } from "lucide-react";
@@ -255,8 +256,7 @@ function StepCard({
   onDelete,
   onMoveUp,
   onMoveDown,
-  onDragStart,
-  onDragEnd,
+  onHandlePointerDown,
 }: {
   step: WorkflowStep;
   index: number;
@@ -266,8 +266,7 @@ function StepCard({
   onDelete: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
-  onDragStart: () => void;
-  onDragEnd: () => void;
+  onHandlePointerDown: (e: React.PointerEvent) => void;
 }) {
   const { t } = useLang();
   const STEP_META = getStepMeta(t);
@@ -278,22 +277,11 @@ function StepCard({
     <div data-step-card className="border border-border rounded-lg bg-card overflow-hidden">
       {/* Card header */}
       <div className="flex items-center gap-2 px-3 py-2 bg-muted/30 border-b border-border">
-        {/* Drag handle — only this element is draggable, so inputs inside the card
-            stay fully interactive (native HTML5 DnD hijacks whatever is draggable). */}
+        {/* Drag handle — starts a framer-motion drag. Only the handle listens, so
+            inputs inside the card stay fully interactive. */}
         <div
-          draggable
-          onDragStart={(e) => {
-            e.dataTransfer.effectAllowed = "move";
-            // Use the WHOLE card as the drag image (not just the tiny grip icon).
-            const card = (e.currentTarget as HTMLElement).closest("[data-step-card]") as HTMLElement | null;
-            if (card) {
-              const r = card.getBoundingClientRect();
-              e.dataTransfer.setDragImage(card, e.clientX - r.left, e.clientY - r.top);
-            }
-            onDragStart();
-          }}
-          onDragEnd={onDragEnd}
-          className="cursor-grab active:cursor-grabbing text-muted-foreground/40 hover:text-muted-foreground shrink-0 touch-none"
+          onPointerDown={onHandlePointerDown}
+          className="cursor-grab active:cursor-grabbing text-muted-foreground/40 hover:text-muted-foreground shrink-0 touch-none select-none"
           title={t.dragToReorder}
         >
           <GripVertical className="h-3.5 w-3.5" />
@@ -794,6 +782,33 @@ function StepCard({
   );
 }
 
+/**
+ * One reorderable row. Each item needs its own useDragControls (hooks can't run in
+ * a loop), and dragListener={false} means ONLY the grip handle starts a drag — the
+ * card's inputs stay clickable.
+ */
+function DraggableStepItem({
+  itemKey,
+  children,
+}: {
+  itemKey: string;
+  children: (startDrag: (e: React.PointerEvent) => void) => React.ReactNode;
+}) {
+  const controls = useDragControls();
+  return (
+    <Reorder.Item
+      value={itemKey}
+      dragListener={false}
+      dragControls={controls}
+      transition={{ type: "spring", stiffness: 600, damping: 40 }}
+      whileDrag={{ scale: 1.01, zIndex: 30, boxShadow: "0 8px 24px rgba(0,0,0,0.28)" }}
+      className="relative"
+    >
+      {children((e) => controls.start(e))}
+    </Reorder.Item>
+  );
+}
+
 export function StepEditor({ steps, onChange, taskTargetUrl = "", savedCredentials = [] }: StepEditorProps) {
   const { t } = useLang();
   const STEP_META = getStepMeta(t);
@@ -810,70 +825,37 @@ export function StepEditor({ steps, onChange, taskTargetUrl = "", savedCredentia
   const remove = (index: number) => { keysRef.current.splice(index, 1); onChange(steps.filter((_, i) => i !== index)); };
   const moveUp = (index: number) => { if (index === 0) return; const next = [...steps]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; const k = keysRef.current; [k[index - 1], k[index]] = [k[index], k[index - 1]]; onChange(next); };
   const moveDown = (index: number) => { if (index === steps.length - 1) return; const next = [...steps]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; const k = keysRef.current; [k[index], k[index + 1]] = [k[index + 1], k[index]]; onChange(next); };
-  // Drag-to-reorder: splice the dragged step (and its stable key) out and back in
-  // at the drop position, so dropping many positions away works in one gesture.
-  const [dragIndex, setDragIndex] = useState<number | null>(null);
-  const [overIndex, setOverIndex] = useState<number | null>(null);
-  const move = (from: number, to: number) => {
-    if (from === to || from < 0 || to < 0 || from >= steps.length || to >= steps.length) return;
-    const next = [...steps]; const [s] = next.splice(from, 1); next.splice(to, 0, s);
-    const k = keysRef.current; const [kk] = k.splice(from, 1); k.splice(to, 0, kk);
+  // Drag-to-reorder via framer-motion Reorder: neighbours are pushed aside with a
+  // spring animation as the dragged card passes them (no ghost/drag-image), and the
+  // list order commits on drop. Keys drive the reorder so identical steps still move.
+  const handleReorder = (newKeys: string[]) => {
+    const byKey = new Map(keysRef.current.map((k, i) => [k, steps[i]] as const));
+    const next = newKeys.map((k) => byKey.get(k)).filter((s): s is WorkflowStep => !!s);
+    if (next.length !== steps.length) return;
+    keysRef.current = newKeys;
     onChange(next);
   };
-  // Auto-scroll while dragging near the top/bottom edge, so a step can be dragged
-  // all the way to the start/end even when the list is taller than the viewport.
-  const rootRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (dragIndex === null) return;
-    let scroller: HTMLElement | null = rootRef.current?.parentElement ?? null;
-    while (scroller) {
-      const s = getComputedStyle(scroller);
-      if ((s.overflowY === "auto" || s.overflowY === "scroll") && scroller.scrollHeight > scroller.clientHeight) break;
-      scroller = scroller.parentElement;
-    }
-    const onDragOver = (e: DragEvent) => {
-      const EDGE = 90, STEP = 14;
-      if (scroller) {
-        const r = scroller.getBoundingClientRect();
-        if (e.clientY < r.top + EDGE) scroller.scrollTop -= STEP;
-        else if (e.clientY > r.bottom - EDGE) scroller.scrollTop += STEP;
-      } else {
-        if (e.clientY < EDGE) window.scrollBy(0, -STEP);
-        else if (e.clientY > window.innerHeight - EDGE) window.scrollBy(0, STEP);
-      }
-    };
-    document.addEventListener("dragover", onDragOver);
-    return () => document.removeEventListener("dragover", onDragOver);
-  }, [dragIndex]);
 
   return (
-    <div ref={rootRef} className="space-y-2">
+    <div className="space-y-2">
       {steps.length === 0 ? (
         <div className="text-center py-6 text-xs text-muted-foreground border border-dashed border-border rounded-lg bg-muted/5">
           No steps yet — add a Login step first if authentication is needed, then chain your actions.
         </div>
       ) : (
-        <div className="space-y-2">
+        <Reorder.Group axis="y" values={keysRef.current} onReorder={handleReorder} className="space-y-2">
           {steps.map((step, i) => (
-            <div
-              key={keysRef.current[i] ?? i}
-              onDragOver={(e) => { if (dragIndex === null) return; e.preventDefault(); if (overIndex !== i) setOverIndex(i); }}
-              onDrop={(e) => { e.preventDefault(); if (dragIndex !== null) move(dragIndex, i); setDragIndex(null); setOverIndex(null); }}
-              className={
-                dragIndex !== null && overIndex === i && dragIndex !== i
-                  ? "rounded-lg ring-2 ring-primary/50 transition-shadow"
-                  : dragIndex === i ? "opacity-40" : ""
-              }
-            >
-              <StepCard step={step} index={i} total={steps.length}
-                savedCredentials={savedCredentials}
-                onChange={(s) => update(i, s)} onDelete={() => remove(i)}
-                onMoveUp={() => moveUp(i)} onMoveDown={() => moveDown(i)}
-                onDragStart={() => setDragIndex(i)}
-                onDragEnd={() => { setDragIndex(null); setOverIndex(null); }} />
-            </div>
+            <DraggableStepItem key={keysRef.current[i] ?? i} itemKey={keysRef.current[i] ?? String(i)}>
+              {(startDrag) => (
+                <StepCard step={step} index={i} total={steps.length}
+                  savedCredentials={savedCredentials}
+                  onChange={(s) => update(i, s)} onDelete={() => remove(i)}
+                  onMoveUp={() => moveUp(i)} onMoveDown={() => moveDown(i)}
+                  onHandlePointerDown={startDrag} />
+              )}
+            </DraggableStepItem>
           ))}
-        </div>
+        </Reorder.Group>
       )}
       <div className="flex gap-2 flex-wrap pt-1">
         {(Object.keys(STEP_META) as StepType[]).map((type) => (
