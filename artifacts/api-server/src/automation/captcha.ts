@@ -1039,20 +1039,33 @@ export async function detectAndHandleCaptcha(
           ? (page as unknown as { maxProxyRotations: () => number | null }).maxProxyRotations()
           : null;
       const maxRotations = perTask ?? Number(process.env.RECAPTCHA_MAX_IP_ROTATIONS ?? 5);
+      // Count only rotations that ACTUALLY happened. Counting attempts made a failed
+      // first rotation report "still blocked after 1 IP rotation(s)" — which reads as
+      // "we tried a different IP and it was also blocked" when in truth we never got
+      // a new IP at all.
       let rotations = 0;
+      let rotateError = "";
       while (audio.blocked && canRotate && rotations < maxRotations) {
-        rotations++;
         logger.warn(
-          { attempt: rotations, maxRotations },
+          { done: rotations, maxRotations },
           "reCAPTCHA audio blocked for this exit IP — rotating proxy IP and retrying",
         );
-        const rotated = await (page as unknown as { rotateProxy: () => Promise<boolean> })
+        const res = await (page as unknown as {
+          rotateProxy: () => Promise<{ ok: boolean; error?: string }>;
+        })
           .rotateProxy()
-          .catch(() => false);
-        if (!rotated) {
-          logger.warn("proxy rotation unavailable/failed — giving up on IP rotation");
+          .catch((err: unknown) => ({
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          }));
+        if (!res.ok) {
+          // Can't get a new IP — retrying from the same one is pointless. Keep the
+          // reason so it reaches the run's log instead of only the container's.
+          rotateError = res.error ?? "unknown error";
+          logger.warn({ rotateError }, "proxy rotation failed — giving up on IP rotation");
           break;
         }
+        rotations++;
         await new Promise((r) => setTimeout(r, 1500)); // let the new tunnel settle
         audio = await solveRecaptchaAudio(page);
       }
@@ -1065,15 +1078,23 @@ export async function detectAndHandleCaptcha(
         };
       }
       if (audio.blocked) {
-        // Still blocked after exhausting rotations (or nothing to rotate).
+        // Distinguish the three outcomes — they need different responses from the
+        // operator, and lumping them together is what made "1 rotation" misleading.
+        let why: string;
+        if (rotateError) {
+          why = ` — IP rotation FAILED (${rotateError}), so every attempt used the SAME exit IP.`;
+        } else if (rotations > 0) {
+          why = ` — still blocked after ${rotations} IP rotation(s) (of ${maxRotations} allowed).`;
+        } else if (!canRotate) {
+          why = " — this task's proxy cannot rotate its exit IP (set proxy type to WARP to enable rotation).";
+        } else {
+          why = ` — IP rotation is disabled for this task (rotation limit is ${maxRotations}).`;
+        }
         return {
           detected: true,
           solved: false,
           needsAttention: true,
-          message:
-            rotations > 0
-              ? `${audio.message} — still blocked after ${rotations} IP rotation(s).`
-              : audio.message,
+          message: `${audio.message}${why}`,
         };
       }
       if (!solver) {

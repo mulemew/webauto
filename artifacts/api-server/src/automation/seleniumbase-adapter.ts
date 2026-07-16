@@ -269,10 +269,15 @@
      * only the egress changes — so the session/page survive. Returns false when the
      * proxy type can't rotate.
      */
-    async rotateProxy(): Promise<boolean> {
-      const r = this._resolvedProxy?.rotate;
-      if (!r) return false;
-      return (await r()) ?? false;
+    async rotateProxy(): Promise<{ ok: boolean; error?: string }> {
+      if (!this._resolvedProxy) {
+        return { ok: false, error: "no proxy is configured for this task" };
+      }
+      const r = this._resolvedProxy.rotate;
+      if (!r) {
+        return { ok: false, error: "this proxy type cannot rotate its exit IP (only WARP can)" };
+      }
+      return await r();
     }
 
     /**

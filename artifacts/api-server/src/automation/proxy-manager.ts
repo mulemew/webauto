@@ -133,10 +133,14 @@ export interface ResolvedProxy {
   /**
    * Swap the exit IP WITHOUT changing `serverUrl`: sing-box is restarted on the
    * SAME local SOCKS port with a freshly registered WARP identity, so the browser
-   * keeps using the same proxy address and never needs restarting. Only meaningful
-   * for WARP; returns false when the proxy type can't rotate (passthrough/static).
+   * keeps using the same proxy address and never needs restarting. Only defined for
+   * WARP.
+   *
+   * Returns the reason on failure rather than a bare false — callers surface it to
+   * the user, who otherwise just sees "rotation didn't happen" with no way to tell a
+   * failed WARP registration from an unrotatable proxy type without container logs.
    */
-  rotate?: () => Promise<boolean>;
+  rotate?: () => Promise<{ ok: boolean; error?: string }>;
 }
 
 const SINGBOX_PROTOCOLS: ProxyType[] = [
@@ -763,16 +767,17 @@ async function startSingBox(
     rotate:
       type !== "warp"
         ? undefined
-        : async (): Promise<boolean> => {
+        : async (): Promise<{ ok: boolean; error?: string }> => {
             // A new WARP registration = new WireGuard identity = new exit IP.
             try {
               const fresh = await registerWarpIdentity();
               await restartWith(fresh);
               logger.info({ localPort: port }, "WARP identity rotated (same local SOCKS port)");
-              return true;
+              return { ok: true };
             } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
               logger.warn({ err }, "WARP rotate failed");
-              return false;
+              return { ok: false, error: msg };
             }
           },
     stop: async () => {
