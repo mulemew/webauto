@@ -664,6 +664,109 @@ router.delete("/tasks/:id", async (req, res): Promise<void> => {
 });
 
 /**
+ * NOTE the two-segment path: "/tasks/:id" only ever matches a SINGLE segment, so
+ * "/tasks/backup/export" can never be swallowed as id="export" regardless of
+ * registration order (same reason /tasks/stats/summary is safe).
+ *
+ * Export tasks as a JSON backup.
+ *
+ * ?template=1 strips concrete values (target/login URLs, step selectors' values,
+ * proxy URL, pasted cookies, schedule) so the result is a shareable skeleton rather
+ * than a copy of your account setup.
+ *
+ * Secrets are NEVER exported: credentials live encrypted in saved_credentials and are
+ * referenced by id, so an export carries the reference, not the password. Import into
+ * a different instance therefore needs those credentials re-created.
+ */
+router.get("/tasks/backup/export", async (req, res): Promise<void> => {
+  const template = req.query.template === "1" || req.query.template === "true";
+  const rows = await db.select().from(tasksTable).orderBy(desc(tasksTable.createdAt));
+
+  const scrubStep = (s: Record<string, unknown>): Record<string, unknown> => {
+    const out = { ...s };
+    if (!template) return out;
+    // Keep the shape (type/selectorType/flags), drop the instance-specific values.
+    for (const k of ["url", "loginUrl", "value", "cookies", "inlineUsername", "inlinePassword", "inlineTotp"]) {
+      if (k in out) out[k] = "";
+    }
+    delete out.credentialId;
+    return out;
+  };
+
+  const tasks = rows.map((t) => {
+    const steps = Array.isArray(t.steps) ? (t.steps as Array<Record<string, unknown>>).map(scrubStep) : t.steps;
+    const bc = (t.browserConfig ?? null) as Record<string, unknown> | null;
+    return {
+      name: template ? `${t.name} (template)` : t.name,
+      targetUrl: template ? "" : t.targetUrl,
+      loginType: t.loginType,
+      steps,
+      cronExpression: template ? null : t.cronExpression,
+      retryCount: t.retryCount,
+      retryIntervalMinutes: t.retryIntervalMinutes,
+      browserConfig: bc && template ? { ...bc, proxyUrl: "" } : bc,
+      enabled: false,
+    };
+  });
+
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="webauto-${template ? "templates" : "tasks"}-${new Date().toISOString().slice(0, 10)}.json"`,
+  );
+  res.json({ version: 1, kind: template ? "template" : "backup", exportedAt: new Date().toISOString(), tasks });
+});
+
+/**
+ * Import tasks from an export file. Always ADDITIVE — imported tasks are created as
+ * new, disabled rows; nothing existing is overwritten or deleted, so a mistaken
+ * import can be undone by deleting the new tasks.
+ */
+router.post("/tasks/backup/import", async (req, res): Promise<void> => {
+  const body = req.body as { tasks?: Array<Record<string, unknown>> } | undefined;
+  const incoming = body?.tasks;
+  if (!Array.isArray(incoming) || incoming.length === 0) {
+    res.status(400).json({ error: "Body must be an export file: { tasks: [...] }" });
+    return;
+  }
+  const created: number[] = [];
+  const skipped: string[] = [];
+  for (const t of incoming) {
+    const name = typeof t.name === "string" && t.name.trim() ? t.name.trim() : "";
+    const targetUrl = typeof t.targetUrl === "string" ? t.targetUrl : "";
+    if (!name) {
+      skipped.push("(unnamed task)");
+      continue;
+    }
+    try {
+      const [row] = await db
+        .insert(tasksTable)
+        .values({
+          name,
+          // targetUrl is NOT NULL; templates export it blank, so keep a placeholder
+          // the user must fill in rather than rejecting the whole import.
+          targetUrl: targetUrl || "about:blank",
+          loginType: (t.loginType as string | null) ?? null,
+          steps: (t.steps as unknown) ?? null,
+          cronExpression: (t.cronExpression as string | null) ?? null,
+          retryCount: (t.retryCount as number | null) ?? null,
+          retryIntervalMinutes: (t.retryIntervalMinutes as number | null) ?? null,
+          browserConfig: (t.browserConfig as unknown) ?? null,
+          status: "idle",
+          enabled: false,
+        })
+        .returning();
+      created.push(row.id);
+    } catch (err) {
+      req.log.warn({ err, name }, "task import failed for one entry");
+      skipped.push(name);
+    }
+  }
+  req.log.info({ created: created.length, skipped: skipped.length }, "Tasks imported");
+  res.status(201).json({ ok: true, created: created.length, skipped, ids: created });
+});
+
+/**
  * Clone a task: copies steps + browserConfig + schedule into a new "<name> (copy)"
  * task. The clone starts DISABLED and idle so it never fires on its schedule before
  * you've reviewed it, and it gets no run history. Credentials referenced by login

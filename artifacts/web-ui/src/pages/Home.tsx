@@ -1,13 +1,14 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useListTasks, useGetTasksSummary, useRunTask, useGetTasksHistory, useToggleTaskEnabled, getListTasksQueryKey, getGetTasksSummaryQueryKey, getGetTasksHistoryQueryKey } from "@workspace/api-client-react";
 import { Link } from "wouter";
-import { Plus, Play, Clock, CheckCircle2, XCircle, Activity, Loader2, ArrowRight, AlertTriangle, X, BarChart2, CalendarClock, Timer, Copy } from "lucide-react";
+import { Plus, Play, Clock, CheckCircle2, XCircle, Activity, Loader2, ArrowRight, AlertTriangle, X, BarChart2, CalendarClock, Timer, Copy, Archive, Download, Upload } from "lucide-react";
 import { FaWindows, FaApple, FaLinux, FaAndroid } from "react-icons/fa";
 import type { IconType } from "react-icons";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
@@ -424,6 +425,49 @@ export default function Home() {
         .catch(() => toast({ title: t.failedToCancel, variant: "destructive" }));
     };
 
+  /** Hidden <input type=file> driven by the Import menu item. */
+  const importInputRef = useRef<HTMLInputElement>(null);
+
+  /** Download a JSON backup (or a value-stripped template) of every task. */
+  const handleExport = (template: boolean) => {
+    const a = document.createElement("a");
+    a.href = `${BASE}/api/tasks/backup/export${template ? "?template=1" : ""}`;
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  /** Import an export file. Additive — imported tasks arrive disabled, nothing is overwritten. */
+  const handleImportFile = (file: File) => {
+    file
+      .text()
+      .then((txt) => JSON.parse(txt) as unknown)
+      .then((data) =>
+        fetch(`${BASE}/api/tasks/backup/import`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }).then((r) => (r.ok ? r.json() : r.json().then((e) => Promise.reject(new Error(e.error))))),
+      )
+      .then((res: { created: number; skipped: string[] }) => {
+        toast({
+          title: t.tasksImported,
+          description: `${res.created} 个任务已导入（已停用，请检查后再启用）${res.skipped.length ? `；${res.skipped.length} 个跳过` : ""}`,
+          variant: "success",
+        });
+        queryClient.invalidateQueries({ queryKey: getListTasksQueryKey() });
+        queryClient.invalidateQueries({ queryKey: getGetTasksSummaryQueryKey() });
+      })
+      .catch((err) =>
+        toast({
+          title: t.failedToImport,
+          description: err instanceof Error ? err.message : String(err),
+          variant: "destructive",
+        }),
+      );
+  };
+
   /** Duplicate a task. The clone lands disabled so it can be reviewed before it runs. */
   const handleClone = (id: number) => {
     fetch(`${BASE}/api/tasks/${id}/clone`, { method: "POST" })
@@ -464,11 +508,43 @@ export default function Home() {
           <h1 className="text-3xl font-bold tracking-tight text-foreground">{t.dashboard}</h1>
           <p className="text-muted-foreground mt-1 font-mono text-sm">{t.dashboardSubtitle}</p>
         </div>
-        <Link href="/tasks/new">
-          <Button className="shadow-sm font-semibold tracking-wide">
-            <Plus className="mr-2 h-4 w-4" /> {t.newMission}
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="shadow-sm gap-2">
+                <Archive className="h-4 w-4" /> {t.backup}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuItem onClick={() => handleExport(false)}>
+                <Download className="h-4 w-4 mr-2" /> {t.exportTasks}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExport(true)}>
+                <Download className="h-4 w-4 mr-2" /> {t.exportTemplates}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => importInputRef.current?.click()}>
+                <Upload className="h-4 w-4 mr-2" /> {t.importTasks}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {/* Hidden picker driven by the menu item above. */}
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleImportFile(f);
+              e.target.value = ""; // allow re-importing the same file
+            }}
+          />
+          <Link href="/tasks/new">
+            <Button className="shadow-sm font-semibold tracking-wide">
+              <Plus className="mr-2 h-4 w-4" /> {t.newMission}
+            </Button>
+          </Link>
+        </div>
       </div>
 
       {/* Summary Stats */}

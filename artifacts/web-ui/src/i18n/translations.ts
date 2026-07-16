@@ -55,6 +55,12 @@ export interface Translations {
     taskCloned: string;
     taskClonedDesc: string;
     failedToClone: string;
+    backup: string;
+    exportTasks: string;
+    exportTemplates: string;
+    importTasks: string;
+    tasksImported: string;
+    failedToImport: string;
     cancelRequested: string;
     cancelRequestedDesc: string;
     // Status
@@ -398,6 +404,12 @@ export interface Translations {
     taskCloned: "任务已克隆",
     taskClonedDesc: "副本已创建（默认未启用），请检查后再开启。",
     failedToClone: "克隆失败",
+    backup: "备份",
+    exportTasks: "导出全部任务",
+    exportTemplates: "导出为模板（不含具体值）",
+    importTasks: "导入任务…",
+    tasksImported: "导入完成",
+    failedToImport: "导入失败",
     cancelRequested: "取消请求已发送",
     cancelRequestedDesc: "任务即将停止。",
     neverRun: "从未运行",
@@ -721,6 +733,12 @@ export interface Translations {
     taskCloned: "Task cloned",
     taskClonedDesc: "The copy was created disabled — review it before enabling.",
     failedToClone: "Clone failed",
+    backup: "Backup",
+    exportTasks: "Export all tasks",
+    exportTemplates: "Export as templates (no values)",
+    importTasks: "Import tasks…",
+    tasksImported: "Import complete",
+    failedToImport: "Import failed",
     cancelRequested: "Cancel requested",
     cancelRequestedDesc: "The task will stop shortly.",
     neverRun: "never run",
