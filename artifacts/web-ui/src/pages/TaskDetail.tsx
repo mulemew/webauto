@@ -196,7 +196,21 @@ export default function TaskDetail() {
         try { sessionStorage.setItem(persistedKey, JSON.stringify(entries)); } catch {}
       }
     }, [entries, persistedKey]);
-    const displayEntries = entries.length > 0 ? entries : persistedEntries;
+    // Drop the mid-run cache as soon as the run is over — from here on the DB is the
+    // source of truth, and leaving it behind is what made a later visit render a
+    // stale run.
+    useEffect(() => {
+      if (isDone) {
+        try { sessionStorage.removeItem(persistedKey); } catch { /* ignore */ }
+      }
+    }, [isDone, persistedKey]);
+    // The sessionStorage copy exists for ONE reason: you navigate away mid-run and
+    // come back, and we still want the progress so far. Once the run is over the DB
+    // has everything — and since the cache key has no run id, an old run's stream
+    // would otherwise stick around forever and be shown as if it were the latest run
+    // (the reported "always shows the last cached run, not the last actual run").
+    // So: only fall back to the cache while a run is actually in flight.
+    const displayEntries = entries.length > 0 ? entries : isRunning ? persistedEntries : [];
 
     // ── Timeline parsing ────────────────────────────────────────────────────────
     const timelineSteps = useMemo(() => {
