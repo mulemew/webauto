@@ -228,6 +228,22 @@ export async function dismissPopups(page: PageAdapter): Promise<PopupCleanupResu
   return { dismissed: total, details: all };
 }
 
+/** True when any captcha widget is rendered — cleanup must not close its host modal. */
+async function pageHasCaptcha(page: PageAdapter): Promise<boolean> {
+  try {
+    return (await page.evaluate(() =>
+      !!document.querySelector(
+        ".cf-turnstile, [data-sitekey], input[name='cf-turnstile-response'], " +
+          "iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile'], " +
+          "iframe[src*='recaptcha'], .g-recaptcha, iframe[src*='hcaptcha'], .h-captcha, " +
+          ".altcha, [data-altcha]",
+      ),
+    )) as boolean;
+  } catch {
+    return false;
+  }
+}
+
 async function dismissPopupsOnce(page: PageAdapter, firstPass = true): Promise<PopupCleanupResult> {
   const details: string[] = [];
   let dismissed = 0;
@@ -253,19 +269,41 @@ async function dismissPopupsOnce(page: PageAdapter, firstPass = true): Promise<P
     logger.debug({ err }, "cookie consent dismissal failed");
   }
 
+  // Is there a captcha anywhere on the page right now? If so we must NOT close
+  // modals or press Escape: the widget we're supposed to solve usually LIVES in a
+  // modal (bot-hosting renew, host2play/wispbyte "Start"), and closing it is what
+  // produced "the popup closed but the action never fired".
+  const captchaPresent = await pageHasCaptcha(page);
+
   // 2. Generic close buttons on modals / ad overlays / newsletter popups.
   for (const selector of CLOSE_SELECTORS) {
     try {
       const btn = await page.$(selector);
       if (!btn) continue;
-      const visible = await btn
+      // Visible AND not the close button of a modal that contains a captcha.
+      // NOTE: the element adapter's evaluate() takes no args, so the guard
+      // selector is inlined in the function body (it gets stringified).
+      const ok = await btn
         .evaluate((e: Element) => {
           const r = e.getBoundingClientRect();
           const s = window.getComputedStyle(e);
-          return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden";
+          const visible =
+            r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden";
+          if (!visible) return false;
+          const CAPTCHA =
+            ".cf-turnstile, [data-sitekey], input[name='cf-turnstile-response'], " +
+            "iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile'], " +
+            "iframe[src*='recaptcha'], .g-recaptcha, iframe[src*='hcaptcha'], .h-captcha, " +
+            ".altcha, [data-altcha]";
+          const host =
+            e.closest("[class*='modal'], [class*='popup'], [class*='dialog'], [role='dialog']") ??
+            null;
+          // Closing a modal that holds a captcha would destroy the challenge.
+          if (host && host.querySelector(CAPTCHA)) return false;
+          return true;
         })
         .catch(() => false) as boolean;
-      if (!visible) continue;
+      if (!ok) continue;
       await btn.click().catch(() => {});
       dismissed++;
       details.push(`close button (${selector})`);
@@ -273,10 +311,13 @@ async function dismissPopupsOnce(page: PageAdapter, firstPass = true): Promise<P
     } catch { /* ignore */ }
   }
 
-  // 3. Press Escape — many lightbox/modal libraries close on Escape.
-  try {
-    await page.keyboard.press("Escape");
-  } catch { /* ignore */ }
+  // 3. Press Escape — many lightbox/modal libraries close on Escape. Skipped while a
+  //    captcha is on screen: Escape would close the very dialog hosting it.
+  if (!captchaPresent) {
+    try {
+      await page.keyboard.press("Escape");
+    } catch { /* ignore */ }
+  }
 
   // 4. Last resort — neutralise blocking backdrops and restore scroll.
   //    Only targets fixed/absolute full-viewport overlays with a high z-index
