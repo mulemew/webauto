@@ -489,6 +489,16 @@ async function executeStep(
       //     GeeTest, etc.) — e.g. the "Protected by ALTCHA" checkbox on the
       //     ikuuu renew dialog, which is NOT a Cloudflare challenge.
 
+      // `url` used to be ONLY the reload target handed to clearCloudflareInterstitial
+      // — the step never navigated, so configuring it and expecting the step to go
+      // there (as the field name and doc imply) silently did nothing: the step just
+      // inspected whatever page happened to be open. Navigate first when it's set and
+      // we're not already there.
+      if (step.url && page.url() !== step.url) {
+        logger.info({ url: step.url }, "cfVerify — navigating to the configured URL first");
+        await page.goto(step.url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+      }
+
       // Give a slow-loading widget time to render before we look for it. Modals
       // (e.g. host2play's "Verify that you're not a robot" dialog opened by a
       // Renew click) inject the reCAPTCHA a moment after opening — checking once,

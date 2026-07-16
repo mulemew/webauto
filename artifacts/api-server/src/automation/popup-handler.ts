@@ -244,6 +244,25 @@ async function pageHasCaptcha(page: PageAdapter): Promise<boolean> {
   }
 }
 
+/** True when some modal/dialog is on screen — used to decide whether a late captcha is worth waiting for. */
+async function pageHasDialog(page: PageAdapter): Promise<boolean> {
+  try {
+    return (await page.evaluate(() => {
+      const nodes = document.querySelectorAll(
+        "[role='dialog'], [class*='modal'], [class*='popup'], [class*='dialog']",
+      );
+      for (const n of Array.from(nodes)) {
+        const r = (n as HTMLElement).getBoundingClientRect();
+        const s = window.getComputedStyle(n as HTMLElement);
+        if (r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden") return true;
+      }
+      return false;
+    })) as boolean;
+  } catch {
+    return false;
+  }
+}
+
 async function dismissPopupsOnce(page: PageAdapter, firstPass = true): Promise<PopupCleanupResult> {
   const details: string[] = [];
   let dismissed = 0;
@@ -273,7 +292,18 @@ async function dismissPopupsOnce(page: PageAdapter, firstPass = true): Promise<P
   // modals or press Escape: the widget we're supposed to solve usually LIVES in a
   // modal (bot-hosting renew, host2play/wispbyte "Start"), and closing it is what
   // produced "the popup closed but the action never fired".
-  const captchaPresent = await pageHasCaptcha(page);
+  //
+  // A single point-in-time check can race a slow captcha. The usual markup
+  // (.cf-turnstile / [data-sitekey]) is in the page's own HTML and is there before
+  // CF's iframe loads, so that case is covered — but a modal whose body arrives by
+  // AJAX may still be empty when we look. So: if we see a dialog but no captcha yet,
+  // give it a moment and look once more before touching anything.
+  let captchaPresent = await pageHasCaptcha(page);
+  if (!captchaPresent && (await pageHasDialog(page))) {
+    await sleep(1200);
+    captchaPresent = await pageHasCaptcha(page);
+    if (captchaPresent) logger.info("popup cleanup: captcha appeared late — protecting its dialog");
+  }
 
   // 2. Generic close buttons on modals / ad overlays / newsletter popups.
   for (const selector of CLOSE_SELECTORS) {
