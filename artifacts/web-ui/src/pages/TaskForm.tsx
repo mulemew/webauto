@@ -189,24 +189,10 @@ interface BrowserConfigState {
 }
 
 /** URL-safe random token for the webhook's Authorization header. */
-/**
- * Random webhook token.
- *
- * crypto.getRandomValues only exists in a SECURE CONTEXT (https / localhost). This
- * panel is regularly opened over plain http on a LAN IP, where `crypto` is undefined
- * — that threw during render and blank-screened the whole task form (new *and* edit).
- * Fall back to Math.random when Web Crypto isn't there: this token is a shared secret
- * for a self-hosted webhook, not a cryptographic key, and the user can always paste
- * their own.
- */
+/** Random webhook token — Web Crypto only; this is an auth secret. */
 function genWebhookToken(): string {
   const bytes = new Uint8Array(24);
-  const wc = typeof globalThis !== "undefined" ? globalThis.crypto : undefined;
-  if (wc && typeof wc.getRandomValues === "function") {
-    wc.getRandomValues(bytes);
-  } else {
-    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
-  }
+  crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
