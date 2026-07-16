@@ -41,15 +41,26 @@ const router: IRouter = Router();
  * spread over taskFields without resurrecting fields the caller never sent (which
  * would wipe them on a PATCH-style update).
  */
-function normalizeNullableTaskFields(
-  fields: Partial<{
+function normalizeNullableTaskFields<
+  T extends Partial<{
     retryCount: number | null;
     retryIntervalMinutes: number | null;
     webhookEnabled: boolean | null;
     webhookToken: string | null;
   }>,
-): Partial<typeof tasksTable.$inferInsert> {
-  const out: Partial<typeof tasksTable.$inferInsert> = {};
+>(fields: T): Partial<typeof tasksTable.$inferInsert> {
+  // Strip the nullable-by-API keys, then re-add them with column-safe values. They
+  // must be REMOVED rather than merely overridden: spreading `{...fields, ...fixed}`
+  // still unions the original `| null` into the result type, which is what kept
+  // failing typecheck.
+  const {
+    retryCount: _rc,
+    retryIntervalMinutes: _ri,
+    webhookEnabled: _we,
+    webhookToken: _wt,
+    ...rest
+  } = fields;
+  const out = { ...rest } as Partial<typeof tasksTable.$inferInsert>;
   if ("retryCount" in fields) out.retryCount = fields.retryCount ?? null;
   if ("retryIntervalMinutes" in fields) out.retryIntervalMinutes = fields.retryIntervalMinutes ?? null;
   // NOT NULL column — null means "off".
@@ -311,8 +322,11 @@ router.post("/tasks", async (req, res): Promise<void> => {
   const [task] = await db
     .insert(tasksTable)
     .values({
-      ...taskFields,
       ...normalizeNullableTaskFields(taskFields),
+      // Required columns — restated so the Partial the helper returns still
+      // satisfies .values()'s insert type.
+      name: taskFields.name,
+      targetUrl: taskFields.targetUrl,
       steps: sanitizedSteps,
       cronExpression: cronExpression ?? null,
       browserConfig: browserConfig ?? null,
@@ -618,10 +632,7 @@ router.put("/tasks/:id", async (req, res): Promise<void> => {
 
   const { credentials, steps, cronExpression, browserConfig, ...taskFields } = parsed.data;
 
-  const updateData: Partial<typeof tasksTable.$inferInsert> = {
-    ...taskFields,
-    ...normalizeNullableTaskFields(taskFields),
-  };
+  const updateData: Partial<typeof tasksTable.$inferInsert> = normalizeNullableTaskFields(taskFields);
   if (steps !== undefined) {
     updateData.steps = await promoteInlineCredentials(steps, req.log);
   }
