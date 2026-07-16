@@ -252,6 +252,7 @@ export const LoginStepLoginMethod = {
   form: "form",
   github: "github",
   google: "google",
+  cookie: "cookie",
 } as const;
 
 /**

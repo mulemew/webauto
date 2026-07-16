@@ -677,7 +677,7 @@ components:
           enum: [login]
         loginMethod:
           type: string
-          enum: [form, github, google]
+          enum: [form, github, google, cookie]
           description: "form=standard username/password form, github=GitHub OAuth, google=Google OAuth"
         loginUrl:
           type: string

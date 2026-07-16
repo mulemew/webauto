@@ -226,7 +226,12 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
       // so we can persist the updated session after a successful run.
       const _taskSteps = (task.steps as WorkflowStep[] | null) ?? [];
       const cookieModeStep = _taskSteps.find(
-        (s) => s.type === "login" && (s as Record<string, unknown>).cookieMode === true,
+        // loginMethod "cookie" means "there is no automated login, drive it purely
+        // from cookies" — that implies cookie mode, so don't also require the toggle.
+        (s) =>
+          s.type === "login" &&
+          ((s as Record<string, unknown>).cookieMode === true ||
+            (s as Record<string, unknown>).loginMethod === "cookie"),
       ) as (Record<string, unknown> | undefined);
       const cookieModeEnabled = !!cookieModeStep;
       const cookieSessionKey =

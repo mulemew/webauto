@@ -115,7 +115,7 @@ const stepSchema = z.object({
   key: z.string().optional(),
   x: z.number().optional(),
   y: z.number().optional(),
-  loginMethod: z.enum(["form", "github", "google"]).optional(),
+  loginMethod: z.enum(["form", "github", "google", "cookie"]).optional(),
   loginUrl: z.string().optional(),
   credentialId: z.number().optional(),
   credentialSource: z.enum(["saved", "inline"]).optional(),

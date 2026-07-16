@@ -91,7 +91,8 @@ export function taskUsesCookieMode(steps: unknown): {
 } {
   if (!Array.isArray(steps)) return { enabled: false, sessionKey: DEFAULT_KEY };
   for (const s of steps as Array<Record<string, unknown>>) {
-    if (s && s.type === "login" && s.cookieMode === true) {
+    // loginMethod "cookie" (no automated login — cookies only) implies cookie mode.
+    if (s && s.type === "login" && (s.cookieMode === true || s.loginMethod === "cookie")) {
       const key =
         typeof s.sessionKey === "string" && s.sessionKey.trim()
           ? s.sessionKey.trim()

@@ -39,7 +39,7 @@ export interface WorkflowStep {
   x?: number;
   y?: number;
   key?: string;
-  loginMethod?: "form" | "github" | "google";
+  loginMethod?: "form" | "github" | "google" | "cookie";
   loginUrl?: string;
   credentialId?: number;
   credentialSource?: "saved" | "inline";
@@ -327,13 +327,15 @@ function StepCard({
               <Label className="text-xs">{t.loginMethod}</Label>
               <RadioGroup
                 value={step.loginMethod ?? "form"}
-                onValueChange={(v) => set({ loginMethod: v as "form" | "github" | "google" })}
+                onValueChange={(v) => set({ loginMethod: v as "form" | "github" | "google" | "cookie" })}
                 className="flex gap-4"
               >
-                {(["form", "github", "google"] as const).map((m) => (
+                {(["form", "github", "google", "cookie"] as const).map((m) => (
                   <div key={m} className="flex items-center gap-1.5">
                     <RadioGroupItem value={m} id={`login-method-${index}-${m}`} />
-                    <Label htmlFor={`login-method-${index}-${m}`} className="text-xs cursor-pointer capitalize">{m === "form" ? t.standardForm : m === "github" ? "GitHub OAuth" : "Google OAuth"}</Label>
+                    <Label htmlFor={`login-method-${index}-${m}`} className="text-xs cursor-pointer capitalize">
+                      {m === "form" ? t.standardForm : m === "github" ? "GitHub OAuth" : m === "google" ? "Google OAuth" : "仅 Cookie"}
+                    </Label>
                   </div>
                 ))}
               </RadioGroup>
@@ -347,8 +349,8 @@ function StepCard({
                 onChange={(e) => set({ loginUrl: e.target.value })}
               />
             </div>
-            {/* Credential selection */}
-            <div className="space-y-2 pt-1 border-t border-border">
+            {/* Credential selection — irrelevant for cookie-only login (no form to fill). */}
+            <div className={"space-y-2 pt-1 border-t border-border" + (step.loginMethod === "cookie" ? " hidden" : "")}>
               <Label className="text-xs font-medium">{t.credentials}</Label>
               {savedCredentials.length > 0 ? (
                 <div className="space-y-2">
@@ -435,19 +437,28 @@ function StepCard({
             </div>
             {/* Cookie mode / session persistence */}
             <div className="space-y-2 pt-1 border-t border-border">
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label className="text-xs font-medium">Cookie 模式（会话保持）</Label>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">启用后，登录成功的会话（cookies + localStorage）会被加密保存。下次运行先检测会话是否有效：有效则跳过登录，失效则重新登录并刷新保存。</p>
+              {/* Cookie-only login implies cookie mode — no toggle to tick. */}
+              {step.loginMethod === "cookie" ? (
+                <p className="text-[10px] text-muted-foreground">
+                  <b>仅 Cookie</b>：不做自动登录。用下面粘贴的 cookie 打开页面，命中下方「登录成功判据」就算通过；
+                  判据没命中就<b>直接失败</b>（提示你重新粘贴），不会用错误的登录态往下跑。
+                  成功一次后会自动保存真实 cookie 并接管。
+                </p>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label className="text-xs font-medium">Cookie 模式（会话保持）</Label>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">启用后，登录成功的会话（cookies + localStorage）会被加密保存。下次运行先检测会话是否有效：有效则跳过登录，失效则重新登录并刷新保存。</p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 shrink-0"
+                    checked={step.cookieMode === true}
+                    onChange={(e) => set({ cookieMode: e.target.checked })}
+                  />
                 </div>
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 shrink-0"
-                  checked={step.cookieMode === true}
-                  onChange={(e) => set({ cookieMode: e.target.checked })}
-                />
-              </div>
-              {step.cookieMode && (
+              )}
+              {(step.cookieMode || step.loginMethod === "cookie") && (
                 <div className="space-y-1">
                   <Label className="text-xs">Session Key <span className="font-normal text-muted-foreground">(可选)</span></Label>
                   <Input
@@ -459,9 +470,14 @@ function StepCard({
                   <p className="text-[10px] text-muted-foreground leading-snug">同一任务可用不同 key 保存多个身份，留空使用 &quot;default&quot;。</p>
                 </div>
               )}
-              {step.cookieMode && (
+              {(step.cookieMode || step.loginMethod === "cookie") && (
                 <div className="space-y-1">
-                  <Label className="text-xs">Cookie <span className="font-normal text-muted-foreground">(可选，首次种子)</span></Label>
+                  <Label className="text-xs">
+                    Cookie{" "}
+                    <span className="font-normal text-muted-foreground">
+                      {step.loginMethod === "cookie" ? "(必填)" : "(可选，首次种子)"}
+                    </span>
+                  </Label>
                   <textarea
                     className="w-full rounded-md border border-input bg-background px-2 py-1.5 font-mono text-xs min-h-[56px]"
                     placeholder="remember_web_xxx=yyy; other=zzz"

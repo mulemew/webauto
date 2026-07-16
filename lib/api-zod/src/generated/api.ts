@@ -223,7 +223,7 @@ export const ListTasksResponseItem = zod.object({
           .object({
             type: zod.enum(["login"]),
             loginMethod: zod
-              .enum(["form", "github", "google"])
+              .enum(["form", "github", "google", "cookie"])
               .describe(
                 "form=standard username\/password form, github=GitHub OAuth, google=Google OAuth",
               ),
@@ -520,7 +520,7 @@ export const CreateTaskBody = zod.object({
           .object({
             type: zod.enum(["login"]),
             loginMethod: zod
-              .enum(["form", "github", "google"])
+              .enum(["form", "github", "google", "cookie"])
               .describe(
                 "form=standard username\/password form, github=GitHub OAuth, google=Google OAuth",
               ),
@@ -802,7 +802,7 @@ export const GetTaskResponse = zod
             .object({
               type: zod.enum(["login"]),
               loginMethod: zod
-                .enum(["form", "github", "google"])
+                .enum(["form", "github", "google", "cookie"])
                 .describe(
                   "form=standard username\/password form, github=GitHub OAuth, google=Google OAuth",
                 ),
@@ -1120,7 +1120,7 @@ export const UpdateTaskBody = zod.object({
           .object({
             type: zod.enum(["login"]),
             loginMethod: zod
-              .enum(["form", "github", "google"])
+              .enum(["form", "github", "google", "cookie"])
               .describe(
                 "form=standard username\/password form, github=GitHub OAuth, google=Google OAuth",
               ),
@@ -1394,7 +1394,7 @@ export const UpdateTaskResponse = zod.object({
           .object({
             type: zod.enum(["login"]),
             loginMethod: zod
-              .enum(["form", "github", "google"])
+              .enum(["form", "github", "google", "cookie"])
               .describe(
                 "form=standard username\/password form, github=GitHub OAuth, google=Google OAuth",
               ),

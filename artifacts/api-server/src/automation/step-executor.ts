@@ -46,7 +46,7 @@ export type WorkflowStep =
   | { type: "cfVerify"; url?: string; maxReloads?: number }
   | { type: "switchToNewPage"; timeout?: number }
   | { type: "keypress"; key: string }
-  | { type: "login"; loginMethod: "form" | "github" | "google"; loginUrl: string; inlineUsername?: string; inlinePassword?: string; inlineTotp?: string; successSelector?: string; successText?: string; cookieMode?: boolean; sessionKey?: string; cookies?: string }
+  | { type: "login"; loginMethod: "form" | "github" | "google" | "cookie"; loginUrl: string; inlineUsername?: string; inlinePassword?: string; inlineTotp?: string; successSelector?: string; successText?: string; cookieMode?: boolean; sessionKey?: string; cookies?: string }
   | { type: "condition"; conditionType: ConditionType; conditionValue: string; conditionSelector?: string; thenAction: ConditionalAction; elseAction?: ConditionalAction };
 
 export interface StepResult {
@@ -620,6 +620,26 @@ async function executeStep(
       // task's previously-saved storage state (cookies + localStorage). Before
       // spending a full login attempt, navigate to the login/target URL and
       // check whether we're already authenticated. If so, skip login entirely.
+      // ── Cookie-only login ────────────────────────────────────────────────
+      // For sites we cannot log into automatically (hard captcha, MFA, SSO the
+      // automation can't drive), the operator pastes the site's login-ticket cookie
+      // and we simply verify it. There is no automated login to fall back on, so an
+      // invalid session is a hard failure telling them to re-paste — silently
+      // continuing would let every later step run logged-out.
+      if (step.loginMethod === "cookie") {
+        await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await dismissPopups(page);
+        const ok = await isSessionAuthenticated(page, step.successSelector, step.successText);
+        if (ok) {
+          logger.info({ taskId, stepIndex }, "Cookie login — session is valid");
+          return { message: "Cookie session valid — logged in without a login flow" };
+        }
+        throw new Error(
+          "Cookie login failed: the session is not valid (expired cookie, wrong domain, or no cookie configured). " +
+            "Paste a fresh login cookie on this step — there is no automated login to fall back on.",
+        );
+      }
+
       const cookieMode = (step as Record<string, unknown>).cookieMode === true;
       if (cookieMode) {
         try {
