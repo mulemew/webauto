@@ -24,8 +24,11 @@ import path from "path";
 function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string, unknown>> {
   if (!raw || !raw.trim()) return [];
   let domain = "";
+  let secure = false;
   try {
-    domain = new URL(targetUrl).hostname;
+    const u = new URL(targetUrl);
+    domain = u.hostname;
+    secure = u.protocol === "https:";
   } catch {
     return [];
   }
@@ -38,7 +41,18 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
     const name = s.slice(0, eq).trim();
     const value = s.slice(eq + 1).trim();
     if (!name) continue;
-    out.push({ name, value, domain, path: "/" });
+    // Playwright's storageState wants the full shape; Selenium ignores extras. We do
+    // NOT set httpOnly: WebDriver can't reliably set it, and it only governs JS
+    // access — the cookie is still sent on requests, which is all auth needs.
+    out.push({
+      name,
+      value,
+      domain,
+      path: "/",
+      secure,
+      expires: -1, // session cookie; the site re-issues a dated one once it accepts us
+      sameSite: "Lax",
+    });
   }
   return out;
 }
@@ -238,12 +252,28 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
         (cookieModeStep?.sessionKey as string | undefined)?.trim() || "default";
       let dumpStorageState: (() => Promise<unknown>) | null = null;
 
+      // The URL the session belongs to: the login step's page if set, else the task
+      // target. Cookies are domain-scoped, so deriving this from the wrong one would
+      // plant them on a domain the site never reads.
+      const cookieOriginUrl =
+        ((cookieModeStep?.loginUrl as string | undefined) || "").trim() || task.targetUrl;
+
       if (cookieModeEnabled) {
         const saved = await loadBrowserSession(taskId, cookieSessionKey);
         if (saved) {
           browserConfig.storageState = saved;
           emitTaskProgress(taskId, "Restored saved browser session (cookie mode)-¦");
           logger.info({ taskId, cookieSessionKey }, "Cookie mode — restored saved session");
+        } else {
+          // Nothing saved yet — seed Playwright's context from the pasted cookies.
+          // (The cf-proxy path seeds the live page after newPage() instead; without
+          // this branch a pasted cookie only worked on cf-proxy.)
+          const seed = parseCookieHeader((cookieModeStep?.cookies as string | undefined) ?? "", cookieOriginUrl);
+          if (seed.length) {
+            browserConfig.storageState = { cookies: seed, origins: [] };
+            emitTaskProgress(taskId, `Seeded ${seed.length} configured cookie(s)-¦`);
+            logger.info({ taskId, count: seed.length }, "Cookie mode — seeded context from configured cookies");
+          }
         }
         browserConfig.onContextReady = (dumper) => { dumpStorageState = dumper; };
       }
@@ -415,7 +445,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
           if (!jar.length) {
             const seed = parseCookieHeader(
               (cookieModeStep?.cookies as string | undefined) ?? "",
-              task.targetUrl,
+              cookieOriginUrl,
             );
             if (seed.length) {
               jar = seed;
@@ -425,7 +455,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
           if (jar.length) {
             const added = await (page as unknown as {
               setCookies: (c: Array<Record<string, unknown>>, url?: string) => Promise<number>;
-            }).setCookies(jar, task.targetUrl || undefined);
+            }).setCookies(jar, cookieOriginUrl || undefined);
             emitTaskProgress(taskId, `Restored ${added} saved cookie(s)-¦`);
             logger.info({ taskId, cookieSessionKey, added, of: jar.length }, "Cookie mode — cookies restored (cf-proxy)");
           }
