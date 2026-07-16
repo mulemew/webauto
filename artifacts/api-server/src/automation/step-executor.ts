@@ -873,11 +873,35 @@ async function settleAfterClick(page: PageAdapter, urlBefore: string): Promise<v
   }
 }
 
+/**
+ * Is the current page an authenticated view?
+ *
+ * Only an EXPLICIT signal counts. The old fallback tested the body against
+ * /logout|sign out|dashboard|account|profile|welcome/ when nothing was configured —
+ * but those words are all over ordinary LOGIN pages too (wispbyte's literally says
+ * "WELCOME TO Wispbyte"), so it answered "authenticated" while sitting on the login
+ * form and the step happily reported "session restored — login skipped", leaving
+ * every later step running logged-out. Guessing wrong here is worse than not
+ * guessing: without a success signal we log in, which costs a login but is correct.
+ */
 async function isSessionAuthenticated(
   page: PageAdapter,
   successSelector?: string,
   successText?: string,
 ): Promise<boolean> {
+  // A visible password field means we're looking at a login form. Definitive NO,
+  // whatever else the page says.
+  const onLoginForm = (await page
+    .evaluate(() => {
+      const pw = document.querySelector<HTMLElement>("input[type='password']");
+      if (!pw) return false;
+      const r = pw.getBoundingClientRect();
+      const s = window.getComputedStyle(pw);
+      return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden";
+    })
+    .catch(() => false)) as boolean;
+  if (onLoginForm) return false;
+
   if (successText) {
     try {
       const bodyText = (await page.evaluate(() => document.body?.innerText).catch(() => "")) as string;
@@ -897,8 +921,8 @@ async function isSessionAuthenticated(
       }
     } catch {}
   }
-  const bodyText = (await page.evaluate(() => document.body?.innerText).catch(() => "")) as string;
-  return /logout|sign out|sign-out|dashboard|account|profile|welcome/i.test(bodyText);
+  // Nothing explicit configured → we cannot know. Say no and let the login run.
+  return false;
 }
 
 /**

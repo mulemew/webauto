@@ -2444,11 +2444,53 @@ def solve_recaptcha_audio(sid):
         except Exception:
             d.switch_to.default_content()
             return {"solved": False, "blocked": False, "message": "reCAPTCHA challenge frame (bframe) not found"}
+        # Clicking the audio button used to be wrapped in a bare except:pass. When it
+        # failed — an ad overlay intercepting the click, or an image challenge being
+        # served — we carried on into the round loop anyway, found no audio, and
+        # reported "not solved after N audio rounds" despite never having downloaded a
+        # single clip. Capture the reason and retry through JS, which ignores occlusion.
+        audio_err = None
         try:
-            find("#recaptcha-audio-button, button.rc-button-audio").click()
+            btn = find("#recaptcha-audio-button, button.rc-button-audio")
+            try:
+                btn.click()
+            except Exception as e1:
+                audio_err = f"click intercepted: {e1}"
+                print(f"[recaptcha] audio button click intercepted — retrying via JS: {e1}", flush=True)
+                d.execute_script("arguments[0].click();", btn)
+                audio_err = None
             time.sleep(1.5)
+        except Exception as e:
+            audio_err = str(e)
+            print(f"[recaptcha] audio button unavailable: {e}", flush=True)
+
+        # An IP block can surface the moment the audio button is pressed, so check it
+        # before concluding anything about the audio challenge.
+        try:
+            blk0 = find(".rc-doscaptcha-header-text, .rc-audiochallenge-error-message").text or ""
+            if "try again later" in blk0.lower() or "automated queries" in blk0.lower():
+                d.switch_to.default_content()
+                return {"solved": False, "blocked": True,
+                        "message": "reCAPTCHA blocked the audio challenge for this IP (rotate proxy/WARP)"}
         except Exception:
             pass
+
+        # Confirm we ACTUALLY reached the audio challenge before looping over it.
+        on_audio = bool(sb.execute_script(
+            "return !!document.querySelector("
+            "'.rc-audiochallenge-tdownload-link, #audio-source, #audio-response');"
+        ))
+        if not on_audio:
+            is_image = bool(sb.execute_script(
+                "return !!document.querySelector('.rc-imageselect, #rc-imageselect, "
+                ".rc-imageselect-instructions');"
+            ))
+            d.switch_to.default_content()
+            base = ("reCAPTCHA served an IMAGE challenge and the audio button could not be used"
+                    if is_image else "could not switch reCAPTCHA to its audio challenge")
+            return {"solved": False, "blocked": False,
+                    "message": f"{base}{f' ({audio_err})' if audio_err else ''} — "
+                               "the audio solver never ran (no audio was downloaded)."}
 
         # 3. Audio rounds.
         for rnd in range(max_rounds):
