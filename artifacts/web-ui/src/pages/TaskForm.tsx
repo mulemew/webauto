@@ -189,9 +189,24 @@ interface BrowserConfigState {
 }
 
 /** URL-safe random token for the webhook's Authorization header. */
+/**
+ * Random webhook token.
+ *
+ * crypto.getRandomValues only exists in a SECURE CONTEXT (https / localhost). This
+ * panel is regularly opened over plain http on a LAN IP, where `crypto` is undefined
+ * — that threw during render and blank-screened the whole task form (new *and* edit).
+ * Fall back to Math.random when Web Crypto isn't there: this token is a shared secret
+ * for a self-hosted webhook, not a cryptographic key, and the user can always paste
+ * their own.
+ */
 function genWebhookToken(): string {
   const bytes = new Uint8Array(24);
-  crypto.getRandomValues(bytes);
+  const wc = typeof globalThis !== "undefined" ? globalThis.crypto : undefined;
+  if (wc && typeof wc.getRandomValues === "function") {
+    wc.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
@@ -772,7 +787,7 @@ export default function TaskForm() {
 
               {/* Failure auto-retry — independent of the schedule above. */}
               <div className="space-y-2 pt-4 mt-4 border-t border-border">
-                <FormLabel className="text-sm font-medium">失败自动重试</FormLabel>
+                <p className="text-sm font-medium">失败自动重试</p>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm text-muted-foreground">失败后重试</span>
                   <FormField
@@ -822,7 +837,7 @@ export default function TaskForm() {
               <div className="space-y-2 pt-4 mt-4 border-t border-border">
                 <div className="flex items-center justify-between">
                   <div>
-                    <FormLabel className="text-sm font-medium">Webhook 触发</FormLabel>
+                    <p className="text-sm font-medium">Webhook 触发</p>
                     <p className="text-xs text-muted-foreground mt-0.5">
                       开启后，第三方监控（Uptime Kuma 等）检测到服务挂掉时可以直接调用这个地址触发本任务。
                     </p>
@@ -840,7 +855,7 @@ export default function TaskForm() {
                 {webhookEnabled && (
                   <div className="space-y-2 pt-1">
                     <div className="space-y-1">
-                      <FormLabel className="text-xs">Authorization</FormLabel>
+                      <label className="block text-xs font-medium">Authorization</label>
                       <div className="flex items-center gap-2">
                         <Input
                           className="font-mono text-xs h-9"
