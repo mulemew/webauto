@@ -356,6 +356,33 @@ import path from "path";
       let finalPage = page;
       let screenshotPath: string | undefined;
 
+      // ── Cookie mode on the cf-proxy backend ──────────────────────────────────
+      // Playwright restores a session at CONTEXT creation via storageState, but the
+      // SeleniumBase backend has no such concept — which is why enabling cookieMode
+      // did nothing there. It does expose a cookie jar, so restore the saved cookies
+      // onto the live page instead. Injection needs a same-origin document, hence
+      // passing the target URL for the driver to land on first.
+      const _canCookieJar =
+        "setCookies" in page &&
+        typeof (page as unknown as { setCookies?: unknown }).setCookies === "function";
+      if (cookieModeEnabled && _canCookieJar && !dumpStorageState) {
+        try {
+          const saved = (await loadBrowserSession(taskId, cookieSessionKey)) as
+            | { cookies?: Array<Record<string, unknown>> }
+            | null;
+          const jar = saved?.cookies ?? [];
+          if (jar.length) {
+            const added = await (page as unknown as {
+              setCookies: (c: Array<Record<string, unknown>>, url?: string) => Promise<number>;
+            }).setCookies(jar, task.targetUrl || undefined);
+            emitTaskProgress(taskId, `Restored ${added} saved cookie(s)-¦`);
+            logger.info({ taskId, cookieSessionKey, added, of: jar.length }, "Cookie mode — cookies restored (cf-proxy)");
+          }
+        } catch (ckErr) {
+          logger.warn({ taskId, ckErr }, "Cookie mode — restore failed (continuing; login step will run)");
+        }
+      }
+
       try {
         await Promise.race([
           (async () => {
@@ -458,6 +485,23 @@ import path from "path";
                   if (state) await saveBrowserSession(taskId, state, cookieSessionKey);
                 } catch (persistErr) {
                   logger.warn({ taskId, persistErr }, "Failed to persist cookie-mode session");
+                }
+              } else if (
+                "getCookies" in page &&
+                typeof (page as unknown as { getCookies?: unknown }).getCookies === "function"
+              ) {
+                // cf-proxy backend: no storageState dumper — persist the cookie jar in
+                // the same {cookies:[...]} shape so restore works either way.
+                try {
+                  const jar = await (page as unknown as {
+                    getCookies: () => Promise<Array<Record<string, unknown>>>;
+                  }).getCookies();
+                  if (jar.length) {
+                    await saveBrowserSession(taskId, { cookies: jar }, cookieSessionKey);
+                    logger.info({ taskId, cookieSessionKey, count: jar.length }, "Cookie mode — jar persisted (cf-proxy)");
+                  }
+                } catch (persistErr) {
+                  logger.warn({ taskId, persistErr }, "Failed to persist cookie-mode jar");
                 }
               }
             }

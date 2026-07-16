@@ -275,6 +275,36 @@
       return (await r()) ?? false;
     }
 
+    /**
+     * Cookie jar access for cookie-mode session reuse. The cf-proxy backend has no
+     * Playwright storageState, so sessions are persisted as a plain cookie list —
+     * this is what makes cookieMode actually do something on this backend.
+     */
+    async getCookies(): Promise<Array<Record<string, unknown>>> {
+      try {
+        const data = await cfGet(this.baseUrl, `/sessions/${this.sid}/cookies`);
+        return ((data as { cookies?: Array<Record<string, unknown>> }).cookies ?? []);
+      } catch (err) {
+        logger.debug({ err }, "getCookies via cf-proxy failed");
+        return [];
+      }
+    }
+
+    /** Inject cookies. `url` is navigated first so add_cookie accepts same-origin cookies. */
+    async setCookies(cookies: Array<Record<string, unknown>>, url?: string): Promise<number> {
+      if (!cookies.length) return 0;
+      try {
+        const data = await cfPost(this.baseUrl, `/sessions/${this.sid}/cookies`, {
+          cookies,
+          ...(url ? { url } : {}),
+        });
+        return Number((data as { added?: number }).added ?? 0);
+      } catch (err) {
+        logger.warn({ err }, "setCookies via cf-proxy failed");
+        return 0;
+      }
+    }
+
     /** Per-task cap on WARP IP rotations (browserConfig.warpRotations); null = use the env default. */
     maxProxyRotations(): number | null {
       const v = this._maxRotations;

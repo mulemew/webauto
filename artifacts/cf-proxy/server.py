@@ -1577,6 +1577,63 @@ def get_cookies(sid):
         return _err(str(e), 500)
 
 
+@app.route("/sessions/<sid>/cookies", methods=["POST"])
+def set_cookies(sid):
+    """Inject cookies into the session (the write side of GET /cookies).
+
+    Body: {"cookies": [{name, value, domain?, path?, ...}, ...], "url": "https://..."}
+
+    add_cookie only accepts cookies for the CURRENT document's domain, so when `url`
+    is supplied we navigate there first (a cheap same-origin load) before adding.
+    Cookies whose domain doesn't match are skipped by the driver — we report how many
+    actually landed rather than pretending they all did.
+    """
+    s = _get(sid)
+    if not s:
+        return _err("Session not found")
+    body = request.json or {}
+    cookies = body.get("cookies") or []
+    url = (body.get("url") or "").strip()
+    if not isinstance(cookies, list) or not cookies:
+        return _err("no cookies provided", 400)
+
+    def _fn(sb):
+        d = sb.driver
+        if url:
+            try:
+                d.get(url)
+            except Exception as e:
+                print(f"[cookies] pre-navigate failed: {e}", flush=True)
+        added, skipped = 0, []
+        for c in cookies:
+            if not isinstance(c, dict) or not c.get("name"):
+                continue
+            ck = {"name": c["name"], "value": str(c.get("value", ""))}
+            for k in ("domain", "path", "secure", "httpOnly", "expiry", "sameSite"):
+                if c.get(k) is not None:
+                    ck[k] = c[k]
+            # Selenium wants `expiry` as int seconds; Playwright-style dumps use
+            # `expires` as a float — normalise so restored sessions keep their TTL.
+            if "expires" in c and c["expires"] not in (None, -1) and "expiry" not in ck:
+                try:
+                    ck["expiry"] = int(float(c["expires"]))
+                except Exception:
+                    pass
+            try:
+                d.add_cookie(ck)
+                added += 1
+            except Exception as e:
+                skipped.append(f"{c['name']}: {e}")
+        return {"added": added, "skipped": skipped, "total": len(cookies)}
+
+    try:
+        res = s.run(_fn, timeout=30)
+        print(f"[cookies] injected {res['added']}/{res['total']}", flush=True)
+        return jsonify({"ok": True, **res})
+    except Exception as e:
+        return _err(str(e), 500)
+
+
 @app.route("/sessions/<sid>/keyboard/type", methods=["POST"])
 def keyboard_type(sid):
     s = _get(sid)
