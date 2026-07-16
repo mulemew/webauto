@@ -626,6 +626,7 @@ export async function clickTurnstileCheckbox(page: PageAdapter): Promise<boolean
  */
 export async function bypassCloudflareChallenge(
   page: PageAdapter,
+  opts?: { deadline?: number },
 ): Promise<"passed" | "failed" | "blocked" | "not_detected"> {
   const challengeType = await detectCfChallenge(page);
   if (challengeType === "none") return "not_detected";
@@ -649,6 +650,12 @@ export async function bypassCloudflareChallenge(
 
   if (challengeType === "js_challenge") {
     for (let attempt = 1; attempt <= 10; attempt++) {
+      // Respect the caller's overall time budget. Each attempt costs ~5-10s, so 10
+      // attempts x several bypass rounds used to stack up to 10+ minutes of blocking.
+      if (opts?.deadline && Date.now() > opts.deadline) {
+        logger.warn({ attempt }, "Cloudflare bypass hit its time budget — giving up");
+        return "failed";
+      }
       // Expand any hidden Turnstile containers before interaction
       try { await page.evaluate(EXPAND_TURNSTILE_JS as unknown as string); } catch { /* ignore */ }
       // Full human presence simulation (mouse + scroll + keyboard)
@@ -759,12 +766,21 @@ export async function bypassCloudflareChallenge(
  */
 export async function clearCloudflareInterstitial(
   page: PageAdapter,
-  opts?: { url?: string; maxReloads?: number },
+  opts?: { url?: string; maxReloads?: number; budgetMs?: number },
 ): Promise<boolean> {
   const maxReloads = opts?.maxReloads ?? 2;
+  // Wall-clock budget for the WHOLE clear. Without it, (maxReloads+1) rounds x 10
+  // internal attempts x ~5-10s each (plus a 30s goto per round) could block a task
+  // for 10+ minutes before failing. Tunable via CF_CLEAR_BUDGET_MS.
+  const budgetMs = opts?.budgetMs ?? Number(process.env.CF_CLEAR_BUDGET_MS ?? 90_000);
+  const deadline = Date.now() + budgetMs;
 
   for (let round = 0; round <= maxReloads; round++) {
-    const result = await bypassCloudflareChallenge(page);
+    if (Date.now() > deadline) {
+      logger.warn({ round, budgetMs }, "Cloudflare interstitial clear exceeded its time budget — aborting");
+      return false;
+    }
+    const result = await bypassCloudflareChallenge(page, { deadline });
     if (result === "not_detected" || result === "passed") {
       if (round > 0) logger.info({ round }, "Cloudflare interstitial cleared after reload");
       return true;
@@ -789,7 +805,7 @@ export async function clearCloudflareInterstitial(
   }
 
   // Final status check — the challenge may have cleared during the last wait.
-  const finalType = await bypassCloudflareChallenge(page);
+  const finalType = await bypassCloudflareChallenge(page, { deadline });
   return finalType === "not_detected" || finalType === "passed";
 }
 
