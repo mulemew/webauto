@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useListTasks, useGetTasksSummary, useRunTask, useGetTasksHistory, useToggleTaskEnabled, getListTasksQueryKey, getGetTasksSummaryQueryKey, getGetTasksHistoryQueryKey } from "@workspace/api-client-react";
 import { Link } from "wouter";
-import { Plus, Play, Clock, CheckCircle2, XCircle, Activity, Loader2, ArrowRight, AlertTriangle, X, BarChart2, CalendarClock, Timer } from "lucide-react";
+import { Plus, Play, Clock, CheckCircle2, XCircle, Activity, Loader2, ArrowRight, AlertTriangle, X, BarChart2, CalendarClock, Timer, Copy } from "lucide-react";
 import { FaWindows, FaApple, FaLinux, FaAndroid } from "react-icons/fa";
 import type { IconType } from "react-icons";
 import { Button } from "@/components/ui/button";
@@ -424,6 +424,18 @@ export default function Home() {
         .catch(() => toast({ title: t.failedToCancel, variant: "destructive" }));
     };
 
+  /** Duplicate a task. The clone lands disabled so it can be reviewed before it runs. */
+  const handleClone = (id: number) => {
+    fetch(`${BASE}/api/tasks/${id}/clone`, { method: "POST" })
+      .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+      .then(() => {
+        toast({ title: t.taskCloned, description: t.taskClonedDesc, variant: "success" });
+        queryClient.invalidateQueries({ queryKey: getListTasksQueryKey() });
+        queryClient.invalidateQueries({ queryKey: getGetTasksSummaryQueryKey() });
+      })
+      .catch(() => toast({ title: t.failedToClone, variant: "destructive" }));
+  };
+
     const handleRun = (id: number) => {
     setRunningTaskIds((prev) => new Set([...prev, id]));
     setFastPollUntil(Date.now() + 30_000);
@@ -623,6 +635,15 @@ export default function Home() {
                         {task.status === "needs_attention" ? "Retry" : "Run"}
                       </Button>
                     )}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                    title={t.cloneTask}
+                    onClick={() => handleClone(task.id)}
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </Button>
                   <Link href={`/tasks/${task.id}`}>
                     <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground group-hover:text-foreground">
                       <ArrowRight className="h-4 w-4" />

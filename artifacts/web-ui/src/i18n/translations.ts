@@ -51,6 +51,10 @@ export interface Translations {
     taskEnabledDesc: string;
     taskDisabled: string;
     taskDisabledDesc: string;
+    cloneTask: string;
+    taskCloned: string;
+    taskClonedDesc: string;
+    failedToClone: string;
     cancelRequested: string;
     cancelRequestedDesc: string;
     // Status
@@ -390,6 +394,10 @@ export interface Translations {
     taskEnabledDesc: "任务将按计划运行。",
     taskDisabled: "任务已禁用",
     taskDisabledDesc: "任务已暂停，不会触发。",
+    cloneTask: "克隆任务",
+    taskCloned: "任务已克隆",
+    taskClonedDesc: "副本已创建（默认未启用），请检查后再开启。",
+    failedToClone: "克隆失败",
     cancelRequested: "取消请求已发送",
     cancelRequestedDesc: "任务即将停止。",
     neverRun: "从未运行",
@@ -709,6 +717,10 @@ export interface Translations {
     taskEnabledDesc: "The task will run on schedule.",
     taskDisabled: "Task disabled",
     taskDisabledDesc: "The task has been paused.",
+    cloneTask: "Clone task",
+    taskCloned: "Task cloned",
+    taskClonedDesc: "The copy was created disabled — review it before enabling.",
+    failedToClone: "Clone failed",
     cancelRequested: "Cancel requested",
     cancelRequestedDesc: "The task will stop shortly.",
     neverRun: "never run",

@@ -663,6 +663,43 @@ router.delete("/tasks/:id", async (req, res): Promise<void> => {
   res.sendStatus(204);
 });
 
+/**
+ * Clone a task: copies steps + browserConfig + schedule into a new "<name> (copy)"
+ * task. The clone starts DISABLED and idle so it never fires on its schedule before
+ * you've reviewed it, and it gets no run history. Credentials referenced by login
+ * steps are saved_credentials ids, so the clone reuses them without duplicating
+ * secrets.
+ */
+router.post("/tasks/:id/clone", async (req, res): Promise<void> => {
+  const params = GetTaskParams.safeParse(req.params);
+  if (!params.success) {
+    res.status(400).json({ error: params.error.message });
+    return;
+  }
+  const [src] = await db.select().from(tasksTable).where(eq(tasksTable.id, params.data.id));
+  if (!src) {
+    res.status(404).json({ error: "Task not found" });
+    return;
+  }
+  const [clone] = await db
+    .insert(tasksTable)
+    .values({
+      name: `${src.name} (copy)`,
+      targetUrl: src.targetUrl,
+      loginType: src.loginType,
+      steps: src.steps,
+      cronExpression: src.cronExpression,
+      browserConfig: src.browserConfig,
+      exitGeo: src.exitGeo,
+      status: "idle",
+      enabled: false,
+    })
+    .returning();
+
+  req.log.info({ from: src.id, to: clone.id }, "Task cloned");
+  res.status(201).json(GetTaskResponse.parse(clone));
+});
+
 router.post("/tasks/:id/run", async (req, res): Promise<void> => {
   const params = RunTaskParams.safeParse(req.params);
   if (!params.success) {
