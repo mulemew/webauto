@@ -188,6 +188,13 @@ interface BrowserConfigState {
   fpAutoGeo: boolean;
 }
 
+/** URL-safe random token for the webhook's Authorization header. */
+function genWebhookToken(): string {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 const defaultBrowserConfig: BrowserConfigState = {
   enabled: false,
   provider: "playwright",
@@ -278,6 +285,8 @@ export default function TaskForm() {
   const [savedCredentials, setSavedCredentials] = useState<
     Array<{ id: number; name: string; username: string }>
   >([]);
+  const [webhookEnabled, setWebhookEnabled] = useState(false);
+  const [webhookToken, setWebhookToken] = useState("");
   const [browserConfig, setBrowserConfig] =
     useState<BrowserConfigState>(defaultBrowserConfig);
   const [browserConfigExpanded, setBrowserConfigExpanded] = useState(false);
@@ -376,6 +385,8 @@ export default function TaskForm() {
           task.retryIntervalMinutes != null ? String(task.retryIntervalMinutes) : "",
         steps: (task.steps as WorkflowStep[] | null | undefined) ?? [],
       });
+      setWebhookEnabled(task.webhookEnabled === true);
+      setWebhookToken(task.webhookToken ?? "");
 
       // Load browserConfig from task
       const bc = task.browserConfig as
@@ -485,6 +496,10 @@ export default function TaskForm() {
             cronExpression: cronValue,
             retryCount: retryCountValue,
             retryIntervalMinutes: retryIntervalValue,
+            webhookEnabled,
+            // A token is required for the webhook to work at all; mint one rather
+            // than persisting "enabled with no token" (which always 401s).
+            webhookToken: webhookEnabled ? webhookToken || genWebhookToken() : null,
             steps: stepsPayload,
             browserConfig: browserConfigPayload,
           },
@@ -520,6 +535,10 @@ export default function TaskForm() {
             cronExpression: cronValue,
             retryCount: retryCountValue,
             retryIntervalMinutes: retryIntervalValue,
+            webhookEnabled,
+            // A token is required for the webhook to work at all; mint one rather
+            // than persisting "enabled with no token" (which always 401s).
+            webhookToken: webhookEnabled ? webhookToken || genWebhookToken() : null,
             steps: stepsPayload,
             browserConfig: browserConfigPayload,
           },
@@ -797,6 +816,64 @@ export default function TaskForm() {
                   留空或 0 = 不重试（失败后等下一次定时触发）。重试次数按<strong>连续失败</strong>计算，
                   成功一次就清零；用完仍失败则回到正常调度。手动取消的运行不会重试。
                 </p>
+              </div>
+
+              {/* Webhook trigger — lets an external monitor fire this task. */}
+              <div className="space-y-2 pt-4 mt-4 border-t border-border">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <FormLabel className="text-sm font-medium">Webhook 触发</FormLabel>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      开启后，第三方监控（Uptime Kuma 等）检测到服务挂掉时可以直接调用这个地址触发本任务。
+                    </p>
+                  </div>
+                  <Switch
+                    checked={webhookEnabled}
+                    onCheckedChange={(v) => {
+                      setWebhookEnabled(v);
+                      // A webhook with no token would be refused anyway — mint one on
+                      // enable so it works immediately instead of silently 401-ing.
+                      if (v && !webhookToken) setWebhookToken(genWebhookToken());
+                    }}
+                  />
+                </div>
+                {webhookEnabled && (
+                  <div className="space-y-2 pt-1">
+                    <div className="space-y-1">
+                      <FormLabel className="text-xs">Authorization</FormLabel>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          className="font-mono text-xs h-9"
+                          value={webhookToken}
+                          onChange={(e) => setWebhookToken(e.target.value)}
+                          placeholder="（自动生成）"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-9 shrink-0"
+                          onClick={() => setWebhookToken(genWebhookToken())}
+                        >
+                          重新生成
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="rounded-md bg-muted/40 border border-border p-2.5 space-y-1">
+                      <p className="text-[10px] text-muted-foreground">
+                        {isEditMode ? "在监控里这样配（保存后生效）：" : "保存任务后，用下面的方式调用："}
+                      </p>
+                      <pre className="text-[10px] font-mono whitespace-pre-wrap break-all leading-relaxed">
+{`POST ${typeof window !== "undefined" ? window.location.origin : ""}/api/tasks/${taskId ?? "<任务ID>"}/webhook
+Authorization: Bearer ${webhookToken || "<token>"}`}
+                      </pre>
+                      <p className="text-[10px] text-muted-foreground leading-snug">
+                        token 不对、webhook 未开启、或任务不存在，都统一返回 <code>401</code>（避免被拿去探测任务是否存在）。
+                        任务被停用返回 <code>409</code>。这个接口<strong>不需要登录</strong>，只认这个 token —— 请当密码保管。
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>

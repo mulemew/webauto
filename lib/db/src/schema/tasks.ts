@@ -31,6 +31,11 @@ export const tasksTable = pgTable("tasks", {
   retryIntervalMinutes: integer("retry_interval_minutes"),
   // How many retries the CURRENT failure streak has already used; reset on success.
   retryAttempt: integer("retry_attempt").notNull().default(0),
+  // Webhook trigger: POST /api/tasks/:id/webhook with this bearer token runs the task.
+  // Lets an external monitor (Uptime Kuma et al) fire a recovery task when it sees a
+  // service go down. Disabled unless webhookEnabled AND a token is set.
+  webhookEnabled: boolean("webhook_enabled").notNull().default(false),
+  webhookToken: text("webhook_token"),
 });
 
 export const insertTaskSchema = createInsertSchema(tasksTable).omit({ id: true, createdAt: true, updatedAt: true });

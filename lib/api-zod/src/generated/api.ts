@@ -279,6 +279,8 @@ export const ListTasksResponseItem = zod.object({
   cronExpression: zod.string().nullish(),
   retryCount: zod.number().nullish(),
   retryIntervalMinutes: zod.number().nullish(),
+  webhookEnabled: zod.boolean().nullish(),
+  webhookToken: zod.string().nullish(),
   status: zod
     .enum(["idle", "queued", "running", "success", "failed", "needs_attention"])
     .describe(
@@ -578,6 +580,8 @@ export const CreateTaskBody = zod.object({
   cronExpression: zod.string().nullish(),
   retryCount: zod.number().nullish(),
   retryIntervalMinutes: zod.number().nullish(),
+  webhookEnabled: zod.boolean().nullish(),
+  webhookToken: zod.string().nullish(),
   browserConfig: zod
     .union([
       zod
@@ -866,6 +870,8 @@ export const GetTaskResponse = zod
     cronExpression: zod.string().nullish(),
     retryCount: zod.number().nullish(),
     retryIntervalMinutes: zod.number().nullish(),
+    webhookEnabled: zod.boolean().nullish(),
+    webhookToken: zod.string().nullish(),
     status: zod
       .enum(["idle", "queued", "running", "success", "failed", "needs_attention"])
       .describe(
@@ -1182,6 +1188,8 @@ export const UpdateTaskBody = zod.object({
   cronExpression: zod.string().nullish(),
   retryCount: zod.number().nullish(),
   retryIntervalMinutes: zod.number().nullish(),
+  webhookEnabled: zod.boolean().nullish(),
+  webhookToken: zod.string().nullish(),
   browserConfig: zod
     .union([
       zod
@@ -1458,6 +1466,8 @@ export const UpdateTaskResponse = zod.object({
   cronExpression: zod.string().nullish(),
   retryCount: zod.number().nullish(),
   retryIntervalMinutes: zod.number().nullish(),
+  webhookEnabled: zod.boolean().nullish(),
+  webhookToken: zod.string().nullish(),
   status: zod
     .enum(["idle", "queued", "running", "success", "failed", "needs_attention"])
     .describe(

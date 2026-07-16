@@ -497,6 +497,12 @@ export interface Task {
   /** Minutes between retry attempts (default 5).
    * @nullable */
   retryIntervalMinutes?: number | null;
+  /** Allow POST /api/tasks/{id}/webhook (bearer webhookToken) to trigger this task.
+   * @nullable */
+  webhookEnabled?: boolean | null;
+  /** Bearer token the webhook caller must present.
+   * @nullable */
+  webhookToken?: string | null;
   /** idle=not yet run, queued=waiting for a concurrency slot, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution */
   status: TaskStatus;
   /** @nullable */
@@ -545,6 +551,12 @@ export interface CreateTaskBody {
   /** Minutes between retry attempts (default 5).
    * @nullable */
   retryIntervalMinutes?: number | null;
+  /** Allow POST /api/tasks/{id}/webhook (bearer webhookToken) to trigger this task.
+   * @nullable */
+  webhookEnabled?: boolean | null;
+  /** Bearer token the webhook caller must present.
+   * @nullable */
+  webhookToken?: string | null;
   /** Per-task browser backend override. Null uses global settings. */
   browserConfig?: TaskBrowserConfig | null;
 }
@@ -563,6 +575,12 @@ export interface UpdateTaskBody {
   /** Minutes between retry attempts (default 5).
    * @nullable */
   retryIntervalMinutes?: number | null;
+  /** Allow POST /api/tasks/{id}/webhook (bearer webhookToken) to trigger this task.
+   * @nullable */
+  webhookEnabled?: boolean | null;
+  /** Bearer token the webhook caller must present.
+   * @nullable */
+  webhookToken?: string | null;
   /** Per-task browser backend override. Null uses global settings. */
   browserConfig?: TaskBrowserConfig | null;
 }

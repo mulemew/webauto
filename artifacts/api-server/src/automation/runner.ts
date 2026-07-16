@@ -235,7 +235,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
   export async function runTask(
     taskId: number,
     dryRun = false,
-    triggeredBy: "manual" | "cron" | "dry_run" = "manual",
+    triggeredBy: "manual" | "cron" | "dry_run" | "webhook" = "manual",
   ): Promise<void> {
     if (runningTasks.has(taskId)) {
       logger.warn({ taskId, dryRun }, "Task already running, skipping");

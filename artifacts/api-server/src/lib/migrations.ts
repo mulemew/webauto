@@ -44,6 +44,8 @@ import { pool } from "@workspace/db";
   ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "retry_count" integer;
   ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "retry_interval_minutes" integer;
   ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "retry_attempt" integer NOT NULL DEFAULT 0;
+  ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "webhook_enabled" boolean NOT NULL DEFAULT false;
+  ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "webhook_token" text;
     CREATE TABLE IF NOT EXISTS "sessions" (
     "token"      text        PRIMARY KEY,
     "expires_at" timestamptz NOT NULL,

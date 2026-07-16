@@ -882,6 +882,14 @@ components:
         retryIntervalMinutes:
           type: ["integer", "null"]
           description: Minutes between retry attempts (default 5).
+        webhookEnabled:
+          type: ["boolean", "null"]
+          description: >
+            Allow POST /api/tasks/{id}/webhook (bearer webhookToken) to trigger this
+            task, e.g. from an uptime monitor. Requires webhookToken to be set.
+        webhookToken:
+          type: ["string", "null"]
+          description: Bearer token the webhook caller must present.
         status:
           type: string
           enum: [idle, queued, running, success, failed, needs_attention]
@@ -958,6 +966,14 @@ components:
         retryIntervalMinutes:
           type: ["integer", "null"]
           description: Minutes between retry attempts (default 5).
+        webhookEnabled:
+          type: ["boolean", "null"]
+          description: >
+            Allow POST /api/tasks/{id}/webhook (bearer webhookToken) to trigger this
+            task, e.g. from an uptime monitor. Requires webhookToken to be set.
+        webhookToken:
+          type: ["string", "null"]
+          description: Bearer token the webhook caller must present.
         browserConfig:
           oneOf:
             - $ref: "#/components/schemas/TaskBrowserConfig"
@@ -1003,6 +1019,14 @@ components:
         retryIntervalMinutes:
           type: ["integer", "null"]
           description: Minutes between retry attempts (default 5).
+        webhookEnabled:
+          type: ["boolean", "null"]
+          description: >
+            Allow POST /api/tasks/{id}/webhook (bearer webhookToken) to trigger this
+            task, e.g. from an uptime monitor. Requires webhookToken to be set.
+        webhookToken:
+          type: ["string", "null"]
+          description: Bearer token the webhook caller must present.
         browserConfig:
           oneOf:
             - $ref: "#/components/schemas/TaskBrowserConfig"
