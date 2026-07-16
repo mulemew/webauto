@@ -879,10 +879,9 @@ export function StepEditor({ steps, onChange, taskTargetUrl = "", savedCredentia
           No steps yet — add a Login step first if authentication is needed, then chain your actions.
         </div>
       ) : (
-        {/* values must be a FRESH array each render: Reorder tracks order by the
-            identity of the array it's given, and keysRef.current is one long-lived
-            object we mutate in place — handing that in made Reorder blow up during
-            render and blank the whole form. */}
+        // values must be a FRESH array each render: Reorder tracks order by the
+        // identity of the array it's given, and keysRef.current is one long-lived
+        // object we mutate in place, so its identity never changes.
         <Reorder.Group axis="y" values={[...keysRef.current]} onReorder={handleReorder} className="space-y-2">
           {steps.map((step, i) => (
             <DraggableStepItem key={keysRef.current[i] ?? i} itemKey={keysRef.current[i] ?? String(i)}>
