@@ -1020,13 +1020,55 @@ export async function detectAndHandleCaptcha(
     // whisper) and Playwright backends. This is what makes cfVerify / login pass
     // reCAPTCHA on sites like host2play.gratis without a paid solver.
     if (type === "reCAPTCHA") {
-      const audio = await solveRecaptchaAudio(page);
+      let audio = await solveRecaptchaAudio(page);
+
+      // ── IP-block → rotate the exit IP and retry ────────────────────────────
+      // "automated queries" means Google refused the audio challenge for this
+      // egress IP — no STT/fingerprint/mouse work can fix that. The only lever is
+      // a different IP. When the proxy can rotate (WARP), register a new identity
+      // and try again: sing-box restarts on the same local SOCKS port, so the
+      // browser and the page/form state are untouched — we just re-run the solve
+      // from a fresh egress. Some attempts also pass on the checkbox outright.
+      const canRotate =
+        "rotateProxy" in page &&
+        typeof (page as unknown as { rotateProxy?: unknown }).rotateProxy === "function";
+      const maxRotations = Number(process.env.RECAPTCHA_MAX_IP_ROTATIONS ?? 5);
+      let rotations = 0;
+      while (audio.blocked && canRotate && rotations < maxRotations) {
+        rotations++;
+        logger.warn(
+          { attempt: rotations, maxRotations },
+          "reCAPTCHA audio blocked for this exit IP — rotating proxy IP and retrying",
+        );
+        const rotated = await (page as unknown as { rotateProxy: () => Promise<boolean> })
+          .rotateProxy()
+          .catch(() => false);
+        if (!rotated) {
+          logger.warn("proxy rotation unavailable/failed — giving up on IP rotation");
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 1500)); // let the new tunnel settle
+        audio = await solveRecaptchaAudio(page);
+      }
+
       if (audio.solved) {
-        return { detected: true, solved: true, message: audio.message };
+        return {
+          detected: true,
+          solved: true,
+          message: rotations > 0 ? `${audio.message} (after ${rotations} IP rotation(s))` : audio.message,
+        };
       }
       if (audio.blocked) {
-        // IP-level block — no STT can fix this; surface for attention/rotation.
-        return { detected: true, solved: false, needsAttention: true, message: audio.message };
+        // Still blocked after exhausting rotations (or nothing to rotate).
+        return {
+          detected: true,
+          solved: false,
+          needsAttention: true,
+          message:
+            rotations > 0
+              ? `${audio.message} — still blocked after ${rotations} IP rotation(s).`
+              : audio.message,
+        };
       }
       if (!solver) {
         return {

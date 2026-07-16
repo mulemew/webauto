@@ -255,6 +255,18 @@
      * This is the most reliable way to solve Turnstile on cf-proxy because it uses
      * OS-level clicks that CF cannot detect.
      */
+    /**
+     * Swap the proxy's exit IP in place (WARP: register a new identity and restart
+     * sing-box on the same local SOCKS port). The browser keeps its proxy setting —
+     * only the egress changes — so the session/page survive. Returns false when the
+     * proxy type can't rotate.
+     */
+    async rotateProxy(): Promise<boolean> {
+      const r = this._resolvedProxy?.rotate;
+      if (!r) return false;
+      return (await r()) ?? false;
+    }
+
     async clickTurnstile(maxRetries = 3): Promise<boolean> {
       try {
         const data = await cfPost(this.baseUrl, `/sessions/${this.sid}/click-turnstile`, {
