@@ -31,6 +31,33 @@ const DATA_DIR = process.env.DATA_DIR ?? path.join(process.cwd(), "data");
 
 const router: IRouter = Router();
 
+/**
+ * Reconcile the API's nullable task fields with the columns' types.
+ *
+ * The API models "clear this value" as an explicit null, but the drizzle columns
+ * don't all accept one: webhook_enabled is NOT NULL DEFAULT false, so a null there
+ * has to become false. Spreading the parsed body straight into .values()/.set() is
+ * what broke the build. Only keys actually present are returned, so this can be
+ * spread over taskFields without resurrecting fields the caller never sent (which
+ * would wipe them on a PATCH-style update).
+ */
+function normalizeNullableTaskFields(
+  fields: Partial<{
+    retryCount: number | null;
+    retryIntervalMinutes: number | null;
+    webhookEnabled: boolean | null;
+    webhookToken: string | null;
+  }>,
+): Partial<typeof tasksTable.$inferInsert> {
+  const out: Partial<typeof tasksTable.$inferInsert> = {};
+  if ("retryCount" in fields) out.retryCount = fields.retryCount ?? null;
+  if ("retryIntervalMinutes" in fields) out.retryIntervalMinutes = fields.retryIntervalMinutes ?? null;
+  // NOT NULL column — null means "off".
+  if ("webhookEnabled" in fields) out.webhookEnabled = fields.webhookEnabled ?? false;
+  if ("webhookToken" in fields) out.webhookToken = fields.webhookToken ?? null;
+  return out;
+}
+
 // ── Exit-IP geolocation (cached in tasks.exit_geo) ───────────────────────────
 // Resolved in the background on create/update (and on manual re-detect) so the
 // task list + detail card can show the exit country/flag without a live proxy
@@ -285,6 +312,7 @@ router.post("/tasks", async (req, res): Promise<void> => {
     .insert(tasksTable)
     .values({
       ...taskFields,
+      ...normalizeNullableTaskFields(taskFields),
       steps: sanitizedSteps,
       cronExpression: cronExpression ?? null,
       browserConfig: browserConfig ?? null,
@@ -590,7 +618,10 @@ router.put("/tasks/:id", async (req, res): Promise<void> => {
 
   const { credentials, steps, cronExpression, browserConfig, ...taskFields } = parsed.data;
 
-  const updateData: Partial<typeof tasksTable.$inferInsert> = { ...taskFields };
+  const updateData: Partial<typeof tasksTable.$inferInsert> = {
+    ...taskFields,
+    ...normalizeNullableTaskFields(taskFields),
+  };
   if (steps !== undefined) {
     updateData.steps = await promoteInlineCredentials(steps, req.log);
   }
