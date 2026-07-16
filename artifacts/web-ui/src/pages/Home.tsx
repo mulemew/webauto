@@ -562,9 +562,14 @@ export default function Home() {
                       <span className="flex items-center gap-1">
                         <TerminalIcon className="h-3 w-3" />
                         {(() => {
-                            const loginStep = (task.steps ?? []).find((s) => s.type === 'login') as { loginMethod?: string } | undefined;
-                            const method = loginStep?.loginMethod ?? task.loginType;
-                            return { form: 'Form Login', github: 'GitHub OAuth', google: 'Google OAuth' }[method as string] ?? method ?? '—';
+                            // A task only logs in if it HAS a login step. `task.loginType`
+                            // is a legacy column that defaults to 'form' on old rows, so
+                            // falling back to it labelled step-less tasks "Form Login".
+                            const steps = (task.steps ?? []) as Array<{ type?: string; loginMethod?: string }>;
+                            const loginStep = steps.find((s) => s.type === 'login');
+                            if (!loginStep) return 'No login';
+                            const method = loginStep.loginMethod ?? task.loginType;
+                            return { form: 'Form Login', github: 'GitHub OAuth', google: 'Google OAuth' }[method as string] ?? method ?? 'No login';
                           })()}
                       </span>
                       {(() => {
