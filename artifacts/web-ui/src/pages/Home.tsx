@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useListTasks, useGetTasksSummary, useRunTask, useGetTasksHistory, useToggleTaskEnabled, getListTasksQueryKey, getGetTasksSummaryQueryKey, getGetTasksHistoryQueryKey } from "@workspace/api-client-react";
 import { Link } from "wouter";
-import { Plus, Play, Clock, CheckCircle2, XCircle, Activity, Loader2, ArrowRight, AlertTriangle, X, BarChart2, CalendarClock, Timer, Copy, Archive, Download, Upload } from "lucide-react";
+import { Plus, Play, Clock, CheckCircle2, XCircle, Activity, Loader2, ArrowRight, AlertTriangle, X, BarChart2, CalendarClock, Timer, Copy, Archive, Download, Upload, Search } from "lucide-react";
 import { FaWindows, FaApple, FaLinux, FaAndroid } from "react-icons/fa";
 import type { IconType } from "react-icons";
 import { Button } from "@/components/ui/button";
@@ -133,6 +133,41 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
   }
 
   type TaskGeo = { direct?: boolean; ok?: boolean; exitIp?: string; country?: string; countryCode?: string; city?: string; region?: string };
+
+  interface RecentRun { success: boolean; runAt: string; durationMs: number | null }
+
+  /**
+   * Uptime-style outcome squares for a task's last runs (oldest→newest).
+   *
+   * The row only ever showed the LATEST run, so "9 passes and 1 failure" looked
+   * identical to "10 passes". These make a one-off failure obvious without opening
+   * the task; hover gives the timestamp and duration.
+   */
+  function RunSquares({ runs }: { runs: RecentRun[] }) {
+    if (!runs.length) return null;
+    const failed = runs.filter((r) => !r.success).length;
+    return (
+      <TooltipProvider delayDuration={100}>
+        <span className="flex items-center gap-[3px]" title={`最近 ${runs.length} 次：${runs.length - failed} 成功 / ${failed} 失败`}>
+          {runs.map((r, i) => (
+            <Tooltip key={i}>
+              <TooltipTrigger asChild>
+                <span
+                  className={`inline-block h-3 w-[6px] rounded-[1px] ${r.success ? "bg-green-500/70" : "bg-destructive"}`}
+                />
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <p className="text-xs font-mono">
+                  {r.success ? "✓ 成功" : "✗ 失败"} · {format(new Date(r.runAt), "MM-dd HH:mm")}
+                  {r.durationMs != null && ` · ${(r.durationMs / 1000).toFixed(1)}s`}
+                </p>
+              </TooltipContent>
+            </Tooltip>
+          ))}
+        </span>
+      </TooltipProvider>
+    );
+  }
 
   // Country-flag badge for a task row, read from the task's CACHED exit_geo
   // (resolved in the background on create/update). No live query on render.
@@ -267,6 +302,16 @@ export default function Home() {
     refetchInterval: 5_000,
   });
 
+  // Recent outcomes for the uptime squares. Polled less often than last-runs — it's a
+  // trend strip, not a live indicator.
+  const { data: recentRuns } = useQuery<Array<{ taskId: number; runs: RecentRun[] }>>({
+    queryKey: ["task-recent-runs"],
+    queryFn: () => fetch(`${BASE}/api/tasks/recent-runs?limit=12`).then((r) => r.json()),
+    staleTime: 10_000,
+    refetchInterval: 30_000,
+  });
+  const recentRunMap = new Map((recentRuns ?? []).map((r) => [r.taskId, r.runs]));
+
   const setActiveFilter = (filter: FilterValue | null) => {
     const next = new URLSearchParams(search);
     if (filter) {
@@ -367,12 +412,21 @@ export default function Home() {
         return next;
       });
     }, [tasks]);
-  const displayedTasks = activeFilter
+  const statusFiltered = activeFilter
     ? (tasks ?? []).filter((t) => {
         if (activeFilter === "failed") return t.status === "failed" || t.status === "needs_attention";
         return t.status === activeFilter;
       })
     : (tasks ?? []);
+  // Search matches the name AND the target URL — with many tasks on the same panel,
+  // the URL is often what you actually remember.
+  const q = searchQuery.trim().toLowerCase();
+  const displayedTasks = q
+    ? statusFiltered.filter(
+        (t) =>
+          t.name.toLowerCase().includes(q) || (t.targetUrl ?? "").toLowerCase().includes(q),
+      )
+    : statusFiltered;
 
   const toggleFilter = (status: FilterValue) => {
     setActiveFilter(activeFilter === status ? null : status);
@@ -427,6 +481,7 @@ export default function Home() {
 
   /** Hidden <input type=file> driven by the Import menu item. */
   const importInputRef = useRef<HTMLInputElement>(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
   /** Download a JSON backup (or a value-stripped template) of every task. */
   const handleExport = (template: boolean) => {
@@ -509,6 +564,16 @@ export default function Home() {
           <p className="text-muted-foreground mt-1 font-mono text-sm">{t.dashboardSubtitle}</p>
         </div>
         <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={t.searchTasks}
+              className="h-9 w-44 sm:w-60 rounded-md border border-input bg-background pl-8 pr-2 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+          </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" className="shadow-sm gap-2">
@@ -672,6 +737,14 @@ export default function Home() {
                       <span className="flex items-center gap-1 border-l border-border pl-3">
                         <LastRunBadge lastRun={lastRunMap.get(task.id)} />
                       </span>
+                      {(() => {
+                        const runs = recentRunMap.get(task.id);
+                        return runs?.length ? (
+                          <span className="flex items-center border-l border-border pl-3">
+                            <RunSquares runs={runs} />
+                          </span>
+                        ) : null;
+                      })()}
                       {task.cronExpression && task.enabled && (
                         <NextRunBadge nextRunAt={nextRunMap.get(task.id) ?? null} />
                       )}

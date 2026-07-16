@@ -61,6 +61,7 @@ export interface Translations {
     importTasks: string;
     tasksImported: string;
     failedToImport: string;
+    searchTasks: string;
     cancelRequested: string;
     cancelRequestedDesc: string;
     // Status

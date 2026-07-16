@@ -316,6 +316,42 @@ router.post("/tasks", async (req, res): Promise<void> => {
 });
 
 
+/**
+ * Recent run outcomes per task, oldest→newest, for the dashboard's uptime-style
+ * status squares.
+ *
+ * The list only ever showed the LAST run, so a task that fails 1 run in 10 looked
+ * perfectly healthy. Returning the last N outcomes makes the odd failure visible at a
+ * glance without opening the task.
+ *
+ * One query for every task (window function) rather than N queries — the dashboard
+ * polls this.
+ */
+router.get("/tasks/recent-runs", async (req, res): Promise<void> => {
+  const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit ?? "12"), 10) || 12));
+  const rows = await db.execute(sql`
+    SELECT task_id, success, run_at, duration_ms
+    FROM (
+      SELECT task_id, success, run_at, duration_ms,
+             ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY run_at DESC) AS rn
+      FROM logs
+    ) t
+    WHERE rn <= ${limit}
+    ORDER BY task_id, run_at ASC
+  `);
+  const out = new Map<number, Array<{ success: boolean; runAt: string; durationMs: number | null }>>();
+  for (const r of rows.rows as Array<Record<string, unknown>>) {
+    const id = Number(r.task_id);
+    if (!out.has(id)) out.set(id, []);
+    out.get(id)!.push({
+      success: r.success === true,
+      runAt: r.run_at instanceof Date ? r.run_at.toISOString() : String(r.run_at),
+      durationMs: r.duration_ms == null ? null : Number(r.duration_ms),
+    });
+  }
+  res.json(Array.from(out.entries()).map(([taskId, runs]) => ({ taskId, runs })));
+});
+
 router.get("/tasks/last-runs", async (_req, res): Promise<void> => {
   const rows = await db
     .select({
