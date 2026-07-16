@@ -2017,6 +2017,24 @@ def _turnstile_token(sb):
         return ""
 
 
+def _cf_interstitial_present(sb):
+    """True while a FULL-PAGE Cloudflare challenge ("Just a moment…") is showing.
+
+    Unlike an embedded widget there is no cf-turnstile-response token on the page,
+    so the interstitial disappearing IS the success signal.
+    """
+    try:
+        return bool(sb.execute_script(
+            "return !!(document.querySelector("
+            "'#challenge-stage, #challenge-running, #cf-challenge-running, "
+            "#challenge-form, .cf-browser-verification, #cf-chl-widget') || "
+            "/just a moment|checking your browser|checking if the site connection is secure/i"
+            ".test(document.title || ''));"
+        ))
+    except Exception:
+        return False
+
+
 def _poll_turnstile_token(sb, secs):
     """Wait for the Turnstile token for up to `secs`.
 
@@ -2137,13 +2155,13 @@ def click_turnstile(sid):
                 _wid = _find_session_window(sb)
             except Exception:
                 _wid = None
-            cbxy = _element_abs_xy(sb, 'input[name="cf-turnstile-response"]',
-                                   dx=28, dy_frac=0.5, wid=_wid, parent=True)
-            if cbxy:
-                print(f"[turnstile] coordinate fallback: checkbox at {cbxy}", flush=True)
+
+            def _coord_click_loop(cbxy, done, label):
+                """OS-level click at cbxy, up to 3 tries, polling `done` for 8s each."""
+                print(f"[turnstile] coordinate fallback ({label}): checkbox at {cbxy}", flush=True)
                 for attempt in range(3):
-                    if _turnstile_token(sb):
-                        break
+                    if done():
+                        return attempt + 1
                     try:
                         with _gui_lock:
                             _raise_window(_wid)
@@ -2155,8 +2173,38 @@ def click_turnstile(sid):
                         print(f"[turnstile] coord click err: {e}", flush=True)
                     for _ in range(16):
                         time.sleep(0.5)
-                        if _turnstile_token(sb):
-                            return {"solved": True, "method": "coord", "attempt": attempt + 1}
+                        if done():
+                            return attempt + 1
+                return None
+
+            # (a) Embedded widget: the hidden cf-turnstile-response input is in the
+            # light DOM and its PARENT is the rendered widget.
+            cbxy = _element_abs_xy(sb, 'input[name="cf-turnstile-response"]',
+                                   dx=28, dy_frac=0.5, wid=_wid, parent=True)
+            if cbxy:
+                hit = _coord_click_loop(cbxy, lambda: bool(_turnstile_token(sb)), "embedded")
+                if hit:
+                    return {"solved": True, "method": "coord", "attempt": hit}
+
+            # (b) FULL-PAGE interstitial ("Just a moment…"): there is no
+            # cf-turnstile-response input at all — the checkbox lives in the challenge
+            # iframe, and success is the interstitial going away, not a token. This is
+            # the case uc_gui_click_captcha misses when it can't image-match the box.
+            if _cf_interstitial_present(sb):
+                cbxy = _element_abs_xy(
+                    sb,
+                    "iframe[src*='challenges.cloudflare.com'], #challenge-stage iframe, "
+                    "#cf-chl-widget iframe, .cf-turnstile iframe",
+                    dx=30, dy_frac=0.5, wid=_wid,
+                )
+                if cbxy:
+                    hit = _coord_click_loop(
+                        cbxy,
+                        lambda: (not _cf_interstitial_present(sb)) or bool(_turnstile_token(sb)),
+                        "interstitial",
+                    )
+                    if hit:
+                        return {"solved": True, "method": "coord-interstitial", "attempt": hit}
 
         return {"solved": False, "method": "none", "attempt": 6}
 
