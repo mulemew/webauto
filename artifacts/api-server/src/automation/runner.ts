@@ -1,6 +1,8 @@
 import path from "path";
   import fs from "fs";
+  import { execFile } from "child_process";
   import { db, tasksTable, credentialsTable, savedCredentialsTable, logsTable, eq } from "@workspace/db";
+  import { startLocalProxy } from "./proxy-manager";
   import { logger } from "../lib/logger";
   import { decrypt } from "../lib/encryption";
   import { createBrowserProvider } from "./browser-provider";
@@ -281,6 +283,59 @@ import path from "path";
           const _urlMsg = urlErr instanceof Error ? urlErr.message : String(urlErr);
           emitTaskProgress(taskId, `⚠️ URL pre-check: ${_urlMsg} — proceeding`);
           logger.warn({ taskId, targetUrl: task.targetUrl, err: _urlMsg }, "URL pre-check failed — proceeding");
+        }
+      }
+
+      // ── Proxy precheck — FATAL when the proxy itself can't reach the target ──
+      //
+      // Unlike the informational check above (which dials from the server IP), this
+      // goes THROUGH the task's proxy. If the tunnel is dead or the target is
+      // unreachable via it, the whole run is doomed — better to fail in seconds than
+      // to burn the browser + login + captcha budget first. We only treat a
+      // *connection* failure as fatal: a reachable target answering 403/503 is
+      // normal for non-browser requests behind Cloudflare, so that just informs.
+      {
+        const _bc = (task.browserConfig ?? {}) as { proxyUrl?: string; proxyType?: string };
+        const _proxyUrl = (_bc.proxyUrl ?? "").trim();
+        const _proxyType = (_bc.proxyType ?? "").trim();
+        const _hasProxy = !!(_proxyUrl || _proxyType === "warp");
+        if (_hasProxy && task.targetUrl && stepCount > 0) {
+          emitTaskProgress(taskId, "Pre-checking proxy connectivity-¦");
+          let _probe: Awaited<ReturnType<typeof startLocalProxy>> = null;
+          try {
+            _probe = await startLocalProxy({
+              proxyUrl: _proxyUrl || undefined,
+              proxyType: (_proxyType || undefined) as never,
+            });
+            if (_probe) {
+              const _curlProxy = _probe.serverUrl.replace(/^socks5:\/\//i, "socks5h://");
+              const _code = await new Promise<string>((resolve, reject) => {
+                execFile(
+                  "curl",
+                  ["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "20", "-x", _curlProxy, task.targetUrl],
+                  { timeout: 25_000 },
+                  (err, out) => (err ? reject(err) : resolve(String(out).trim())),
+                );
+              });
+              // curl reports 000 when it never got an HTTP response (tunnel down,
+              // DNS/connect refused, timeout) — that's the fatal case.
+              if (_code === "000" || _code === "") {
+                throw new Error(
+                  `target is unreachable through the configured proxy (${_proxyType || "proxy"}) — ` +
+                    `the proxy is down or the site is blocking it`,
+                );
+              }
+              const _msg = `Proxy precheck: HTTP ${_code} via ${_proxyType || "proxy"}`;
+              emitTaskProgress(taskId, `${_msg}-¦`);
+              collectedStepLogs.unshift({ stepIndex: -1, type: "precheck", success: true, message: _msg });
+            }
+          } catch (proxyErr) {
+            const _m = proxyErr instanceof Error ? proxyErr.message : String(proxyErr);
+            collectedStepLogs.unshift({ stepIndex: -1, type: "precheck", success: false, message: `Proxy precheck failed: ${_m}` });
+            throw new Error(`Proxy precheck failed: ${_m}`);
+          } finally {
+            if (_probe) await _probe.stop().catch(() => {});
+          }
         }
       }
 
