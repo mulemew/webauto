@@ -317,6 +317,7 @@ export const ListTasksResponseItem = zod.object({
           proxyType: zod
             .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2", "tuic", "ss"])
             .nullish(),
+          warpRotations: zod.number().nullish(),
           headed: zod.boolean().nullish(),
           stealth: zod.boolean().nullish(),
           blockAds: zod.boolean().nullish(),
@@ -594,6 +595,7 @@ export const CreateTaskBody = zod.object({
           proxyType: zod
             .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2", "tuic", "ss"])
             .nullish(),
+          warpRotations: zod.number().nullish(),
           headed: zod.boolean().nullish(),
           stealth: zod.boolean().nullish(),
           blockAds: zod.boolean().nullish(),
@@ -896,6 +898,7 @@ export const GetTaskResponse = zod
             proxyType: zod
               .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2", "tuic", "ss"])
               .nullish(),
+            warpRotations: zod.number().nullish(),
             headed: zod.boolean().nullish(),
             stealth: zod.boolean().nullish(),
             blockAds: zod.boolean().nullish(),
@@ -1190,6 +1193,7 @@ export const UpdateTaskBody = zod.object({
           proxyType: zod
             .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2", "tuic", "ss"])
             .nullish(),
+          warpRotations: zod.number().nullish(),
           headed: zod.boolean().nullish(),
           stealth: zod.boolean().nullish(),
           blockAds: zod.boolean().nullish(),
@@ -1480,6 +1484,7 @@ export const UpdateTaskResponse = zod.object({
           proxyType: zod
             .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2", "tuic", "ss"])
             .nullish(),
+          warpRotations: zod.number().nullish(),
           headed: zod.boolean().nullish(),
           stealth: zod.boolean().nullish(),
           blockAds: zod.boolean().nullish(),

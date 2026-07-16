@@ -100,8 +100,16 @@
     private _cachedFrames: FrameAdapter[] = [];
     /** Local sing-box helper backing an advanced proxy — stopped on close(). */
     private _resolvedProxy: ResolvedProxy | null = null;
+    /** Per-task cap on WARP IP rotations (browserConfig.warpRotations); null = env default. */
+    private _maxRotations: number | null = null;
 
-    constructor(baseUrl: string, sid: string, resolvedProxy: ResolvedProxy | null = null) {
+    constructor(
+      baseUrl: string,
+      sid: string,
+      resolvedProxy: ResolvedProxy | null = null,
+      maxRotations: number | null = null,
+    ) {
+      this._maxRotations = maxRotations;
       this.baseUrl = baseUrl;
       this.sid = sid;
       this._resolvedProxy = resolvedProxy;
@@ -265,6 +273,12 @@
       const r = this._resolvedProxy?.rotate;
       if (!r) return false;
       return (await r()) ?? false;
+    }
+
+    /** Per-task cap on WARP IP rotations (browserConfig.warpRotations); null = use the env default. */
+    maxProxyRotations(): number | null {
+      const v = this._maxRotations;
+      return typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.trunc(v)) : null;
     }
 
     async clickTurnstile(maxRetries = 3): Promise<boolean> {
@@ -470,7 +484,12 @@
       }
       const sid = data["session_id"] as string;
       logger.info({ sid, proxied: !!proxyServerUrl }, "SeleniumBase UC session ready");
-      return new SeleniumBasePageAdapter(baseUrl, sid, resolvedProxy);
+      return new SeleniumBasePageAdapter(
+        baseUrl,
+        sid,
+        resolvedProxy,
+        this.config?.warpRotations ?? null,
+      );
     }
 
     async close(): Promise<void> {

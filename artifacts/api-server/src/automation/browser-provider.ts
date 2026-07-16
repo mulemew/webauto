@@ -76,6 +76,12 @@ export interface BrowserProviderConfig {
      */
     proxyType?: ProxyType;
     /**
+     * WARP only. How many times to register a fresh WARP identity (new exit IP) and
+     * retry when reCAPTCHA refuses the audio challenge for the current IP.
+     * undefined/null → fall back to RECAPTCHA_MAX_IP_ROTATIONS. 0 disables rotation.
+     */
+    warpRotations?: number | null;
+    /**
      * Force headed (visible) or headless mode for the local Patchright provider.
      * ─ undefined  → auto: headed when a display (Xvfb/DISPLAY) is available.
      * ─ true       → force headed (best for debugging + CF Turnstile bypass).

@@ -427,6 +427,11 @@ local=local Chromium launch, seleniumbase=CF Proxy bypass mode
   proxyUrl?: string | null;
   /** @nullable */
   proxyType?: TaskBrowserConfigProxyType;
+  /**
+   * WARP only. How many times to register a fresh WARP identity (new exit IP) and retry when Google refuses the reCAPTCHA audio challenge for the current IP. 0 disables rotation.
+   * @nullable
+   */
+  warpRotations?: number | null;
   /** @nullable */
   headed?: boolean | null;
   /** @nullable */

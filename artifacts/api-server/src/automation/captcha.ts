@@ -1032,7 +1032,13 @@ export async function detectAndHandleCaptcha(
       const canRotate =
         "rotateProxy" in page &&
         typeof (page as unknown as { rotateProxy?: unknown }).rotateProxy === "function";
-      const maxRotations = Number(process.env.RECAPTCHA_MAX_IP_ROTATIONS ?? 5);
+      // Per-task browserConfig.warpRotations wins; otherwise the env default.
+      const perTask =
+        "maxProxyRotations" in page &&
+        typeof (page as unknown as { maxProxyRotations?: unknown }).maxProxyRotations === "function"
+          ? (page as unknown as { maxProxyRotations: () => number | null }).maxProxyRotations()
+          : null;
+      const maxRotations = perTask ?? Number(process.env.RECAPTCHA_MAX_IP_ROTATIONS ?? 5);
       let rotations = 0;
       while (audio.blocked && canRotate && rotations < maxRotations) {
         rotations++;

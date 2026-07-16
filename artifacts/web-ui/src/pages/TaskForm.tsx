@@ -170,6 +170,8 @@ interface BrowserConfigState {
   wsEndpoint: string;
   proxyUrl: string;
   proxyType: ProxyType;
+  /** WARP only — how many fresh WARP identities (exit IPs) to try when reCAPTCHA blocks the audio challenge. */
+  warpRotations: string;
   headed: boolean;
   stealth: boolean;
   blockAds: boolean;
@@ -188,6 +190,7 @@ const defaultBrowserConfig: BrowserConfigState = {
   wsEndpoint: "",
   proxyUrl: "",
   proxyType: "http",
+  warpRotations: "",
   headed: false,
   stealth: false,
   blockAds: false,
@@ -377,6 +380,8 @@ export default function TaskForm() {
           wsEndpoint: (bc.wsEndpoint as string) || "",
           proxyUrl: (bc.proxyUrl as string) || "",
           proxyType: (bc.proxyType as ProxyType) || "http",
+          warpRotations:
+            bc.warpRotations === null || bc.warpRotations === undefined ? "" : String(bc.warpRotations),
           headed: (bc.headed as boolean) || false,
           stealth: (bc.stealth as boolean) || false,
           blockAds: (bc.blockAds as boolean) || false,
@@ -408,6 +413,11 @@ export default function TaskForm() {
       wsEndpoint: browserConfig.wsEndpoint || null,
       proxyUrl: proxyUrl || null,
       proxyType: proxyUrl || browserConfig.proxyType === "warp" ? browserConfig.proxyType : null,
+      // WARP-only knob; blank means "use the RECAPTCHA_MAX_IP_ROTATIONS default".
+      warpRotations:
+        browserConfig.proxyType === "warp" && browserConfig.warpRotations.trim() !== ""
+          ? Number(browserConfig.warpRotations)
+          : null,
       headed: browserConfig.headed || null,
       stealth: browserConfig.stealth || null,
       blockAds: browserConfig.blockAds || null,
@@ -912,9 +922,35 @@ export default function TaskForm() {
                         browserConfig.proxyType === "socks5"
                           ? "直接填写代理 URL，Chromium 原生支持。"
                           : browserConfig.proxyType === "warp"
-                            ? "Cloudflare WARP：需在服务器预生成 WireGuard 配置并设置 WARP_CONFIG_PATH。"
+                            ? "Cloudflare WARP：自动注册 WireGuard 身份（无需 wgcf；挂载 WARP_CONFIG_PATH 时优先使用它）。"
                             : "填写节点分享链接。系统会本地启动 sing-box 转成 SOCKS5 供浏览器使用（需安装 sing-box）。"}
                       </p>
+
+                      {/* WARP-only: how many exit IPs to try when reCAPTCHA blocks audio */}
+                      {browserConfig.proxyType === "warp" && (
+                        <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 space-y-1.5">
+                          <label htmlFor="warpRotations" className="block text-sm font-medium">
+                            换 IP 重试次数
+                          </label>
+                          <Input
+                            id="warpRotations"
+                            type="number"
+                            min={0}
+                            max={50}
+                            placeholder="留空 = 用默认值（RECAPTCHA_MAX_IP_ROTATIONS，默认 5）"
+                            value={browserConfig.warpRotations}
+                            onChange={(e) =>
+                              setBrowserConfig((s) => ({ ...s, warpRotations: e.target.value }))
+                            }
+                            className="font-mono text-sm"
+                          />
+                          <p className="text-[11px] text-muted-foreground">
+                            reCAPTCHA 语音验证被拒（"automated queries"）时，注册新的 WARP 身份换一个出口 IP 再试，最多这么多次。
+                            换 IP 时 sing-box 在同一本地端口重启，浏览器和页面状态不受影响；每次重试也会从新 IP 重新点一次
+                            checkbox（有机会直接通过）。填 0 关闭。
+                          </p>
+                        </div>
+                      )}
                     </div>
 
                     {/* Headed / Headless */}
