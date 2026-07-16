@@ -220,6 +220,18 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
     cancelRequested.add(taskId);
   }
 
+  /**
+   * Throw if this run was cancelled. Sprinkled through the STARTUP phase — proxy
+   * precheck, sing-box, cookie restore, browser launch — which happens before the
+   * Promise.race and used to be completely uncancellable: hitting cancel during
+   * those tens of seconds set the flag, nothing looked at it, the task stayed in
+   * runningTasks, and the next run answered 409 "already running" while the user had
+   * been told it was cancelled.
+   */
+  function throwIfCancelled(taskId: number): void {
+    if (cancelRequested.has(taskId)) throw new Error("Task cancelled by user");
+  }
+
   export async function runTask(
     taskId: number,
     dryRun = false,
@@ -442,6 +454,8 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
         }
       }
 
+      throwIfCancelled(taskId); // proxy precheck / sing-box can take tens of seconds
+
       emitTaskProgress(taskId, stepCount > 0 ? `Running ${stepCount} workflow step${stepCount !== 1 ? "s" : ""}-¦` : "No steps configured-¦");
 
       let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
@@ -455,6 +469,14 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
       });
 
       const page = await browserProvider.newPage();
+      // Browser launch is slow — honour a cancel made during it. The page/session
+      // exists now but the try/finally that closes it hasn't been entered yet, so
+      // tear it down by hand before throwing; otherwise cancelling at exactly this
+      // moment would strand a browser session (and its proxy) with nothing to reap it.
+      if (cancelRequested.has(taskId)) {
+        await page.close().catch(() => {});
+        throw new Error("Task cancelled by user");
+      }
       screenshotPage = page;
       let finalPage = page;
       let screenshotPath: string | undefined;
@@ -529,6 +551,10 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
                         getTaskEmitter(taskId).emit("event", { type: "screenshot", message: r.message, screenshotPath: r.screenshotPath });
                       }
                   },
+                  // Actually stop the loop on cancel — the race alone only stopped
+                  // waiting for it, leaving the steps driving the browser in the
+                  // background after the user cancelled.
+                  () => cancelRequested.has(taskId),
                 );
                 finalPage = stepsPage;
                 fullMessage = stepResults.map((r) => r.message).join("\n");

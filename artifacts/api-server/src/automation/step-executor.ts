@@ -111,11 +111,18 @@ const MAX_WAIT_MS = 60_000;
   solver: CaptchaSolver | null,
   targetUrl: string,
   onStepDone?: (result: StepResult) => void,
+  /**
+   * Polled between steps so a cancel actually STOPS the workflow. Without it the
+   * runner's Promise.race only stopped *waiting* for these steps — the loop kept
+   * driving the browser in the background after the user hit cancel.
+   */
+  shouldCancel?: () => boolean,
 ): Promise<{ results: StepResult[]; finalPage: PageAdapter }> {
   const results: StepResult[] = [];
   let currentPage = page;
 
   for (let i = 0; i < steps.length; i++) {
+      if (shouldCancel?.()) throw new Error("Task cancelled by user");
       const step = steps[i];
       const label = `Step ${i + 1} [${step.type}]`;
 
