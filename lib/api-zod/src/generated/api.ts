@@ -277,6 +277,8 @@ export const ListTasksResponseItem = zod.object({
     )
     .nullish(),
   cronExpression: zod.string().nullish(),
+  retryCount: zod.number().nullish(),
+  retryIntervalMinutes: zod.number().nullish(),
   status: zod
     .enum(["idle", "queued", "running", "success", "failed", "needs_attention"])
     .describe(
@@ -574,6 +576,8 @@ export const CreateTaskBody = zod.object({
     )
     .nullish(),
   cronExpression: zod.string().nullish(),
+  retryCount: zod.number().nullish(),
+  retryIntervalMinutes: zod.number().nullish(),
   browserConfig: zod
     .union([
       zod
@@ -860,6 +864,8 @@ export const GetTaskResponse = zod
       )
       .nullish(),
     cronExpression: zod.string().nullish(),
+    retryCount: zod.number().nullish(),
+    retryIntervalMinutes: zod.number().nullish(),
     status: zod
       .enum(["idle", "queued", "running", "success", "failed", "needs_attention"])
       .describe(
@@ -1174,6 +1180,8 @@ export const UpdateTaskBody = zod.object({
     )
     .nullish(),
   cronExpression: zod.string().nullish(),
+  retryCount: zod.number().nullish(),
+  retryIntervalMinutes: zod.number().nullish(),
   browserConfig: zod
     .union([
       zod
@@ -1448,6 +1456,8 @@ export const UpdateTaskResponse = zod.object({
     )
     .nullish(),
   cronExpression: zod.string().nullish(),
+  retryCount: zod.number().nullish(),
+  retryIntervalMinutes: zod.number().nullish(),
   status: zod
     .enum(["idle", "queued", "running", "success", "failed", "needs_attention"])
     .describe(

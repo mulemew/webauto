@@ -491,6 +491,12 @@ export interface Task {
   steps?: WorkflowStep[] | null;
   /** @nullable */
   cronExpression?: string | null;
+  /** Auto-retry after a failed run: extra attempts before giving up. null/0 = no retry.
+   * @nullable */
+  retryCount?: number | null;
+  /** Minutes between retry attempts (default 5).
+   * @nullable */
+  retryIntervalMinutes?: number | null;
   /** idle=not yet run, queued=waiting for a concurrency slot, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution */
   status: TaskStatus;
   /** @nullable */
@@ -533,6 +539,12 @@ export interface CreateTaskBody {
   steps?: WorkflowStep[] | null;
   /** @nullable */
   cronExpression?: string | null;
+  /** Auto-retry after a failed run: extra attempts before giving up. null/0 = no retry.
+   * @nullable */
+  retryCount?: number | null;
+  /** Minutes between retry attempts (default 5).
+   * @nullable */
+  retryIntervalMinutes?: number | null;
   /** Per-task browser backend override. Null uses global settings. */
   browserConfig?: TaskBrowserConfig | null;
 }
@@ -545,6 +557,12 @@ export interface UpdateTaskBody {
   steps?: WorkflowStep[] | null;
   /** @nullable */
   cronExpression?: string | null;
+  /** Auto-retry after a failed run: extra attempts before giving up. null/0 = no retry.
+   * @nullable */
+  retryCount?: number | null;
+  /** Minutes between retry attempts (default 5).
+   * @nullable */
+  retryIntervalMinutes?: number | null;
   /** Per-task browser backend override. Null uses global settings. */
   browserConfig?: TaskBrowserConfig | null;
 }

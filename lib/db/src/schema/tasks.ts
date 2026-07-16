@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, jsonb, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, jsonb, boolean, integer } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -26,6 +26,11 @@ export const tasksTable = pgTable("tasks", {
   // Computed in the background on create/update (and manual re-detect) so the task
   // list and detail card can show the flag without a live proxy lookup on every open.
   exitGeo: jsonb("exit_geo"),
+  // Auto-retry after a failed run. null/0 = no retry (wait for the next schedule).
+  retryCount: integer("retry_count"),
+  retryIntervalMinutes: integer("retry_interval_minutes"),
+  // How many retries the CURRENT failure streak has already used; reset on success.
+  retryAttempt: integer("retry_attempt").notNull().default(0),
 });
 
 export const insertTaskSchema = createInsertSchema(tasksTable).omit({ id: true, createdAt: true, updatedAt: true });

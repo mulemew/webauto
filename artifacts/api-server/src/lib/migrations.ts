@@ -41,6 +41,9 @@ import { pool } from "@workspace/db";
   ALTER TABLE "saved_credentials" ADD COLUMN IF NOT EXISTS "updated_at" timestamptz NOT NULL DEFAULT now();
   ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "browser_config" jsonb;
   ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "exit_geo" jsonb;
+  ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "retry_count" integer;
+  ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "retry_interval_minutes" integer;
+  ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "retry_attempt" integer NOT NULL DEFAULT 0;
     CREATE TABLE IF NOT EXISTS "sessions" (
     "token"      text        PRIMARY KEY,
     "expires_at" timestamptz NOT NULL,

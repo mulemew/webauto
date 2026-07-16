@@ -147,6 +147,9 @@ const formSchema = z.object({
   name: z.string().min(1, "任务名称不能为空"),
   targetUrl: z.string().url("请输入有效的 URL").min(1, "目标 URL 不能为空"),
   cronExpression: z.string().optional(),
+  // Kept as strings so the inputs can be cleared while editing; parsed on submit.
+  retryCount: z.string().optional(),
+  retryIntervalMinutes: z.string().optional(),
   steps: z.array(stepSchema).default([]),
 });
 
@@ -295,6 +298,8 @@ export default function TaskForm() {
       name: "",
       targetUrl: "",
       cronExpression: "",
+      retryCount: "",
+      retryIntervalMinutes: "",
       steps: [],
     },
   });
@@ -366,6 +371,9 @@ export default function TaskForm() {
         name: task.name,
         targetUrl: task.targetUrl,
         cronExpression: cron.startsWith("@random:") ? "" : cron,
+        retryCount: task.retryCount != null ? String(task.retryCount) : "",
+        retryIntervalMinutes:
+          task.retryIntervalMinutes != null ? String(task.retryIntervalMinutes) : "",
         steps: (task.steps as WorkflowStep[] | null | undefined) ?? [],
       });
 
@@ -455,6 +463,14 @@ export default function TaskForm() {
           : scheduleType === "cron"
             ? values.cronExpression || null
             : null;
+    // Blank / 0 / junk all mean "no auto-retry" — send null so the column is cleared.
+    const _n = (s?: string): number | null => {
+      const v = parseInt((s ?? "").trim(), 10);
+      return Number.isFinite(v) && v > 0 ? v : null;
+    };
+    const retryCountValue = _n(values.retryCount);
+    // Interval only matters when retries are on; default 5m if left blank.
+    const retryIntervalValue = retryCountValue ? (_n(values.retryIntervalMinutes) ?? 5) : null;
     const stepsPayload =
       values.steps.length > 0 ? (values.steps as ApiWorkflowStep[]) : null;
     const browserConfigPayload = buildBrowserConfigPayload();
@@ -467,6 +483,8 @@ export default function TaskForm() {
             name: values.name,
             targetUrl: values.targetUrl,
             cronExpression: cronValue,
+            retryCount: retryCountValue,
+            retryIntervalMinutes: retryIntervalValue,
             steps: stepsPayload,
             browserConfig: browserConfigPayload,
           },
@@ -500,6 +518,8 @@ export default function TaskForm() {
             name: values.name,
             targetUrl: values.targetUrl,
             cronExpression: cronValue,
+            retryCount: retryCountValue,
+            retryIntervalMinutes: retryIntervalValue,
             steps: stepsPayload,
             browserConfig: browserConfigPayload,
           },
@@ -729,6 +749,54 @@ export default function TaskForm() {
                     </div>
                   )}
                 </div>
+              </div>
+
+              {/* Failure auto-retry — independent of the schedule above. */}
+              <div className="space-y-2 pt-4 mt-4 border-t border-border">
+                <FormLabel className="text-sm font-medium">失败自动重试</FormLabel>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm text-muted-foreground">失败后重试</span>
+                  <FormField
+                    control={form.control}
+                    name="retryCount"
+                    render={({ field }) => (
+                      <FormItem className="space-y-0">
+                        <FormControl>
+                          <Input
+                            type="number"
+                            min={0}
+                            placeholder="0"
+                            className="w-20 h-9 font-mono"
+                            {...field}
+                          />
+                        </FormControl>
+                      </FormItem>
+                    )}
+                  />
+                  <span className="text-sm text-muted-foreground">次，每次间隔</span>
+                  <FormField
+                    control={form.control}
+                    name="retryIntervalMinutes"
+                    render={({ field }) => (
+                      <FormItem className="space-y-0">
+                        <FormControl>
+                          <Input
+                            type="number"
+                            min={1}
+                            placeholder="5"
+                            className="w-20 h-9 font-mono"
+                            {...field}
+                          />
+                        </FormControl>
+                      </FormItem>
+                    )}
+                  />
+                  <span className="text-sm text-muted-foreground">分钟</span>
+                </div>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  留空或 0 = 不重试（失败后等下一次定时触发）。重试次数按<strong>连续失败</strong>计算，
+                  成功一次就清零；用完仍失败则回到正常调度。手动取消的运行不会重试。
+                </p>
               </div>
             </CardContent>
           </Card>

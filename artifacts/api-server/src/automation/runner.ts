@@ -13,6 +13,43 @@ import path from "path";
   import { loadBrowserSession, saveBrowserSession, clearBrowserSession, taskUsesCookieMode } from "../lib/browserSessionStore";
 
 /**
+ * After a failed run, book the next attempt if the task has retries configured.
+ *
+ * Reuses the scheduler's existing one-shot mechanism: setting nextRunAt makes its
+ * 30s polling loop fire the task when the time arrives — no extra timer to leak or
+ * lose across restarts. retryAttempt tracks the CURRENT failure streak and is reset
+ * on success (or once the budget is spent), so a task that fails next week starts
+ * over with a full allowance rather than being permanently out of retries.
+ *
+ * Returns a short suffix for the run's log message, or "" when retries are off.
+ */
+async function scheduleRetryIfConfigured(taskId: number): Promise<string> {
+  try {
+    const [t] = await db.select().from(tasksTable).where(eq(tasksTable.id, taskId));
+    if (!t) return "";
+    const max = Number(t.retryCount ?? 0);
+    if (!max || max <= 0) return "";
+    const used = Number(t.retryAttempt ?? 0);
+    if (used >= max) {
+      await db.update(tasksTable).set({ retryAttempt: 0 }).where(eq(tasksTable.id, taskId));
+      logger.info({ taskId, used, max }, "Retry budget exhausted — waiting for the normal schedule");
+      return ` (retries exhausted: ${used}/${max})`;
+    }
+    const mins = Math.max(1, Number(t.retryIntervalMinutes ?? 5));
+    const nextRunAt = new Date(Date.now() + mins * 60_000);
+    await db
+      .update(tasksTable)
+      .set({ retryAttempt: used + 1, nextRunAt })
+      .where(eq(tasksTable.id, taskId));
+    logger.info({ taskId, attempt: used + 1, max, mins }, "Retry scheduled after failure");
+    return ` (retry ${used + 1}/${max} in ${mins}m)`;
+  } catch (err) {
+    logger.warn({ taskId, err }, "Failed to schedule retry");
+    return "";
+  }
+}
+
+/**
  * Parse a document.cookie-style string ("a=1; b=2") into driver cookie objects.
  *
  * Users paste only the site's login-ticket cookie (its name differs per site —
@@ -552,10 +589,19 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
                 }
               }
 
+            // A run that finished but FAILED gets a retry too — otherwise only
+            // exceptions would, and a task that merely reports failure would sit idle
+            // until its next schedule.
+            const _retryNote = !dryRun && !overallSuccess ? await scheduleRetryIfConfigured(taskId) : "";
             if (dryRun) fullMessage = `[DRY RUN] ${fullMessage}`;
-            await writeLog(taskId, overallSuccess, fullMessage, screenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
+            await writeLog(taskId, overallSuccess, fullMessage + _retryNote, screenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
             if (!dryRun) {
               await db.update(tasksTable).set({ status: overallSuccess ? "success" : "failed", lastRunAt: new Date() }).where(eq(tasksTable.id, taskId));
+              // Success clears the failure streak so a future failure gets a full
+              // retry allowance again.
+              if (overallSuccess) {
+                await db.update(tasksTable).set({ retryAttempt: 0 }).where(eq(tasksTable.id, taskId)).catch(() => {});
+              }
             }
             // Cookie mode: persist the (possibly refreshed) session after a successful run.
             if (!dryRun && overallSuccess && cookieModeEnabled) {
@@ -613,7 +659,10 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
           outerScreenshotPath = await saveScreenshot(taskId, eBuf);
         } catch { /* ignore */ }
       }
-      await writeLog(taskId, false, errMsg, outerScreenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
+      // Book a retry BEFORE writing the log so the message can say when it'll run.
+      // Cancellations are deliberate — never retry those.
+      const retryNote = !dryRun && !isCancelled ? await scheduleRetryIfConfigured(taskId) : "";
+      await writeLog(taskId, false, errMsg + retryNote, outerScreenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
       if (!dryRun) {
         await db.update(tasksTable).set({ status: isCancelled ? "idle" : "failed", lastRunAt: new Date() }).where(eq(tasksTable.id, taskId));
       }

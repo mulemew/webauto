@@ -874,6 +874,14 @@ components:
             $ref: "#/components/schemas/WorkflowStep"
         cronExpression:
           type: ["string", "null"]
+        retryCount:
+          type: ["integer", "null"]
+          description: >
+            Auto-retry after a failed run: extra attempts before giving up and waiting
+            for the normal schedule. null/0 = no retry.
+        retryIntervalMinutes:
+          type: ["integer", "null"]
+          description: Minutes between retry attempts (default 5).
         status:
           type: string
           enum: [idle, queued, running, success, failed, needs_attention]
@@ -944,6 +952,12 @@ components:
             $ref: "#/components/schemas/WorkflowStep"
         cronExpression:
           type: ["string", "null"]
+        retryCount:
+          type: ["integer", "null"]
+          description: "Auto-retry after a failed run: extra attempts before giving up. null/0 = no retry."
+        retryIntervalMinutes:
+          type: ["integer", "null"]
+          description: Minutes between retry attempts (default 5).
         browserConfig:
           oneOf:
             - $ref: "#/components/schemas/TaskBrowserConfig"
@@ -983,6 +997,12 @@ components:
             $ref: "#/components/schemas/WorkflowStep"
         cronExpression:
           type: ["string", "null"]
+        retryCount:
+          type: ["integer", "null"]
+          description: "Auto-retry after a failed run: extra attempts before giving up. null/0 = no retry."
+        retryIntervalMinutes:
+          type: ["integer", "null"]
+          description: Minutes between retry attempts (default 5).
         browserConfig:
           oneOf:
             - $ref: "#/components/schemas/TaskBrowserConfig"
