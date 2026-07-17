@@ -1,5 +1,5 @@
 import { useRoute, Link } from "wouter";
-import { ArrowLeft, Clock, Calendar, CheckCircle2, XCircle, Terminal, ImageIcon, Maximize2 } from "lucide-react";
+import { ArrowLeft, Clock, Calendar, CheckCircle2, XCircle, Terminal, ImageIcon, Maximize2, Copy } from "lucide-react";
 import { format } from "date-fns";
 
 import { useGetTaskLog, getGetTaskLogQueryKey, useGetTask, getGetTaskQueryKey } from "@workspace/api-client-react";
@@ -224,21 +224,41 @@ export default function LogDetail() {
             })()}
           </CardHeader>
           <CardContent className="p-4">
+            {/* Run-level message — ALWAYS shown, and copyable.
+                It used to render only when there were no step logs, so a failure
+                recorded at the run level (captcha blocked, proxy died, a throw between
+                steps) was invisible on the page dedicated to that run: it existed only
+                in the Execution Logs list, where it can't be selected on its own. */}
+            {(() => {
+              const msg = (log.message ?? "").trim();
+              if (!msg) return null;
+              return (
+                <div className={"mb-3 rounded-md border p-2.5 " + (log.success ? "border-border bg-muted/30" : "border-destructive/30 bg-destructive/5")}>
+                  <div className="flex items-start justify-between gap-2">
+                    <p className={"text-xs font-mono whitespace-pre-wrap break-all flex-1 " + (log.success ? "text-muted-foreground" : "text-red-400")}>
+                      {msg}
+                    </p>
+                    <button
+                      type="button"
+                      title={t.copy}
+                      onClick={() => { void navigator.clipboard?.writeText(msg); }}
+                      className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
             {(() => {
               type StepLog = { stepIndex: number; type: string; success: boolean; message: string; screenshotPath?: string; durationMs?: number };
               const stepLogs = ((log as any).stepLogs ?? []) as StepLog[];
+              // No steps ran — the run-level message above already says everything.
               if (stepLogs.length === 0) {
                 return (
-                  <div className="py-2 space-y-0.5">
-                    {log.message.split("\n").filter(l => l.trim()).map((line, i) => {
-                      const isFail = /FAILED:/i.test(line);
-                      return (
-                        <p key={i} className={"text-xs font-mono whitespace-pre-wrap break-all " + (isFail ? "text-red-500" : "text-muted-foreground")}>
-                          {line}
-                        </p>
-                      );
-                    })}
-                  </div>
+                  <p className="py-2 text-xs font-mono text-muted-foreground/60">
+                    {t.noStepLogs}
+                  </p>
                 );
               }
               return (
