@@ -1068,18 +1068,41 @@ export async function detectAndHandleCaptcha(
         rotations++;
         await new Promise((r) => setTimeout(r, 1500)); // let the new tunnel settle
 
-        // RELOAD before retrying. The widget on screen was issued to the OLD exit IP —
-        // its challenge and session are bound to it, so re-solving in place asks Google
-        // the same question against the same assessment and gets the same block; the
-        // new IP changes nothing. Reloading makes the site re-issue the captcha from
-        // the new IP, which is the only way rotation can change the answer — and it
-        // gives the checkbox a fresh chance to pass outright, which is the path that
-        // actually succeeds sometimes.
-        try {
-          await page.goto(page.url(), { waitUntil: "domcontentloaded", timeout: 30000 });
-          await new Promise((r) => setTimeout(r, 1200)); // let the widget mount
-        } catch (err) {
-          logger.warn({ err }, "reload after IP rotation failed — retrying on the current page");
+        // Re-issue the captcha from the new IP by reloading — BUT ONLY when the captcha
+        // belongs to the page itself.
+        //
+        // Reloading is what makes a rotation meaningful for a page-level captcha: the
+        // widget on screen was issued to the OLD exit IP, so re-solving it in place asks
+        // Google the same question against the same assessment and gets the same block.
+        //
+        // But when the captcha lives in a modal opened by an earlier action (host2play's
+        // "Renew server" dialog), a reload throws that dialog away — and with it the
+        // captcha we were sent here to solve. The retry then finds nothing and reports
+        // "bframe not found", which is exactly what a reload-on-rotate turned a plain
+        // block into. In that case keep the page as-is: the retry is worth less, but a
+        // still-present captcha beats a destroyed one.
+        const captchaIsPageLevel = await page
+          .evaluate(() => {
+            const el = document.querySelector(
+              ".g-recaptcha, iframe[src*='recaptcha'], .h-captcha, .cf-turnstile",
+            );
+            if (!el) return false;
+            // Inside a dialog/modal => opened by a prior action, don't reload it away.
+            return !el.closest(
+              "[role='dialog'], [class*='modal'], [class*='popup'], [class*='dialog']",
+            );
+          })
+          .catch(() => false);
+
+        if (captchaIsPageLevel) {
+          try {
+            await page.goto(page.url(), { waitUntil: "domcontentloaded", timeout: 30000 });
+            await new Promise((r) => setTimeout(r, 1200)); // let the widget mount
+          } catch (err) {
+            logger.warn({ err }, "reload after IP rotation failed — retrying on the current page");
+          }
+        } else {
+          logger.info("captcha lives in a modal — not reloading (a reload would discard it)");
         }
         audio = await solveRecaptchaAudio(page);
       }
