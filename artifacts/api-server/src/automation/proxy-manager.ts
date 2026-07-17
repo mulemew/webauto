@@ -598,14 +598,18 @@ export async function registerWarpIdentity(): Promise<Record<string, unknown>> {
   if (!res.ok) {
     throw new Error(`WARP registration failed: HTTP ${res.status} ${await res.text().catch(() => "")}`);
   }
+  // warp_enabled is a TOP-LEVEL field on the registration — it is NOT inside `config`
+  // (config only carries client_id / peers / interface / services). Verified against
+  // the live API; reading it from config returns undefined forever, which made the
+  // post-PATCH assertion below throw on every call.
   type WarpReg = {
     id?: string;
     token?: string;
+    warp_enabled?: boolean;
     config?: {
       peers?: Array<{ public_key?: string; endpoint?: { host?: string } }>;
       interface?: { addresses?: { v4?: string; v6?: string } };
       client_id?: string;
-      warp_enabled?: boolean;
     };
   };
   let data = (await res.json()) as WarpReg;
@@ -614,7 +618,7 @@ export async function registerWarpIdentity(): Promise<Record<string, unknown>> {
   // against the live API), and an unactivated identity's WireGuard handshake never
   // completes: sing-box routes into the tunnel and the connection just times out with
   // no error. This PATCH is what makes the identity usable.
-  if (data.config?.warp_enabled !== true) {
+  if (data.warp_enabled !== true) {
     if (!data.id || !data.token) {
       throw new Error("WARP registration returned no id/token — cannot enable WARP");
     }
@@ -626,10 +630,12 @@ export async function registerWarpIdentity(): Promise<Record<string, unknown>> {
     if (!up.ok) {
       throw new Error(`WARP enable failed: HTTP ${up.status} ${await up.text().catch(() => "")}`);
     }
-    data = (await up.json()) as WarpReg;
-    if (data.config?.warp_enabled !== true) {
+    const enabled = (await up.json()) as WarpReg;
+    if (enabled.warp_enabled !== true) {
       throw new Error("WARP enable did not take effect (warp_enabled is still false)");
     }
+    // The PATCH echoes the same config back — only adopt it if it actually has peers.
+    if (enabled.config?.peers?.length) data = enabled;
   }
   const peer = data.config?.peers?.[0];
   const addrs = data.config?.interface?.addresses;
