@@ -578,6 +578,28 @@ import type { PageAdapter } from "./page-adapter";
       try {
         const cleared = await clearCloudflareInterstitial(page, { url: targetUrl });
         if (!cleared) {
+          // Is the challenge STILL up? If so, stop here instead of hunting for a form
+          // that cannot exist yet. This also stops the caller from burning its
+          // remaining login attempts: each one would re-run the full CF bypass budget
+          // (~90s) against the same wall, which is how a doomed login stretched into
+          // 15 minutes. captchaBlocked marks it as "needs attention", not a retry.
+          const stillBlocked = (await page
+            .evaluate(() =>
+              !!document.querySelector(
+                'input[id^="cf-chl-widget-"][id$="_response"], #challenge-stage, ' +
+                  '#challenge-running, .cf-browser-verification',
+              ),
+            )
+            .catch(() => false)) as boolean;
+          if (stillBlocked) {
+            return {
+              success: false,
+              captchaBlocked: true,
+              message:
+                "Cloudflare challenge is still up after the bypass budget — the login page never loaded. " +
+                "The checkbox could not be passed from this IP/fingerprint.",
+            };
+          }
           logger.warn({ targetUrl }, "Cloudflare interstitial not confirmed cleared before login — continuing anyway");
         }
       } catch (cfErr) {

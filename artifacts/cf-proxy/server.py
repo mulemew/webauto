@@ -2243,12 +2243,27 @@ def click_turnstile(sid):
                             return attempt + 1
                 return None
 
-            # (a) Embedded widget: the hidden cf-turnstile-response input is in the
-            # light DOM and its PARENT is the rendered widget.
-            cbxy = _element_abs_xy(sb, 'input[name="cf-turnstile-response"]',
-                                   dx=28, dy_frac=0.5, wid=_wid, parent=True)
-            if cbxy:
-                hit = _coord_click_loop(cbxy, lambda: bool(_turnstile_token(sb)), "embedded")
+            # (a) The response input is in the LIGHT DOM and its PARENT is the rendered
+            # widget, so it's our click target. Two spellings:
+            #   name="cf-turnstile-response"          — embedded widgets
+            #   id="cf-chl-widget-<rand>_response"    — the modern full-page challenge
+            # Only the first was handled, so on a modern challenge this found nothing —
+            # and (b) below can't help either, because Turnstile renders its iframe in a
+            # CLOSED shadow root that document.querySelectorAll("iframe") cannot see
+            # (verified: iframes:[] on a page that visibly has the checkbox). Both
+            # targets missed, nothing was ever clicked, and the page span until timeout.
+            for _sel, _label in (
+                ('input[name="cf-turnstile-response"]', "embedded"),
+                ('input[id^="cf-chl-widget-"][id$="_response"]', "chl-widget"),
+            ):
+                cbxy = _element_abs_xy(sb, _sel, dx=28, dy_frac=0.5, wid=_wid, parent=True)
+                if not cbxy:
+                    continue
+                hit = _coord_click_loop(
+                    cbxy,
+                    lambda: bool(_turnstile_token(sb)) or (not _cf_interstitial_present(sb)),
+                    _label,
+                )
                 if hit:
                     return {"solved": True, "method": "coord", "attempt": hit}
 
