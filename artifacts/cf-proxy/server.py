@@ -2457,19 +2457,58 @@ def solve_recaptcha_audio(sid):
                     pass
             # detach → drift+click (OS-level) → let reCAPTCHA score undisturbed → reconnect
             _detached_wait(sb, 3, during=_click_checkbox)
-        else:
-            # Couldn't locate the anchor iframe — fall back to a WebDriver click.
+
+        def _anchor_ticked():
+            """Did the checkbox actually register the click?
+
+            aria-checked flips as soon as reCAPTCHA accepts the click — whether it then
+            passes outright or opens a challenge. If this stays false, the click never
+            landed.
+            """
             try:
-                anchor = find(_anchor_css)
-                d.switch_to.frame(anchor)
-                find("#recaptcha-anchor, .recaptcha-checkbox").click()
-            except Exception:
-                pass
-            finally:
                 d.switch_to.default_content()
+                d.switch_to.frame(find(_anchor_css))
+                el = find("#recaptcha-anchor, .recaptcha-checkbox")
+                return (el.get_attribute("aria-checked") == "true"
+                        or "recaptcha-checkbox-checked" in (el.get_attribute("class") or ""))
+            except Exception:
+                return False
+            finally:
+                try:
+                    d.switch_to.default_content()
+                except Exception:
+                    pass
+
+        # VERIFY, then fall back. This used to be an either/or: an OS click was fired
+        # when the coordinates resolved, and the WebDriver click ran ONLY when they
+        # didn't. So an OS click that missed (wrong window, stale coords, an overlay)
+        # was never noticed and never retried — we walked on with an unticked box and
+        # then blamed the audio solver for a challenge that had never opened.
+        if not token_present() and not _anchor_ticked():
+            print("[recaptcha] anchor still unticked after the OS click — falling back to a WebDriver click", flush=True)
+            try:
+                d.switch_to.default_content()
+                d.switch_to.frame(find(_anchor_css))
+                find("#recaptcha-anchor, .recaptcha-checkbox").click()
+            except Exception as e:
+                print(f"[recaptcha] WebDriver anchor click failed: {e}", flush=True)
+            finally:
+                try:
+                    d.switch_to.default_content()
+                except Exception:
+                    pass
             time.sleep(2)
+
         if token_present():
             return {"solved": True, "blocked": False, "message": "passed on checkbox"}
+
+        # Still unticked after both methods — the challenge cannot have opened, so say
+        # THAT instead of failing later on a missing audio button.
+        if not _anchor_ticked():
+            d.switch_to.default_content()
+            return {"solved": False, "blocked": False,
+                    "message": "the reCAPTCHA checkbox could not be ticked (neither the OS-level "
+                               "click nor the WebDriver click registered) — no challenge opened."}
 
         # 2. Switch the challenge frame to audio mode.
         try:
