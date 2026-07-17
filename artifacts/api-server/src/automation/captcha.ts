@@ -1067,6 +1067,20 @@ export async function detectAndHandleCaptcha(
         }
         rotations++;
         await new Promise((r) => setTimeout(r, 1500)); // let the new tunnel settle
+
+        // RELOAD before retrying. The widget on screen was issued to the OLD exit IP —
+        // its challenge and session are bound to it, so re-solving in place asks Google
+        // the same question against the same assessment and gets the same block; the
+        // new IP changes nothing. Reloading makes the site re-issue the captcha from
+        // the new IP, which is the only way rotation can change the answer — and it
+        // gives the checkbox a fresh chance to pass outright, which is the path that
+        // actually succeeds sometimes.
+        try {
+          await page.goto(page.url(), { waitUntil: "domcontentloaded", timeout: 30000 });
+          await new Promise((r) => setTimeout(r, 1200)); // let the widget mount
+        } catch (err) {
+          logger.warn({ err }, "reload after IP rotation failed — retrying on the current page");
+        }
         audio = await solveRecaptchaAudio(page);
       }
 

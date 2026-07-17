@@ -662,7 +662,52 @@ export async function registerWarpIdentity(): Promise<Record<string, unknown>> {
   };
 }
 
-/** WARP: a WireGuard outbound. Uses WARP_CONFIG_PATH if mounted, else registers a fresh identity. */
+/**
+ * Cache for the registered WARP identity.
+ *
+ * Registering is NOT free: api.cloudflareclient.com rate-limits per source IP and
+ * answers HTTP 429 / "Error 1015 — you are being rate limited", after which WARP
+ * stops working entirely. Minting a fresh identity on every startLocalProxy() did
+ * exactly that — a registration per task run, per exit-IP card lookup, per rotation,
+ * and one per task during the startup backfill.
+ *
+ * So: register ONCE and reuse. Only rotation (which explicitly wants a different exit
+ * IP) mints a new one. Persisted to disk so restarts don't re-register either.
+ */
+const WARP_CACHE_FILE = path.join(process.env.DATA_DIR ?? path.join(process.cwd(), "data"), "warp-identity.json");
+let warpIdentity: Record<string, unknown> | null = null;
+
+function loadCachedWarpIdentity(): Record<string, unknown> | null {
+  if (warpIdentity) return warpIdentity;
+  try {
+    if (fs.existsSync(WARP_CACHE_FILE)) {
+      warpIdentity = JSON.parse(fs.readFileSync(WARP_CACHE_FILE, "utf8")) as Record<string, unknown>;
+      return warpIdentity;
+    }
+  } catch (err) {
+    logger.warn({ err }, "could not read cached WARP identity — will register a new one");
+  }
+  return null;
+}
+
+function storeWarpIdentity(id: Record<string, unknown>): void {
+  warpIdentity = id;
+  try {
+    fs.mkdirSync(path.dirname(WARP_CACHE_FILE), { recursive: true });
+    fs.writeFileSync(WARP_CACHE_FILE, JSON.stringify(id));
+  } catch (err) {
+    logger.warn({ err }, "could not persist WARP identity (will re-register after restart)");
+  }
+}
+
+/** Register a NEW identity and make it the cached one. Used by rotate(). */
+export async function refreshWarpIdentity(): Promise<Record<string, unknown>> {
+  const fresh = await registerWarpIdentity();
+  storeWarpIdentity(fresh);
+  return fresh;
+}
+
+/** WARP: a WireGuard outbound. WARP_CONFIG_PATH > cached identity > fresh registration. */
 async function parseWarp(): Promise<Record<string, unknown>> {
   const cfgPath = process.env.WARP_CONFIG_PATH;
   if (cfgPath && fs.existsSync(cfgPath)) {
@@ -672,8 +717,9 @@ async function parseWarp(): Promise<Record<string, unknown>> {
     >;
     return { tag: "proxy", ...cfg };
   }
-  // No pre-generated config — register one on the fly.
-  return registerWarpIdentity();
+  const cached = loadCachedWarpIdentity();
+  if (cached) return cached;
+  return refreshWarpIdentity();
 }
 
 async function buildOutbound(type: ProxyType, link: string): Promise<Record<string, unknown>> {
@@ -804,9 +850,11 @@ async function startSingBox(
       type !== "warp"
         ? undefined
         : async (): Promise<{ ok: boolean; error?: string }> => {
-            // A new WARP registration = new WireGuard identity = new exit IP.
+            // A new WARP registration = new WireGuard identity = new exit IP. This is
+            // the ONE place that mints a new one (and replaces the cached identity);
+            // everything else reuses the cache so we don't get rate-limited.
             try {
-              const fresh = await registerWarpIdentity();
+              const fresh = await refreshWarpIdentity();
               await restartWith(fresh);
               logger.info({ localPort: port }, "WARP identity rotated (same local SOCKS port)");
               return { ok: true };
