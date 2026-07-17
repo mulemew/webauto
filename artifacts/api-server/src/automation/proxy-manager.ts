@@ -827,8 +827,12 @@ export async function startLocalProxy(
   // treating that as an active proxy makes providers do unnecessary proxy
   // resolution and, for WARP, can accidentally start sing-box for every task.
   if (!url) {
-    const warpConfigPath = process.env.WARP_CONFIG_PATH?.trim();
-    if (type === "warp" && warpConfigPath) {
+    // WARP legitimately has no URL — it's a WireGuard identity, not an address. It
+    // used to require a pre-generated WARP_CONFIG_PATH, so without one we bailed out
+    // and silently ran with NO proxy: the task went out over the host IP, the exit-IP
+    // card found nothing, and rotation reported "no proxy is configured". Identities
+    // are registered on demand now (parseWarp), so warp is always startable.
+    if (type === "warp") {
       return startSingBox(type, url, remoteConsumer);
     }
     logger.warn(
