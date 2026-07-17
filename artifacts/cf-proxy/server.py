@@ -2029,6 +2029,11 @@ def _element_abs_xy(sb, css, dx=0, dy_frac=0.5, wid=None, parent=False):
         pass
     ax = int(rect["x"]) + dx + win_x
     ay = int(rect["y"]) + int(rect["h"] * dy_frac) + win_y + title_bar
+    # Log every term. An OS-level click that silently misses is otherwise impossible to
+    # tell apart from one that landed and was rejected — the only visible difference is
+    # a checkbox that stays unticked, which looks identical either way.
+    print(f"[coords] {css!r} rect=({rect['x']:.0f},{rect['y']:.0f} {rect['w']:.0f}x{rect['h']:.0f}) "
+          f"win=({win_x},{win_y}) titlebar={title_bar} dx={dx} -> click=({ax},{ay})", flush=True)
     return (ax, ay)
 
 
