@@ -2522,20 +2522,47 @@ def solve_recaptcha_audio(sid):
         # served — we carried on into the round loop anyway, found no audio, and
         # reported "not solved after N audio rounds" despite never having downloaded a
         # single clip. Capture the reason and retry through JS, which ignores occlusion.
+        # WAIT for the challenge to render before touching it. The bframe loads its
+        # content asynchronously, and under a proxy (WARP especially) that takes a
+        # while. The previous code swallowed a missing audio button and fell into a
+        # retry loop whose sleeps happened to cover the delay; when I replaced that
+        # with an immediate check, a slow-rendering challenge got no time at all and we
+        # bailed out with "audio button not found" on a challenge that was still
+        # loading — which is why an image challenge used to appear and then stopped.
         audio_err = None
-        try:
-            btn = find("#recaptcha-audio-button, button.rc-button-audio")
+        btn = None
+        _deadline = time.time() + 20
+        while time.time() < _deadline:
+            try:
+                btn = find("#recaptcha-audio-button, button.rc-button-audio")
+                if btn.is_displayed():
+                    break
+            except Exception:
+                btn = None
+            # An IP refusal ends the wait early — no button is ever coming.
+            try:
+                _b = find(".rc-doscaptcha-header-text, .rc-audiochallenge-error-message").text or ""
+                if "try again later" in _b.lower() or "automated queries" in _b.lower():
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+
+        if btn is not None:
             try:
                 btn.click()
             except Exception as e1:
                 audio_err = f"click intercepted: {e1}"
                 print(f"[recaptcha] audio button click intercepted — retrying via JS: {e1}", flush=True)
-                d.execute_script("arguments[0].click();", btn)
-                audio_err = None
+                try:
+                    d.execute_script("arguments[0].click();", btn)
+                    audio_err = None
+                except Exception as e2:
+                    audio_err = f"click failed: {e2}"
             time.sleep(1.5)
-        except Exception as e:
-            audio_err = str(e)
-            print(f"[recaptcha] audio button unavailable: {e}", flush=True)
+        else:
+            audio_err = "audio button never rendered within 20s"
+            print("[recaptcha] audio button never rendered within 20s", flush=True)
 
         # An IP block can surface the moment the audio button is pressed, so check it
         # before concluding anything about the audio challenge.
@@ -2548,11 +2575,19 @@ def solve_recaptcha_audio(sid):
         except Exception:
             pass
 
-        # Confirm we ACTUALLY reached the audio challenge before looping over it.
-        on_audio = bool(sb.execute_script(
-            "return !!document.querySelector("
-            "'.rc-audiochallenge-tdownload-link, #audio-source, #audio-response');"
-        ))
+        # Confirm we ACTUALLY reached the audio challenge before looping over it —
+        # polling, because the audio panel mounts asynchronously too. Checking once,
+        # immediately, is what made a slow challenge look like "no audio at all".
+        on_audio = False
+        _deadline = time.time() + 15
+        while time.time() < _deadline:
+            on_audio = bool(sb.execute_script(
+                "return !!document.querySelector("
+                "'.rc-audiochallenge-tdownload-link, #audio-source, #audio-response');"
+            ))
+            if on_audio:
+                break
+            time.sleep(0.5)
         if not on_audio:
             is_image = bool(sb.execute_script(
                 "return !!document.querySelector('.rc-imageselect, #rc-imageselect, "
