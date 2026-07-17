@@ -298,13 +298,25 @@ async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
   //   input[id^="cf-chl-widget-"][id$="_response"]  — the modern challenge's field
   //   [name="cf-turnstile-response"]                — Turnstile's response field
   //   script[src*="challenges.cloudflare.com"]      — the challenge script
+  //
+  // It must also be FALSE for a real page that merely EMBEDS a Turnstile. A login form
+  // with a Turnstile loads challenges.cloudflare.com and has a cf-chl-widget-*_response
+  // input too, so those markers alone cannot tell "the gate is up" from "we're through
+  // and the form has its own widget" — and treating the login page as an interstitial
+  // makes the bypass loop retry/reload it until the budget runs out, then report that
+  // Cloudflare was never cleared. The site's own content is the discriminator: an
+  // interstitial renders only the challenge, never the app's form/nav.
   try {
-    isCfPage = (await page.evaluate(() =>
-      !!document.querySelector(
+    isCfPage = (await page.evaluate(() => {
+      const siteContent = document.querySelector(
+        "input[type='password'], form[action*='login'], input[name='email'], input[name='username'], nav, header",
+      );
+      if (siteContent) return false;
+      return !!document.querySelector(
         'input[id^="cf-chl-widget-"][id$="_response"], [name="cf-turnstile-response"], ' +
           'script[src*="challenges.cloudflare.com"], [id^="cf-chl-widget"]',
-      ),
-    )) as boolean;
+      );
+    })) as boolean;
   } catch {
     // page may have been closed
   }

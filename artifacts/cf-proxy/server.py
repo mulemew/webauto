@@ -2078,17 +2078,27 @@ def _turnstile_token(sb):
 
 
 def _cf_interstitial_present(sb):
-    """True while a FULL-PAGE Cloudflare challenge ("Just a moment…") is showing.
+    """True while a FULL-PAGE Cloudflare challenge is BLOCKING the page.
 
-    Unlike an embedded widget there is no cf-turnstile-response token on the page,
-    so the interstitial disappearing IS the success signal.
+    Detect STRUCTURALLY, not by English title: Cloudflare localises the page ("请稍候…"
+    for a zh client) and the modern challenge has none of the legacy #challenge-running
+    markup — its ids are random (cf-chl-widget-kjlr4_response), so only the id PREFIX
+    matches.
+
+    Crucially this must be FALSE for a real page that merely EMBEDS a Turnstile: a
+    login form with a Turnstile also loads challenges.cloudflare.com and also has a
+    cf-chl-widget-*_response input, so those markers alone can't tell "the gate is up"
+    from "we're through and the form has its own widget" — and callers loop/reload
+    while an interstitial is 'present', which on a login page means spinning until
+    timeout. The site's own content is the discriminator: an interstitial shows only
+    the challenge, never the app's form.
     """
-    # Detect STRUCTURALLY, not by English title: Cloudflare localises the page
-    # ("请稍候…" for a zh client) and the modern challenge has none of the legacy
-    # #challenge-running markup — its ids are random (cf-chl-widget-kjlr4_response),
-    # so even the '#cf-chl-widget' selector never matched. The id PREFIX does.
     try:
         return bool(sb.execute_script(
+            "var real = document.querySelector("
+            "  \"input[type='password'], form[action*='login'], input[name='email'], \" +"
+            "  \"input[name='username'], nav, header\");"
+            "if (real) return false;"   # site content is rendered => we're past the gate
             "return !!(document.querySelector("
             "'input[id^=\"cf-chl-widget-\"][id$=\"_response\"], [id^=\"cf-chl-widget\"], "
             "script[src*=\"challenges.cloudflare.com\"], "
