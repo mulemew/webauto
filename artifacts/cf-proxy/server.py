@@ -2064,7 +2064,10 @@ def _turnstile_token(sb):
     """Return the Turnstile response token (native OR reCAPTCHA-compat), or ''."""
     try:
         return sb.execute_script(
+            # The modern full-page interstitial fills input#cf-chl-widget-<rand>_response
+            # instead of the named field, so a passed challenge looked unsolved without it.
             "var q='input[name=\"cf-turnstile-response\"],textarea[name=\"cf-turnstile-response\"],"
+            "input[id^=\"cf-chl-widget-\"][id$=\"_response\"],"
             "textarea[name=\"g-recaptcha-response\"]';"
             "var els=document.querySelectorAll(q);"
             "for(var i=0;i<els.length;i++){if(els[i].value&&els[i].value.length>20)return els[i].value;}"
@@ -2080,11 +2083,17 @@ def _cf_interstitial_present(sb):
     Unlike an embedded widget there is no cf-turnstile-response token on the page,
     so the interstitial disappearing IS the success signal.
     """
+    # Detect STRUCTURALLY, not by English title: Cloudflare localises the page
+    # ("请稍候…" for a zh client) and the modern challenge has none of the legacy
+    # #challenge-running markup — its ids are random (cf-chl-widget-kjlr4_response),
+    # so even the '#cf-chl-widget' selector never matched. The id PREFIX does.
     try:
         return bool(sb.execute_script(
             "return !!(document.querySelector("
-            "'#challenge-stage, #challenge-running, #cf-challenge-running, "
-            "#challenge-form, .cf-browser-verification, #cf-chl-widget') || "
+            "'input[id^=\"cf-chl-widget-\"][id$=\"_response\"], [id^=\"cf-chl-widget\"], "
+            "script[src*=\"challenges.cloudflare.com\"], "
+            "#challenge-stage, #challenge-running, #cf-challenge-running, "
+            "#challenge-form, .cf-browser-verification') || "
             "/just a moment|checking your browser|checking if the site connection is secure/i"
             ".test(document.title || ''));"
         ))

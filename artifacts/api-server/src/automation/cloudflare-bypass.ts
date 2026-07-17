@@ -285,15 +285,41 @@ async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
     // ignore
   }
 
-  // Title-based detection
+  // ── Structural detection (language-independent) ──────────────────────────
+  // MUST come before the title/selector checks: the title test only knows the
+  // ENGLISH strings, but Cloudflare localises the interstitial ("请稍候…" for a
+  // zh client), and the modern challenge page carries none of the legacy
+  // #challenge-running / .cf-browser-verification markup — its ids are random
+  // (cf-chl-widget-kjlr4_response). So on a localised modern challenge we detected
+  // nothing, returned "none", never clicked the checkbox, and the caller then failed
+  // looking for login elements that were still behind the interstitial.
+  //
+  // These markers are stable across languages and widget ids:
+  //   input[id^="cf-chl-widget-"][id$="_response"]  — the modern challenge's field
+  //   [name="cf-turnstile-response"]                — Turnstile's response field
+  //   script[src*="challenges.cloudflare.com"]      — the challenge script
   try {
-    const title = await page.title();
-    isCfPage =
-      title === "Just a moment..." ||
-      title === "Attention Required! | Cloudflare" ||
-      title.includes("DDoS protection by Cloudflare");
+    isCfPage = (await page.evaluate(() =>
+      !!document.querySelector(
+        'input[id^="cf-chl-widget-"][id$="_response"], [name="cf-turnstile-response"], ' +
+          'script[src*="challenges.cloudflare.com"], [id^="cf-chl-widget"]',
+      ),
+    )) as boolean;
   } catch {
     // page may have been closed
+  }
+
+  // Title-based detection (English interstitials)
+  if (!isCfPage) {
+    try {
+      const title = await page.title();
+      isCfPage =
+        title === "Just a moment..." ||
+        title === "Attention Required! | Cloudflare" ||
+        title.includes("DDoS protection by Cloudflare");
+    } catch {
+      // page may have been closed
+    }
   }
 
   // DOM selector-based detection
@@ -359,8 +385,17 @@ async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
 async function isTurnstileSolved(page: PageAdapter): Promise<boolean> {
   try {
     return await page.evaluate(() => {
-      const input = document.querySelector<HTMLInputElement>('input[name="cf-turnstile-response"]');
-      return !!(input && input.value && input.value.length > 20);
+      // Embedded widgets use name="cf-turnstile-response"; the modern full-page
+      // interstitial instead fills input#cf-chl-widget-<random>_response. Checking
+      // only the former meant a passed full-page challenge never looked solved.
+      const els = document.querySelectorAll<HTMLInputElement>(
+        'input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"], ' +
+          'input[id^="cf-chl-widget-"][id$="_response"]',
+      );
+      for (const el of Array.from(els)) {
+        if (el.value && el.value.length > 20) return true;
+      }
+      return false;
     }) as boolean;
   } catch {
     return false;
