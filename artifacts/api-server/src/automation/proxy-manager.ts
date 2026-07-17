@@ -575,13 +575,17 @@ export async function registerWarpIdentity(): Promise<Record<string, unknown>> {
   const pubB64 = (publicKey.export({ type: "spki", format: "der" }) as Buffer).subarray(-32).toString("base64");
   const privB64 = (privateKey.export({ type: "pkcs8", format: "der" }) as Buffer).subarray(-32).toString("base64");
 
-  const res = await fetch("https://api.cloudflareclient.com/v0a2158/reg", {
+  const API = "https://api.cloudflareclient.com/v0a2158";
+  const HEADERS = {
+    "Content-Type": "application/json",
+    "User-Agent": "okhttp/3.12.1",
+    "CF-Client-Version": "a-6.10-2158",
+  };
+
+  // Step 1 — register the device and get an identity + API token.
+  const res = await fetch(`${API}/reg`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "User-Agent": "okhttp/3.12.1",
-      "CF-Client-Version": "a-6.10-2158",
-    },
+    headers: HEADERS,
     body: JSON.stringify({
       install_id: "",
       fcm_token: "",
@@ -594,13 +598,39 @@ export async function registerWarpIdentity(): Promise<Record<string, unknown>> {
   if (!res.ok) {
     throw new Error(`WARP registration failed: HTTP ${res.status} ${await res.text().catch(() => "")}`);
   }
-  const data = (await res.json()) as {
+  type WarpReg = {
+    id?: string;
+    token?: string;
     config?: {
       peers?: Array<{ public_key?: string; endpoint?: { host?: string } }>;
       interface?: { addresses?: { v4?: string; v6?: string } };
       client_id?: string;
+      warp_enabled?: boolean;
     };
   };
+  let data = (await res.json()) as WarpReg;
+
+  // Step 2 — ENABLE WARP. Registration alone returns warp_enabled:false (verified
+  // against the live API), and an unactivated identity's WireGuard handshake never
+  // completes: sing-box routes into the tunnel and the connection just times out with
+  // no error. This PATCH is what makes the identity usable.
+  if (data.config?.warp_enabled !== true) {
+    if (!data.id || !data.token) {
+      throw new Error("WARP registration returned no id/token — cannot enable WARP");
+    }
+    const up = await fetch(`${API}/reg/${data.id}`, {
+      method: "PATCH",
+      headers: { ...HEADERS, Authorization: `Bearer ${data.token}` },
+      body: JSON.stringify({ warp_enabled: true }),
+    });
+    if (!up.ok) {
+      throw new Error(`WARP enable failed: HTTP ${up.status} ${await up.text().catch(() => "")}`);
+    }
+    data = (await up.json()) as WarpReg;
+    if (data.config?.warp_enabled !== true) {
+      throw new Error("WARP enable did not take effect (warp_enabled is still false)");
+    }
+  }
   const peer = data.config?.peers?.[0];
   const addrs = data.config?.interface?.addresses;
   if (!peer?.public_key || !addrs?.v4 || !data.config?.client_id) {
