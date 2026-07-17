@@ -2463,21 +2463,40 @@ def solve_recaptcha_audio(sid):
             # detach → drift+click (OS-level) → let reCAPTCHA score undisturbed → reconnect
             _detached_wait(sb, 3, during=_click_checkbox)
 
-        def _anchor_ticked():
-            """Did the checkbox actually register the click?
+        def _click_registered():
+            """Did the anchor click take effect?
 
-            aria-checked flips as soon as reCAPTCHA accepts the click — whether it then
-            passes outright or opens a challenge. If this stays false, the click never
-            landed.
+            NOT the same as "the checkbox is ticked": aria-checked only flips when the
+            captcha is PASSED. While a challenge is open the anchor sits unticked and
+            greyed — so testing aria-checked reported "the click never landed" with an
+            image challenge plainly on screen, and we bailed out of a captcha that was
+            working. Any of these means the click registered:
+              • a token (passed outright)
+              • the anchor ticked
+              • a challenge is up in the bframe (image / audio / IP refusal)
             """
             try:
                 d.switch_to.default_content()
-                d.switch_to.frame(find(_anchor_css))
-                el = find("#recaptcha-anchor, .recaptcha-checkbox")
-                return (el.get_attribute("aria-checked") == "true"
-                        or "recaptcha-checkbox-checked" in (el.get_attribute("class") or ""))
-            except Exception:
-                return False
+                try:
+                    d.switch_to.frame(find(_anchor_css))
+                    el = find("#recaptcha-anchor, .recaptcha-checkbox")
+                    if (el.get_attribute("aria-checked") == "true"
+                            or "recaptcha-checkbox-checked" in (el.get_attribute("class") or "")):
+                        return True
+                except Exception:
+                    pass
+                d.switch_to.default_content()
+                try:
+                    d.switch_to.frame(find("iframe[src*='api2/bframe'], "
+                                           "iframe[src*='recaptcha/api2/bframe'], "
+                                           "iframe[src*='enterprise/bframe']"))
+                    return bool(d.execute_script(
+                        "return !!document.querySelector('.rc-imageselect, #rc-imageselect, "
+                        ".rc-imageselect-instructions, .rc-audiochallenge-tdownload-link, "
+                        "#audio-source, #audio-response, .rc-doscaptcha-header-text');"
+                    ))
+                except Exception:
+                    return False
             finally:
                 try:
                     d.switch_to.default_content()
@@ -2489,8 +2508,8 @@ def solve_recaptcha_audio(sid):
         # didn't. So an OS click that missed (wrong window, stale coords, an overlay)
         # was never noticed and never retried — we walked on with an unticked box and
         # then blamed the audio solver for a challenge that had never opened.
-        if not token_present() and not _anchor_ticked():
-            print("[recaptcha] anchor still unticked after the OS click — falling back to a WebDriver click", flush=True)
+        if not token_present() and not _click_registered():
+            print("[recaptcha] OS click did not register — falling back to a WebDriver click", flush=True)
             try:
                 d.switch_to.default_content()
                 d.switch_to.frame(find(_anchor_css))
@@ -2507,13 +2526,14 @@ def solve_recaptcha_audio(sid):
         if token_present():
             return {"solved": True, "blocked": False, "message": "passed on checkbox"}
 
-        # Still unticked after both methods — the challenge cannot have opened, so say
-        # THAT instead of failing later on a missing audio button.
-        if not _anchor_ticked():
+        # Neither method got the click to register (no token, anchor unticked, no
+        # challenge in the bframe) — the challenge genuinely never opened. Say that,
+        # rather than failing later on a missing audio button.
+        if not _click_registered():
             d.switch_to.default_content()
             return {"solved": False, "blocked": False,
-                    "message": "the reCAPTCHA checkbox could not be ticked (neither the OS-level "
-                               "click nor the WebDriver click registered) — no challenge opened."}
+                    "message": "the reCAPTCHA checkbox click did not register (neither the OS-level "
+                               "nor the WebDriver click opened a challenge)."}
 
         # 2. Switch the challenge frame to audio mode.
         try:
