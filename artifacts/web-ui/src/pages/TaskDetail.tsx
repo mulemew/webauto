@@ -990,44 +990,35 @@ export default function TaskDetail() {
                                   </div>
                                   <span className="text-[11px] text-muted-foreground shrink-0">View →</span>
                                 </div>
-                                {/* Horizontal step pills */}
-                                {stepLogs.length > 0 && (
-                                  <div className="flex items-center gap-1 flex-wrap">
-                                    {stepLogs.map((step, si) => {
-                                      const isPrecheck = step.type === "precheck";
-                                      const isPostcheck = step.type === "postcheck";
-                                      const pillClass = isPrecheck
-                                        ? "bg-purple-500/10 border-purple-500/30 text-purple-500"
-                                        : isPostcheck
-                                        ? "bg-blue-500/10 border-blue-500/30 text-blue-500"
-                                        : step.success
-                                        ? "bg-green-500/5 border-green-500/20 text-green-600"
-                                        : "bg-destructive/10 border-destructive/30 text-destructive";
-                                      return (
-                                        <span key={si} className={"inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-mono border " + pillClass}>
-                                          {step.success ? "✓" : "✗"} {stepTypeLabel(step.type, t)}
-                                        </span>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-                                {/* Full text of the FAILED step (or the last step; or the
-                                    top-level message when the task failed before any step
-                                    ran) — untruncated so the reason is readable in the list. */}
+                                {/* One line only. The per-step pills used to be listed here
+                                    for every step, which made each row grow with the
+                                    workflow and turned the list into a wall — the details
+                                    are one click away, so the list just needs the outcome:
+                                    the step that FAILED, else the last step's result. */}
                                 {(() => {
                                   let msg: string;
+                                  let label = "";
                                   if (stepLogs.length > 0) {
                                     const rel = stepLogs.find((s) => !s.success) ?? stepLogs[stepLogs.length - 1];
                                     msg = rel?.message ?? "";
+                                    label = rel ? stepTypeLabel(rel.type, t) : "";
                                   } else {
                                     msg = isDryRunLog ? log.message.slice("[DRY RUN] ".length) : log.message;
                                   }
                                   msg = (msg ?? "").trim();
-                                  return msg ? (
-                                    <p className={"text-xs font-mono whitespace-pre-wrap break-words mt-1.5 " + (log.success ? "text-muted-foreground" : "text-red-400")}>
-                                      {msg}
+                                  if (!msg) return null;
+                                  return (
+                                    <p className={"text-xs font-mono flex items-start gap-1.5 " + (log.success ? "text-muted-foreground" : "text-red-400")}>
+                                      {label && (
+                                        <span className="shrink-0 opacity-60">[{label}]</span>
+                                      )}
+                                      {/* Failures wrap in full (that's the reason you came for);
+                                          successes stay on one line. */}
+                                      <span className={log.success ? "truncate" : "whitespace-pre-wrap break-words"}>
+                                        {msg}
+                                      </span>
                                     </p>
-                                  ) : null;
+                                  );
                                 })()}
                               </div>
                             </Link>
