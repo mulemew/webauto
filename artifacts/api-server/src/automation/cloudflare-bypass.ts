@@ -308,10 +308,23 @@ async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
   // interstitial renders only the challenge, never the app's form/nav.
   try {
     isCfPage = (await page.evaluate(() => {
-      // A real interactive FORM means we're past the gate. NOT nav/header: a full-page
-      // challenge is wrapped in the site's own chrome (nav/header included), so keying
-      // off those made a framed full-page challenge — hub.weirdhost.xyz — read as "not
-      // a challenge" and its checkbox never got clicked.
+      // 1) A RENDERED, VISIBLE Turnstile widget must ALWAYS be handled — clicked —
+      //    even on a normal page that has a login form. That's exactly where embedded
+      //    widgets live (wispbyte's login, bot-hosting/host2play's renew modal). The
+      //    response input's PARENT is the visible widget box. Suppressing this whenever
+      //    a form was present is what stopped those checkboxes from being clicked.
+      const resp = document.querySelector(
+        'input[id^="cf-chl-widget-"][id$="_response"], input[name="cf-turnstile-response"]',
+      );
+      const box = (resp && resp.parentElement) || document.querySelector(".cf-turnstile");
+      if (box) {
+        const r = box.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) return true; // a real, clickable widget is on screen
+      }
+      // 2) Otherwise it can only be a FULL-PAGE interstitial — and that renders ONLY the
+      //    challenge, never the app's own form. So a page with a login form and no
+      //    visible widget is not a challenge (this is what stops a login page being
+      //    mistaken for an interstitial and looped/reloaded to death).
       const siteContent = document.querySelector(
         "input[type='password'], input[name='email'], input[name='username']",
       );
