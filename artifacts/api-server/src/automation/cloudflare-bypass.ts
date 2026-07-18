@@ -771,11 +771,24 @@ export async function bypassCloudflareChallenge(
         continue;
       }
 
+      // A TOKEN is the real success signal for an EMBEDDED widget: unlike a full-page
+      // interstitial it does not redirect or disappear when passed (it just ticks), so
+      // waiting for the challenge to "go away" never succeeds and the loop failed after
+      // 8 clicks despite the checkbox being passed.
+      if (await isTurnstileSolved(page)) {
+        logger.info({ attempt }, "Turnstile solved (token present)");
+        return "passed";
+      }
+
       // Wait for page navigation or challenge to clear — use domcontentloaded
       // instead of networkidle2 to avoid premature timeouts on CF pages
       await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 12_000 }).catch(() => {});
       await sleep(2_000 + Math.random() * 1_500);
 
+      if (await isTurnstileSolved(page)) {
+        logger.info({ attempt }, "Turnstile solved (token present after settle)");
+        return "passed";
+      }
       const still = await detectCfChallenge(page);
       if (still === "none") {
         logger.info({ attempt }, "Cloudflare Turnstile click challenge bypassed");
@@ -836,6 +849,22 @@ export async function clearCloudflareInterstitial(
   // a generous budget no longer risks a long hang. Tunable via CF_CLEAR_BUDGET_MS.
   const budgetMs = opts?.budgetMs ?? Number(process.env.CF_CLEAR_BUDGET_MS ?? 180_000);
   const deadline = Date.now() + budgetMs;
+
+  // This function clears FULL-PAGE interstitials — the ones that block the page and
+  // redirect when passed. An embedded Turnstile that sits inside a login form is NOT
+  // one of those: it never redirects (it just ticks + issues a token), so trying to
+  // "clear" it here loops to the budget and reports failure, and the form never gets
+  // filled. If the page already shows its login form, there is no interstitial to
+  // pre-clear — leave the embedded widget to the before-submit captcha handling.
+  const hasLoginForm = (await page
+    .evaluate(() =>
+      !!document.querySelector("input[type='password'], input[name='email'], input[name='username']"),
+    )
+    .catch(() => false)) as boolean;
+  if (hasLoginForm) {
+    logger.info("Login form already present — no full-page interstitial to clear (embedded widget handled before submit)");
+    return true;
+  }
 
   for (let round = 0; round <= maxReloads; round++) {
     if (Date.now() > deadline) {
