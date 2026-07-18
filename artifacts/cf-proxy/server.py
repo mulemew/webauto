@@ -323,19 +323,20 @@ def _resolve_selector(selector: str):
 
 
 def _is_cf_challenge(sb) -> bool:
+    # STRUCTURAL, language-independent. Cloudflare LOCALISES the interstitial
+    # ("请稍候…", "Vérification…", …), so the old English-title/body test ("Just a
+    # moment" / "Attention Required" / "Checking your browser") silently missed every
+    # non-English full-page challenge: the goto loop then broke WITHOUT clicking and
+    # reported it "passed". Key off the markers CF emits regardless of language —
+    # the challenges.cloudflare.com URL, plus the cf-chl-widget / challenge-stage /
+    # turnstile-response structure that _cf_interstitial_present already matches.
     try:
-        title = sb.driver.title or ""
         url = sb.get_current_url() or ""
-        body_text = sb.execute_script("return document.body?.innerText || ''") or ""
-        return (
-            "Just a moment" in title
-            or "Attention Required" in title
-            or "challenges.cloudflare.com" in url
-            or "cf-browser-verification" in body_text
-            or "Checking your browser" in body_text
-        )
     except Exception:
-        return False
+        url = ""
+    if "challenges.cloudflare.com" in url:
+        return True
+    return _cf_interstitial_present(sb)
 
 
 def _classify_start_error(error_text: str) -> str:
