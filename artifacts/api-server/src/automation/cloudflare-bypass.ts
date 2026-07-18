@@ -700,51 +700,46 @@ export async function bypassCloudflareChallenge(
   }
 
   if (challengeType === "js_challenge") {
-    for (let attempt = 1; attempt <= 10; attempt++) {
-      // Respect the caller's overall time budget. Each attempt costs ~5-10s, so 10
-      // attempts x several bypass rounds used to stack up to 10+ minutes of blocking.
-      if (opts?.deadline && Date.now() > opts.deadline) {
-        logger.warn({ attempt }, "Cloudflare bypass hit its time budget — giving up");
-        return "failed";
-      }
-      // Expand any hidden Turnstile containers before interaction
+    // A non-interactive / "managed" challenge VERIFIES ITSELF — the spinner
+    // ("Vérification…" / "en cours") runs and issues the token when it's satisfied.
+    // The right thing is to WAIT for it, uninterrupted, not to reload: a reload
+    // restarts the spinner, so it never finishes (that's what made these fail while
+    // the screenshot still showed it verifying). So poll to the deadline instead of a
+    // fixed attempt count. detectCfChallenge returns "none" the instant the real page
+    // renders, so a page that clears exits immediately; we only wait the full budget
+    // when it genuinely never resolves.
+    const jsDeadline = opts?.deadline ?? Date.now() + 120_000;
+    let attempt = 0;
+    while (Date.now() < jsDeadline) {
+      attempt++;
       try { await page.evaluate(EXPAND_TURNSTILE_JS as unknown as string); } catch { /* ignore */ }
-      // Full human presence simulation (mouse + scroll + keyboard)
       await simulateHumanPresence(page);
-      // CF JS challenge typically resolves within 5s; increase wait each attempt
-      // On first attempt, give CF's JS more time to complete fingerprinting
-      const waitMs = attempt === 1
-        ? 3_000 + Math.random() * 2_000
-        : 2_000 + attempt * 400 + Math.random() * 1_000;
-      await sleep(waitMs);
+      await sleep(attempt === 1 ? 4_000 + Math.random() * 2_000 : 3_000 + Math.random() * 1_500);
 
       const still = await detectCfChallenge(page);
       if (still === "none") {
-        logger.info({ attempt }, "Cloudflare JS challenge bypassed");
+        logger.info({ attempt }, "Cloudflare JS challenge verified/cleared");
         return "passed";
       }
-      // If it upgraded to turnstile_click, try clicking
+      if (await isTurnstileSolved(page)) {
+        logger.info({ attempt }, "Turnstile token populated while waiting");
+        return "passed";
+      }
+      // If it upgraded to an interactive checkbox, click it.
       if (still === "turnstile_click") {
         logger.info({ attempt }, "JS challenge upgraded to Turnstile click — attempting click");
-        // Human presence before clicking the checkbox
         await simulateHumanPresence(page);
         await sleep(500 + Math.random() * 500);
         await clickTurnstileCheckbox(page);
         await sleep(3_000 + Math.random() * 2_000);
-        // Check both challenge status and Turnstile token
-        if (await isTurnstileSolved(page)) {
-          logger.info({ attempt }, "Turnstile token populated after click");
-          return "passed";
-        }
-        const afterClick = await detectCfChallenge(page);
-        if (afterClick === "none") {
+        if (await isTurnstileSolved(page) || (await detectCfChallenge(page)) === "none") {
           logger.info({ attempt }, "Cloudflare challenge bypassed after click");
           return "passed";
         }
       }
-      logger.debug({ attempt }, "CF JS challenge still active, retrying");
+      logger.debug({ attempt }, "CF JS challenge still verifying, waiting");
     }
-    logger.warn("Cloudflare JS challenge did not clear after 10 attempts");
+    logger.warn({ attempt }, "Cloudflare JS challenge did not clear before the deadline");
     return "failed";
   }
 
@@ -820,10 +815,13 @@ export async function clearCloudflareInterstitial(
   opts?: { url?: string; maxReloads?: number; budgetMs?: number },
 ): Promise<boolean> {
   const maxReloads = opts?.maxReloads ?? 2;
-  // Wall-clock budget for the WHOLE clear. Without it, (maxReloads+1) rounds x 10
-  // internal attempts x ~5-10s each (plus a 30s goto per round) could block a task
-  // for 10+ minutes before failing. Tunable via CF_CLEAR_BUDGET_MS.
-  const budgetMs = opts?.budgetMs ?? Number(process.env.CF_CLEAR_BUDGET_MS ?? 90_000);
+  // Wall-clock budget for the WHOLE clear. 180s: a non-interactive challenge can take
+  // a while to self-verify (slow site / proxy / WARP), and cutting it off at 90s while
+  // the spinner was still going is exactly what made these fail. The old 10-minute
+  // hangs came from a login page being MISread as a challenge and looping forever —
+  // that root cause is fixed (a page with a real form is no longer "a challenge"), so
+  // a generous budget no longer risks a long hang. Tunable via CF_CLEAR_BUDGET_MS.
+  const budgetMs = opts?.budgetMs ?? Number(process.env.CF_CLEAR_BUDGET_MS ?? 180_000);
   const deadline = Date.now() + budgetMs;
 
   for (let round = 0; round <= maxReloads; round++) {
@@ -842,6 +840,16 @@ export async function clearCloudflareInterstitial(
     }
 
     // result === "failed" — reload and retry (analogue of uc_open_with_reconnect).
+    // But NOT if a non-interactive challenge is still verifying: reloading restarts
+    // its spinner from scratch and it never gets to finish. bypassCloudflareChallenge
+    // already waited to the deadline for that case, so if we're still on a js_challenge
+    // the reload wouldn't help — only an interactive/stuck one benefits from a fresh
+    // navigation.
+    const stillType = await detectCfChallenge(page).catch(() => "js_challenge" as const);
+    if (stillType === "js_challenge") {
+      logger.warn("CF non-interactive challenge still verifying at deadline — a reload would only restart it");
+      return false;
+    }
     if (round < maxReloads) {
       const reloadUrl = opts?.url || page.url();
       logger.info({ round, reloadUrl }, "CF interstitial not cleared — reloading page and retrying");
