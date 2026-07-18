@@ -308,25 +308,19 @@ async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
   // interstitial renders only the challenge, never the app's form/nav.
   try {
     isCfPage = (await page.evaluate(() => {
-      // 1) A RENDERED, VISIBLE Turnstile widget must ALWAYS be handled — clicked —
-      //    even on a normal page that has a login form. That's exactly where embedded
-      //    widgets live (wispbyte's login, bot-hosting/host2play's renew modal). The
-      //    response input's PARENT is the visible widget box. Suppressing this whenever
-      //    a form was present is what stopped those checkboxes from being clicked.
-      const resp = document.querySelector(
-        'input[id^="cf-chl-widget-"][id$="_response"], input[name="cf-turnstile-response"]',
-      );
-      const box = (resp && resp.parentElement) || document.querySelector(".cf-turnstile");
-      if (box) {
-        const r = box.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0) return true; // a real, clickable widget is on screen
-      }
-      // 2) Otherwise it can only be a FULL-PAGE interstitial — and that renders ONLY the
-      //    challenge, never the app's own form. So a page with a login form and no
-      //    visible widget is not a challenge (this is what stops a login page being
-      //    mistaken for an interstitial and looped/reloaded to death).
+      // Discriminate the THREE cases by checking the site's OWN content FIRST. A login
+      // form (embedded widget) or a dashboard nav/header (popup/modal widget) means we
+      // are already PAST the gate, so a Turnstile here is an EMBEDDED / POPUP widget that
+      // detectAndHandleCaptcha's token path handles with a SINGLE click — it is NOT a
+      // full-page interstitial. This check MUST come first: an embedded/popup page has
+      // BOTH site content AND a widget box, so testing the widget first (as f98528b did)
+      // mis-routed every embedded/popup widget into the full-page bypass, which never
+      // clicked them. Only a page with NO site content can be a full-page challenge —
+      // that renders ONLY the challenge, never the app's own form/nav. This keeps the
+      // full-page path (handled below) completely separate from the widget path, so
+      // working on one can never again break the other.
       const siteContent = document.querySelector(
-        "input[type='password'], input[name='email'], input[name='username']",
+        "input[type='password'], form[action*='login'], input[name='email'], input[name='username'], nav, header",
       );
       if (siteContent) return false;
       return !!document.querySelector(
@@ -376,16 +370,15 @@ async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
 
   if (!isCfPage) return "none";
 
-  // A RENDERED, VISIBLE Turnstile widget ALWAYS has a checkbox to CLICK, so it must
-  // route to the click handler directly — never through the iframe-gated resolution
-  // below. The modern Turnstile widget carries NO challenges.cloudflare.com <iframe>
-  // (its response input sits in the light DOM), so the frame check misses it and falls
-  // through to "js_challenge", whose branch only WAITS and never clicks. That is the
-  // exact regression that stopped embedded (wispbyte login), popup (bot-hosting renew)
-  // AND modern full-page checkboxes from ever being clicked: detection said "challenge"
-  // but the type said "just wait". Two days ago these widgets returned "none" and were
-  // clicked by detectAndHandleCaptcha's token path; once they became detected here they
-  // needed to be classified as clickable, not as a self-verifying JS challenge.
+  // We only reach here for a FULL-PAGE challenge (embedded/popup widgets returned "none"
+  // above via the site-content guard and are handled by the token path). If the full-page
+  // challenge renders a VISIBLE widget box it has a checkbox to CLICK, so route it to the
+  // click handler directly — NOT the iframe-gated resolution below. The modern Turnstile
+  // widget carries NO challenges.cloudflare.com <iframe> (its response input is in the
+  // light DOM), so the frame check would miss it and fall through to "js_challenge", whose
+  // branch only WAITS and never clicks — leaving an interactive full-page checkbox
+  // untouched. (A managed/self-verifying full-page challenge has no clickable box, so the
+  // native clicker's image search simply no-ops and we still fall through to waiting.)
   try {
     const hasVisibleWidget = (await page.evaluate(() => {
       const resp = document.querySelector(
