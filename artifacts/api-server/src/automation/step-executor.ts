@@ -331,7 +331,7 @@ async function executeStep(
         await settleAfterClick(page, urlBefore);
         const reaction = res.reacted
           ? `page reacted (${res.changes} DOM changes)`
-          : `NO page reaction (${res.changes} DOM changes — the button may ignore automated clicks or the spin was rejected)`;
+          : `NO page reaction (${res.changes} DOM changes — the click may not have landed on the button, or the button ignored it)`;
         return { message: `Clicked element matching text "${step.selector}" [${res.method} click] — ${reaction}` };
       }
 
