@@ -2273,6 +2273,16 @@ def click_turnstile(sid):
             # CLOSED shadow root that document.querySelectorAll("iframe") cannot see
             # (verified: iframes:[] on a page that visibly has the checkbox). Both
             # targets missed, nothing was ever clicked, and the page span until timeout.
+            # Success signal depends on WHERE the widget lives, captured up-front:
+            #   • Full-page interstitial → passing REDIRECTS, so "interstitial gone" is
+            #     the signal (its response input often never gets a token).
+            #   • Embedded/modal widget on the real app page (bot-hosting's renew
+            #     dialog) → the page ALWAYS has site content, so _cf_interstitial_present
+            #     is already False; using "not interstitial" as success made the loop
+            #     declare victory on its FIRST check without ever clicking — a false
+            #     "solved" while the checkbox sat there, which then broke the next step.
+            #     For these the only valid signal is the token.
+            _was_interstitial = _cf_interstitial_present(sb)
             for _sel, _label in (
                 ('input[name="cf-turnstile-response"]', "embedded"),
                 ('input[id^="cf-chl-widget-"][id$="_response"]', "chl-widget"),
@@ -2280,11 +2290,11 @@ def click_turnstile(sid):
                 cbxy = _element_abs_xy(sb, _sel, dx=28, dy_frac=0.5, wid=_wid, parent=True)
                 if not cbxy:
                     continue
-                hit = _coord_click_loop(
-                    cbxy,
-                    lambda: bool(_turnstile_token(sb)) or (not _cf_interstitial_present(sb)),
-                    _label,
-                )
+                if _was_interstitial:
+                    _done = lambda: (not _cf_interstitial_present(sb)) or bool(_turnstile_token(sb))
+                else:
+                    _done = lambda: bool(_turnstile_token(sb))
+                hit = _coord_click_loop(cbxy, _done, _label)
                 if hit:
                     return {"solved": True, "method": "coord", "attempt": hit}
 
