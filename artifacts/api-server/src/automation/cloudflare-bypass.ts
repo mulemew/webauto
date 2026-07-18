@@ -796,6 +796,17 @@ export async function bypassCloudflareChallenge(
       await sleep(800 + Math.random() * 1200);
 
       const clicked = await clickTurnstileCheckbox(page);
+
+      // A FULL-PAGE challenge passes with NO token — it redirects / disappears — so the
+      // native clicker reports solved:false even when it actually cleared the challenge.
+      // Verify the challenge is really still up BEFORE treating !clicked as a miss, or a
+      // full-page challenge we DID pass gets reported as a failure. This branch is
+      // full-page only (embedded/popup widgets return "none" and go through the token
+      // path), so the "challenge gone" signal here can never affect a widget.
+      if ((await detectCfChallenge(page)) === "none" || (await isTurnstileSolved(page))) {
+        logger.info({ attempt }, "Cloudflare full-page challenge cleared after click");
+        return "passed";
+      }
       if (!clicked) {
         logger.warn({ attempt }, "Could not locate Turnstile checkbox, waiting for it to appear");
         await sleep(2_000 + Math.random() * 1_000);
