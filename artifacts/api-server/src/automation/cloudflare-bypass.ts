@@ -782,7 +782,20 @@ export async function bypassCloudflareChallenge(
   }
 
   if (challengeType === "turnstile_click") {
-    for (let attempt = 1; attempt <= 8; attempt++) {
+    // Do NOT re-run the whole solve many times. The cf-proxy native clicker already
+    // retries thoroughly WITHIN a single call (several spaced uc_gui image clicks, then
+    // CDP, then coordinate fallbacks — ~2 min of work). Repeating that from out here does
+    // not help: a Turnstile that didn't pass on a clean click needs a FRESH page, not more
+    // clicks on the same widget. Hammering it (this loop used to run 8×) just mashes the
+    // checkbox into CF's "Verification failed" — which both EXPOSES the automation and
+    // dragged a failing login out to ~20 min (8 × a ~2 min native solve). So: one pass on
+    // cf-proxy; a few on the local backend, whose per-call click is a single cheap
+    // xdotool/CDP click rather than a full internal retry sweep.
+    const isCfProxyClicker =
+      "clickTurnstile" in page &&
+      typeof (page as unknown as { clickTurnstile?: unknown }).clickTurnstile === "function";
+    const maxAttempts = isCfProxyClicker ? 1 : 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       // Expand hidden Turnstile containers before each attempt
       try { await page.evaluate(EXPAND_TURNSTILE_JS as unknown as string); } catch { /* ignore */ }
       // Full human presence simulation before clicking
@@ -832,7 +845,7 @@ export async function bypassCloudflareChallenge(
         return "passed";
       }
     }
-    logger.warn("Cloudflare Turnstile click challenge not bypassed after 8 attempts");
+    logger.warn({ maxAttempts }, "Cloudflare Turnstile click challenge not bypassed");
     return "failed";
   }
 
