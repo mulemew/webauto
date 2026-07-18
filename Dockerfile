@@ -60,6 +60,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # geolocation THROUGH the configured proxy (handles socks5:// and http://
     # uniformly, which Node's built-in undici cannot do for SOCKS).
     curl \
+    # tini — PID-1 init that reaps orphaned Chrome/sing-box/Xvfb zombies (see CMD)
+    tini \
     # xdotool + Xvfb + window manager — required for OS-level mouse clicks (bypasses CF Turnstile)
     xdotool xvfb x11-utils fluxbox \
     # Chromium runtime dependencies
@@ -130,6 +132,12 @@ EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD wget -qO- http://localhost:8080/api/healthz || exit 1
+
+# tini as PID 1 (-g forwards signals to the whole process group) reaps orphaned
+# Chrome/sing-box/Xvfb/fluxbox zombies that reparent to PID 1 when they crash or
+# are killed out from under the Node child-registry. The Node-side reaper only
+# tracks helpers it spawned itself; tini is the catch-all for everything else.
+ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
 
 # Start Xvfb (virtual display) before the Node process so the local browser
 # provider can launch Chromium in headed mode. Headed mode is critical for
