@@ -2098,12 +2098,18 @@ def _cf_interstitial_present(sb):
     timeout. The site's own content is the discriminator: an interstitial shows only
     the challenge, never the app's form.
     """
+    #
+    # The discriminator is a real INTERACTIVE FORM (password / login inputs), NOT
+    # nav/header: a full-page Cloudflare challenge is wrapped in the site's own chrome
+    # and DOES carry a nav/header, so excluding on those made every framed full-page
+    # challenge look like it wasn't a challenge — which is why the checkbox on
+    # hub.weirdhost.xyz never got treated as one. A login form, by contrast, only
+    # exists once we're actually past the gate.
     try:
         return bool(sb.execute_script(
             "var real = document.querySelector("
-            "  \"input[type='password'], form[action*='login'], input[name='email'], \" +"
-            "  \"input[name='username'], nav, header\");"
-            "if (real) return false;"   # site content is rendered => we're past the gate
+            "  \"input[type='password'], input[name='email'], input[name='username']\");"
+            "if (real) return false;"   # a real form is rendered => we're past the gate
             "return !!(document.querySelector("
             "'input[id^=\"cf-chl-widget-\"][id$=\"_response\"], [id^=\"cf-chl-widget\"], "
             "script[src*=\"challenges.cloudflare.com\"], "
@@ -2445,24 +2451,6 @@ def solve_recaptcha_audio(sid):
             _wid = _find_session_window(sb)
         except Exception:
             _wid = None
-        cbxy = _element_abs_xy(sb, _anchor_css, dx=30, dy_frac=0.5, wid=_wid)
-        if cbxy:
-            def _click_checkbox():
-                import subprocess
-                try:
-                    with _gui_lock:
-                        _raise_window(_wid)
-                        _human_mouse_drift(cbxy[0], cbxy[1])
-                        subprocess.run(
-                            ["xdotool", "mousemove", str(cbxy[0]), str(cbxy[1])],
-                            timeout=2, capture_output=True,
-                        )
-                        subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
-                except Exception:
-                    pass
-            # detach → drift+click (OS-level) → let reCAPTCHA score undisturbed → reconnect
-            _detached_wait(sb, 3, during=_click_checkbox)
-
         def _click_registered():
             """Did the anchor click take effect?
 
@@ -2503,13 +2491,48 @@ def solve_recaptcha_audio(sid):
                 except Exception:
                     pass
 
-        # VERIFY, then fall back. This used to be an either/or: an OS click was fired
-        # when the coordinates resolved, and the WebDriver click ran ONLY when they
-        # didn't. So an OS click that missed (wrong window, stale coords, an overlay)
-        # was never noticed and never retried — we walked on with an unticked box and
-        # then blamed the audio solver for a challenge that had never opened.
+        # ── PRIMARY: SeleniumBase's built-in image-based captcha clicker ──────────
+        # It finds the checkbox by ON-SCREEN IMAGE MATCH and clicks it via PyAutoGUI,
+        # so it does NOT depend on our hand-computed window-geometry coordinates — the
+        # [coords] log proved those can be wrong (a title-bar offset that lands the
+        # click ~87px below the box). This is the same clicker the working Turnstile
+        # path and the reference project use.
+        for _i in range(3):
+            if token_present() or _click_registered():
+                break
+            try:
+                with _gui_lock:
+                    _raise_window(_wid)
+                    sb.uc_gui_click_captcha()
+                print(f"[recaptcha] uc_gui_click_captcha attempt {_i + 1}", flush=True)
+            except Exception as e:
+                print(f"[recaptcha] uc_gui_click_captcha: {e}", flush=True)
+            time.sleep(2)
+
+        # FALLBACK: hand-computed OS-level click, driver detached while reCAPTCHA
+        # scores it. Only if the image clicker didn't take.
         if not token_present() and not _click_registered():
-            print("[recaptcha] OS click did not register — falling back to a WebDriver click", flush=True)
+            cbxy = _element_abs_xy(sb, _anchor_css, dx=30, dy_frac=0.5, wid=_wid)
+            if cbxy:
+                def _click_checkbox():
+                    import subprocess
+                    try:
+                        with _gui_lock:
+                            _raise_window(_wid)
+                            _human_mouse_drift(cbxy[0], cbxy[1])
+                            subprocess.run(
+                                ["xdotool", "mousemove", str(cbxy[0]), str(cbxy[1])],
+                                timeout=2, capture_output=True,
+                            )
+                            subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
+                    except Exception:
+                        pass
+                # detach → drift+click (OS-level) → let reCAPTCHA score undisturbed → reconnect
+                _detached_wait(sb, 3, during=_click_checkbox)
+
+        # LAST RESORT: a plain WebDriver click on the anchor (no coordinates at all).
+        if not token_present() and not _click_registered():
+            print("[recaptcha] neither image nor OS click registered — falling back to a WebDriver click", flush=True)
             try:
                 d.switch_to.default_content()
                 d.switch_to.frame(find(_anchor_css))

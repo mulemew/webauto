@@ -308,8 +308,12 @@ async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
   // interstitial renders only the challenge, never the app's form/nav.
   try {
     isCfPage = (await page.evaluate(() => {
+      // A real interactive FORM means we're past the gate. NOT nav/header: a full-page
+      // challenge is wrapped in the site's own chrome (nav/header included), so keying
+      // off those made a framed full-page challenge — hub.weirdhost.xyz — read as "not
+      // a challenge" and its checkbox never got clicked.
       const siteContent = document.querySelector(
-        "input[type='password'], form[action*='login'], input[name='email'], input[name='username'], nav, header",
+        "input[type='password'], input[name='email'], input[name='username']",
       );
       if (siteContent) return false;
       return !!document.querySelector(
