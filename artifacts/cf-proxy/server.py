@@ -2236,6 +2236,48 @@ def click_turnstile(sid):
         # the rendered widget — so click its checkbox (left side, vertically
         # centered) at OS level with human drift, the same primitives as the
         # reCAPTCHA anchor click. Generic: works on any such shadow/hidden widget.
+        # ── CDP viewport click ───────────────────────────────────────────────
+        # A trusted click at the checkbox's VIEWPORT position passes this challenge
+        # outright (verified in-browser: one click → redirect, no image challenge, no
+        # trajectory needed). CDP Input.dispatchMouseEvent takes CSS/viewport coords,
+        # so it sidesteps the whole window-geometry→screen conversion (the title-bar
+        # offset that made the OS-level xdotool click miss). The checkbox sits a fixed
+        # ~30px in from the response input's widget container, vertically centred.
+        def _cdp_click_checkbox():
+            try:
+                box = sb.execute_script(
+                    "var i=document.querySelector("
+                    "'input[name=\"cf-turnstile-response\"],input[id^=\"cf-chl-widget-\"][id$=\"_response\"]');"
+                    "if(!i||!i.parentElement)return null;"
+                    "var r=i.parentElement.getBoundingClientRect();"
+                    "return {x:r.x,y:r.y,h:r.height};")
+                if not box:
+                    return False
+                cx = float(box["x"]) + 30
+                cy = float(box["y"]) + float(box["h"]) * 0.5
+                for ev in ("mouseMoved", "mousePressed", "mouseReleased"):
+                    p = {"type": ev, "x": cx, "y": cy, "button": "left", "clickCount": 1}
+                    if ev == "mouseMoved":
+                        p = {"type": ev, "x": cx, "y": cy}
+                    sb.driver.execute_cdp_cmd("Input.dispatchMouseEvent", p)
+                print(f"[turnstile] CDP viewport click at ({cx:.0f},{cy:.0f})", flush=True)
+                return True
+            except Exception as e:
+                print(f"[turnstile] CDP click err: {e}", flush=True)
+                return False
+
+        if not _turnstile_token(sb):
+            _cdp_was_intr = _cf_interstitial_present(sb)
+            for _ in range(3):
+                if _turnstile_token(sb) or (_cdp_was_intr and not _cf_interstitial_present(sb)):
+                    return {"solved": True, "method": "cdp", "attempt": 1}
+                if not _cdp_click_checkbox():
+                    break
+                for _ in range(10):
+                    time.sleep(0.5)
+                    if _turnstile_token(sb) or (_cdp_was_intr and not _cf_interstitial_present(sb)):
+                        return {"solved": True, "method": "cdp", "attempt": 1}
+
         if not _turnstile_token(sb):
             import subprocess
             try:
