@@ -376,6 +376,31 @@ async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
 
   if (!isCfPage) return "none";
 
+  // A RENDERED, VISIBLE Turnstile widget ALWAYS has a checkbox to CLICK, so it must
+  // route to the click handler directly — never through the iframe-gated resolution
+  // below. The modern Turnstile widget carries NO challenges.cloudflare.com <iframe>
+  // (its response input sits in the light DOM), so the frame check misses it and falls
+  // through to "js_challenge", whose branch only WAITS and never clicks. That is the
+  // exact regression that stopped embedded (wispbyte login), popup (bot-hosting renew)
+  // AND modern full-page checkboxes from ever being clicked: detection said "challenge"
+  // but the type said "just wait". Two days ago these widgets returned "none" and were
+  // clicked by detectAndHandleCaptcha's token path; once they became detected here they
+  // needed to be classified as clickable, not as a self-verifying JS challenge.
+  try {
+    const hasVisibleWidget = (await page.evaluate(() => {
+      const resp = document.querySelector(
+        'input[id^="cf-chl-widget-"][id$="_response"], input[name="cf-turnstile-response"]',
+      );
+      const box = (resp && resp.parentElement) || document.querySelector(".cf-turnstile");
+      if (!box) return false;
+      const r = box.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    })) as boolean;
+    if (hasVisibleWidget) return "turnstile_click";
+  } catch {
+    // fall through to the frame-based resolution below
+  }
+
   // Distinguish JS-only challenge vs interactive Turnstile checkbox.
   //
   // NOTE: Turnstile renders its iframe inside a **closed shadow DOM**, which
