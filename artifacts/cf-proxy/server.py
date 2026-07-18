@@ -1229,6 +1229,47 @@ def _cleanup_worker():
 threading.Thread(target=_cleanup_worker, daemon=True).start()
 
 
+# ── Zombie reaper ────────────────────────────────────────────────────────────
+#
+# SeleniumBase UC launches the Chrome/Chromium BROWSER as a subprocess of THIS
+# python process (see _install_chrome_popen_patch — the very fact that we can
+# intercept the browser launch proves it is Popen'd here). Nothing in the SB/UC
+# teardown path ever wait()s on that browser process, so every finished session
+# left the browser — plus its chrome_crashpad helper and occasionally uc_driver —
+# as a <defunct> zombie parented to this PID-1 server. Observed: 94 zombies
+# (~70 chromium, ~20 chrome_crashpad, 1 uc_driver) after a batch of runs.
+#
+# tini as PID 1 only reaps orphans REPARENTED to PID 1 (e.g. crashpad after its
+# chromium parent dies); it can NOT reap the browser processes that are DIRECT
+# children of this python process. So we reap them here: os.waitpid(-1, WNOHANG)
+# collects every exited child — direct children and reparented orphans alike —
+# without touching live ones.
+#
+# This does NOT disturb selenium's Service.stop() or subprocess.run(): both
+# waitpid a SPECIFIC pid, and CPython's Popen._try_wait treats a child that was
+# already reaped (ChildProcessError) as a clean exit, so their teardown still
+# completes normally even when this reaper wins the race.
+def _reap_worker():
+    while True:
+        reaped = 0
+        try:
+            while True:
+                pid, _status = os.waitpid(-1, os.WNOHANG)
+                if pid == 0:
+                    break  # children exist but none have exited yet
+                reaped += 1
+        except ChildProcessError:
+            pass  # no child processes at all
+        except Exception:
+            pass
+        # Short interval: browsers exit at session teardown, and we want the
+        # zombie window to be brief. WNOHANG makes each pass cheap.
+        time.sleep(2)
+
+
+threading.Thread(target=_reap_worker, daemon=True).start()
+
+
 def _get(sid):
     with _sessions_lock:
         s = _sessions.get(sid)
