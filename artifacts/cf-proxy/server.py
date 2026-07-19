@@ -13,7 +13,6 @@ background so that POST /sessions returns near-instantly instead of waiting
 import os
 import queue
 import shutil
-import signal
 import subprocess
 import socket
 import threading
@@ -203,16 +202,7 @@ def _install_chrome_popen_patch():
                         env = dict(kwargs.get("env") or os.environ)
                         env["TZ"] = chrome_tz
                         kwargs["env"] = env
-                    proc = _orig_popen(cmd, *args, **kwargs)
-                    # Remember this browser PID on the owning session so close()
-                    # can force-kill it if graceful teardown never runs.
-                    sess = getattr(_thread_local, "session", None)
-                    if sess is not None:
-                        try:
-                            sess._chrome_pids.add(proc.pid)
-                        except Exception:
-                            pass
-                    return proc
+                    return _orig_popen(cmd, *args, **kwargs)
                 finally:
                     for h in handles:
                         try:
@@ -323,20 +313,19 @@ def _resolve_selector(selector: str):
 
 
 def _is_cf_challenge(sb) -> bool:
-    # STRUCTURAL, language-independent. Cloudflare LOCALISES the interstitial
-    # ("请稍候…", "Vérification…", …), so the old English-title/body test ("Just a
-    # moment" / "Attention Required" / "Checking your browser") silently missed every
-    # non-English full-page challenge: the goto loop then broke WITHOUT clicking and
-    # reported it "passed". Key off the markers CF emits regardless of language —
-    # the challenges.cloudflare.com URL, plus the cf-chl-widget / challenge-stage /
-    # turnstile-response structure that _cf_interstitial_present already matches.
     try:
+        title = sb.driver.title or ""
         url = sb.get_current_url() or ""
+        body_text = sb.execute_script("return document.body?.innerText || ''") or ""
+        return (
+            "Just a moment" in title
+            or "Attention Required" in title
+            or "challenges.cloudflare.com" in url
+            or "cf-browser-verification" in body_text
+            or "Checking your browser" in body_text
+        )
     except Exception:
-        url = ""
-    if "challenges.cloudflare.com" in url:
-        return True
-    return _cf_interstitial_present(sb)
+        return False
 
 
 def _classify_start_error(error_text: str) -> str:
@@ -819,12 +808,6 @@ class SessionThread:
         # Temp dir of the per-session fingerprint extension (if any); cleaned up
         # on close.
         self._fp_ext_dir = None
-        # PIDs of Chrome/Chromium browser processes THIS session Popen'd (recorded
-        # by the popen patch). Used by close() to force-kill the browser even when
-        # the worker thread is hung inside a selenium call and never reaches
-        # driver.quit() — otherwise the browser leaks as a live orphan (not a
-        # zombie the reaper can collect, since it never exited).
-        self._chrome_pids: set[int] = set()
         self._log_dir = os.path.join("/tmp/cf-proxy-logs", self.session_id)
         os.makedirs(self._log_dir, exist_ok=True)
         self._chrome_stdout_path = os.path.join(self._log_dir, "chrome.stdout.log")
@@ -871,7 +854,6 @@ class SessionThread:
             for attempt in range(1, attempts + 1):
                 try:
                     _install_chrome_popen_patch()
-                    _thread_local.session = self
                     _thread_local.chrome_stdout_path = self._chrome_stdout_path
                     _thread_local.chrome_stderr_path = self._chrome_stderr_path
                     from seleniumbase import SB
@@ -1057,44 +1039,15 @@ class SessionThread:
                 raise RuntimeError(result.get("error", "Command failed"))
             return result.get("result")
 
-    def _kill_tracked_procs(self):
-        """SIGKILL any browser process this session Popen'd that is still alive.
-
-        Recycle-safe: a PID could have been reaped (by the reaper) and reused by
-        an unrelated process, so we verify /proc/<pid>/cmdline still looks like a
-        Chrome/Chromium launch before signalling. Already-dead PIDs (/proc gone)
-        are skipped. Killing the browser also makes any selenium call the worker
-        is hung inside unwind, so the worker can finish teardown.
-        """
-        for pid in list(self._chrome_pids):
-            try:
-                with open(f"/proc/{pid}/cmdline", "rb") as f:
-                    cmdline = f.read().replace(b"\0", b" ").lower()
-                if b"chrome" not in cmdline and b"chromium" not in cmdline:
-                    continue  # PID recycled into something else — do not kill
-                os.kill(pid, signal.SIGKILL)
-            except (ProcessLookupError, FileNotFoundError):
-                pass  # already gone
-            except Exception:
-                pass
-
     def close(self):
         self._closed = True
         try:
             self._cmd_q.put(None)
-            self._thread.join(timeout=12)
-            if self._thread.is_alive():
-                # Worker stuck in a selenium call and never reached driver.quit().
-                # Kill the browser so the call unwinds and the leaked process dies;
-                # the reaper then collects the resulting zombie.
-                self._kill_tracked_procs()
-                self._thread.join(timeout=3)
+            self._thread.join(timeout=15)
+            if not self._thread.is_alive():
+                self._cleanup_logs()
         except Exception:
             pass
-        # Final guarantee: no live browser is left behind regardless of how the
-        # worker exited (a no-op when graceful quit() already closed it).
-        self._kill_tracked_procs()
-        self._cleanup_logs()
         if self._fp_ext_dir:
             try:
                 import shutil
@@ -1274,47 +1227,6 @@ def _cleanup_worker():
 
 
 threading.Thread(target=_cleanup_worker, daemon=True).start()
-
-
-# ── Zombie reaper ────────────────────────────────────────────────────────────
-#
-# SeleniumBase UC launches the Chrome/Chromium BROWSER as a subprocess of THIS
-# python process (see _install_chrome_popen_patch — the very fact that we can
-# intercept the browser launch proves it is Popen'd here). Nothing in the SB/UC
-# teardown path ever wait()s on that browser process, so every finished session
-# left the browser — plus its chrome_crashpad helper and occasionally uc_driver —
-# as a <defunct> zombie parented to this PID-1 server. Observed: 94 zombies
-# (~70 chromium, ~20 chrome_crashpad, 1 uc_driver) after a batch of runs.
-#
-# tini as PID 1 only reaps orphans REPARENTED to PID 1 (e.g. crashpad after its
-# chromium parent dies); it can NOT reap the browser processes that are DIRECT
-# children of this python process. So we reap them here: os.waitpid(-1, WNOHANG)
-# collects every exited child — direct children and reparented orphans alike —
-# without touching live ones.
-#
-# This does NOT disturb selenium's Service.stop() or subprocess.run(): both
-# waitpid a SPECIFIC pid, and CPython's Popen._try_wait treats a child that was
-# already reaped (ChildProcessError) as a clean exit, so their teardown still
-# completes normally even when this reaper wins the race.
-def _reap_worker():
-    while True:
-        reaped = 0
-        try:
-            while True:
-                pid, _status = os.waitpid(-1, os.WNOHANG)
-                if pid == 0:
-                    break  # children exist but none have exited yet
-                reaped += 1
-        except ChildProcessError:
-            pass  # no child processes at all
-        except Exception:
-            pass
-        # Short interval: browsers exit at session teardown, and we want the
-        # zombie window to be brief. WNOHANG makes each pass cheap.
-        time.sleep(2)
-
-
-threading.Thread(target=_reap_worker, daemon=True).start()
 
 
 def _get(sid):
@@ -2186,18 +2098,12 @@ def _cf_interstitial_present(sb):
     timeout. The site's own content is the discriminator: an interstitial shows only
     the challenge, never the app's form.
     """
-    #
-    # The discriminator is a real INTERACTIVE FORM (password / login inputs), NOT
-    # nav/header: a full-page Cloudflare challenge is wrapped in the site's own chrome
-    # and DOES carry a nav/header, so excluding on those made every framed full-page
-    # challenge look like it wasn't a challenge — which is why the checkbox on
-    # hub.weirdhost.xyz never got treated as one. A login form, by contrast, only
-    # exists once we're actually past the gate.
     try:
         return bool(sb.execute_script(
             "var real = document.querySelector("
-            "  \"input[type='password'], input[name='email'], input[name='username']\");"
-            "if (real) return false;"   # a real form is rendered => we're past the gate
+            "  \"input[type='password'], form[action*='login'], input[name='email'], \" +"
+            "  \"input[name='username'], nav, header\");"
+            "if (real) return false;"   # site content is rendered => we're past the gate
             "return !!(document.querySelector("
             "'input[id^=\"cf-chl-widget-\"][id$=\"_response\"], [id^=\"cf-chl-widget\"], "
             "script[src*=\"challenges.cloudflare.com\"], "
@@ -2324,48 +2230,6 @@ def click_turnstile(sid):
         # the rendered widget — so click its checkbox (left side, vertically
         # centered) at OS level with human drift, the same primitives as the
         # reCAPTCHA anchor click. Generic: works on any such shadow/hidden widget.
-        # ── CDP viewport click ───────────────────────────────────────────────
-        # A trusted click at the checkbox's VIEWPORT position passes this challenge
-        # outright (verified in-browser: one click → redirect, no image challenge, no
-        # trajectory needed). CDP Input.dispatchMouseEvent takes CSS/viewport coords,
-        # so it sidesteps the whole window-geometry→screen conversion (the title-bar
-        # offset that made the OS-level xdotool click miss). The checkbox sits a fixed
-        # ~30px in from the response input's widget container, vertically centred.
-        def _cdp_click_checkbox():
-            try:
-                box = sb.execute_script(
-                    "var i=document.querySelector("
-                    "'input[name=\"cf-turnstile-response\"],input[id^=\"cf-chl-widget-\"][id$=\"_response\"]');"
-                    "if(!i||!i.parentElement)return null;"
-                    "var r=i.parentElement.getBoundingClientRect();"
-                    "return {x:r.x,y:r.y,h:r.height};")
-                if not box:
-                    return False
-                cx = float(box["x"]) + 30
-                cy = float(box["y"]) + float(box["h"]) * 0.5
-                for ev in ("mouseMoved", "mousePressed", "mouseReleased"):
-                    p = {"type": ev, "x": cx, "y": cy, "button": "left", "clickCount": 1}
-                    if ev == "mouseMoved":
-                        p = {"type": ev, "x": cx, "y": cy}
-                    sb.driver.execute_cdp_cmd("Input.dispatchMouseEvent", p)
-                print(f"[turnstile] CDP viewport click at ({cx:.0f},{cy:.0f})", flush=True)
-                return True
-            except Exception as e:
-                print(f"[turnstile] CDP click err: {e}", flush=True)
-                return False
-
-        if not _turnstile_token(sb):
-            _cdp_was_intr = _cf_interstitial_present(sb)
-            for _ in range(3):
-                if _turnstile_token(sb) or (_cdp_was_intr and not _cf_interstitial_present(sb)):
-                    return {"solved": True, "method": "cdp", "attempt": 1}
-                if not _cdp_click_checkbox():
-                    break
-                for _ in range(10):
-                    time.sleep(0.5)
-                    if _turnstile_token(sb) or (_cdp_was_intr and not _cf_interstitial_present(sb)):
-                        return {"solved": True, "method": "cdp", "attempt": 1}
-
         if not _turnstile_token(sb):
             import subprocess
             try:
@@ -2403,16 +2267,6 @@ def click_turnstile(sid):
             # CLOSED shadow root that document.querySelectorAll("iframe") cannot see
             # (verified: iframes:[] on a page that visibly has the checkbox). Both
             # targets missed, nothing was ever clicked, and the page span until timeout.
-            # Success signal depends on WHERE the widget lives, captured up-front:
-            #   • Full-page interstitial → passing REDIRECTS, so "interstitial gone" is
-            #     the signal (its response input often never gets a token).
-            #   • Embedded/modal widget on the real app page (bot-hosting's renew
-            #     dialog) → the page ALWAYS has site content, so _cf_interstitial_present
-            #     is already False; using "not interstitial" as success made the loop
-            #     declare victory on its FIRST check without ever clicking — a false
-            #     "solved" while the checkbox sat there, which then broke the next step.
-            #     For these the only valid signal is the token.
-            _was_interstitial = _cf_interstitial_present(sb)
             for _sel, _label in (
                 ('input[name="cf-turnstile-response"]', "embedded"),
                 ('input[id^="cf-chl-widget-"][id$="_response"]', "chl-widget"),
@@ -2420,11 +2274,11 @@ def click_turnstile(sid):
                 cbxy = _element_abs_xy(sb, _sel, dx=28, dy_frac=0.5, wid=_wid, parent=True)
                 if not cbxy:
                     continue
-                if _was_interstitial:
-                    _done = lambda: (not _cf_interstitial_present(sb)) or bool(_turnstile_token(sb))
-                else:
-                    _done = lambda: bool(_turnstile_token(sb))
-                hit = _coord_click_loop(cbxy, _done, _label)
+                hit = _coord_click_loop(
+                    cbxy,
+                    lambda: bool(_turnstile_token(sb)) or (not _cf_interstitial_present(sb)),
+                    _label,
+                )
                 if hit:
                     return {"solved": True, "method": "coord", "attempt": hit}
 
@@ -2591,6 +2445,24 @@ def solve_recaptcha_audio(sid):
             _wid = _find_session_window(sb)
         except Exception:
             _wid = None
+        cbxy = _element_abs_xy(sb, _anchor_css, dx=30, dy_frac=0.5, wid=_wid)
+        if cbxy:
+            def _click_checkbox():
+                import subprocess
+                try:
+                    with _gui_lock:
+                        _raise_window(_wid)
+                        _human_mouse_drift(cbxy[0], cbxy[1])
+                        subprocess.run(
+                            ["xdotool", "mousemove", str(cbxy[0]), str(cbxy[1])],
+                            timeout=2, capture_output=True,
+                        )
+                        subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
+                except Exception:
+                    pass
+            # detach → drift+click (OS-level) → let reCAPTCHA score undisturbed → reconnect
+            _detached_wait(sb, 3, during=_click_checkbox)
+
         def _click_registered():
             """Did the anchor click take effect?
 
@@ -2631,48 +2503,13 @@ def solve_recaptcha_audio(sid):
                 except Exception:
                     pass
 
-        # ── PRIMARY: SeleniumBase's built-in image-based captcha clicker ──────────
-        # It finds the checkbox by ON-SCREEN IMAGE MATCH and clicks it via PyAutoGUI,
-        # so it does NOT depend on our hand-computed window-geometry coordinates — the
-        # [coords] log proved those can be wrong (a title-bar offset that lands the
-        # click ~87px below the box). This is the same clicker the working Turnstile
-        # path and the reference project use.
-        for _i in range(3):
-            if token_present() or _click_registered():
-                break
-            try:
-                with _gui_lock:
-                    _raise_window(_wid)
-                    sb.uc_gui_click_captcha()
-                print(f"[recaptcha] uc_gui_click_captcha attempt {_i + 1}", flush=True)
-            except Exception as e:
-                print(f"[recaptcha] uc_gui_click_captcha: {e}", flush=True)
-            time.sleep(2)
-
-        # FALLBACK: hand-computed OS-level click, driver detached while reCAPTCHA
-        # scores it. Only if the image clicker didn't take.
+        # VERIFY, then fall back. This used to be an either/or: an OS click was fired
+        # when the coordinates resolved, and the WebDriver click ran ONLY when they
+        # didn't. So an OS click that missed (wrong window, stale coords, an overlay)
+        # was never noticed and never retried — we walked on with an unticked box and
+        # then blamed the audio solver for a challenge that had never opened.
         if not token_present() and not _click_registered():
-            cbxy = _element_abs_xy(sb, _anchor_css, dx=30, dy_frac=0.5, wid=_wid)
-            if cbxy:
-                def _click_checkbox():
-                    import subprocess
-                    try:
-                        with _gui_lock:
-                            _raise_window(_wid)
-                            _human_mouse_drift(cbxy[0], cbxy[1])
-                            subprocess.run(
-                                ["xdotool", "mousemove", str(cbxy[0]), str(cbxy[1])],
-                                timeout=2, capture_output=True,
-                            )
-                            subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
-                    except Exception:
-                        pass
-                # detach → drift+click (OS-level) → let reCAPTCHA score undisturbed → reconnect
-                _detached_wait(sb, 3, during=_click_checkbox)
-
-        # LAST RESORT: a plain WebDriver click on the anchor (no coordinates at all).
-        if not token_present() and not _click_registered():
-            print("[recaptcha] neither image nor OS click registered — falling back to a WebDriver click", flush=True)
+            print("[recaptcha] OS click did not register — falling back to a WebDriver click", flush=True)
             try:
                 d.switch_to.default_content()
                 d.switch_to.frame(find(_anchor_css))

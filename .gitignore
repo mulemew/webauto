@@ -56,3 +56,6 @@ Thumbs.db
 
 # Replit attached assets (pasted logs, screenshots — local only)
 attached_assets/
+
+artifacts/cf-proxy/__pycache__/
+*.pyc

@@ -584,22 +584,12 @@ import type { PageAdapter } from "./page-adapter";
           // (~90s) against the same wall, which is how a doomed login stretched into
           // 15 minutes. captchaBlocked marks it as "needs attention", not a retry.
           const stillBlocked = (await page
-            .evaluate(() => {
-              // A visible login form means the page DID load — an embedded Turnstile in
-              // that form (wispbyte) is solved before submit, it is not a full-page
-              // block. Only a page that is ONLY the challenge (no form) is genuinely
-              // still blocking. Keying off the widget input alone treated a loaded
-              // login page as blocked and returned needs-attention without ever filling
-              // the form.
-              const hasForm = !!document.querySelector(
-                "input[type='password'], input[name='email'], input[name='username']",
-              );
-              if (hasForm) return false;
-              return !!document.querySelector(
+            .evaluate(() =>
+              !!document.querySelector(
                 'input[id^="cf-chl-widget-"][id$="_response"], #challenge-stage, ' +
                   '#challenge-running, .cf-browser-verification',
-              );
-            })
+              ),
+            )
             .catch(() => false)) as boolean;
           if (stillBlocked) {
             return {

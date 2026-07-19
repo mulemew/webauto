@@ -3,13 +3,8 @@ FROM python:3.11-slim-bookworm
 ARG TARGETARCH
 
 # 基础工具 + Xvfb（两个架构都需要）
-# tini: a tiny init that runs as PID 1 and REAPS orphaned zombie processes.
-#   Chrome/chromedriver/xdotool/ffmpeg children that get orphaned (session
-#   crash, driver.quit race, hung worker) reparent to PID 1; without an init
-#   that calls wait() they pile up as <defunct> zombies. See ENTRYPOINT.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget gnupg ca-certificates curl \
-    tini \
     xvfb xdotool x11-utils \
     scrot python3-tk python3-dev \
     fluxbox \
@@ -129,9 +124,4 @@ EXPOSE 7317
 # No window manager: the known-good reference runs bare `xvfb-run` (no WM), and
 # a WM (fluxbox) adds window decorations/stacking that throw off
 # uc_gui_click_captcha's screen-coordinate math. Match the reference: Xvfb only.
-#
-# tini as PID 1 (-g forwards signals to the whole process group) reaps orphaned
-# Chrome/chromedriver/Xvfb zombies that would otherwise accumulate under the
-# python server. `exec python` keeps python as tini's direct child so signals
-# and shutdown still propagate normally.
-ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/bin/sh", "-c", "rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 && Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset & sleep 2 && exec python server.py"]
+ENTRYPOINT ["/bin/sh", "-c", "rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 && Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset & sleep 2 && exec python server.py"]
