@@ -36,6 +36,10 @@ export const tasksTable = pgTable("tasks", {
   // service go down. Disabled unless webhookEnabled AND a token is set.
   webhookEnabled: boolean("webhook_enabled").notNull().default(false),
   webhookToken: text("webhook_token"),
+  // Optional references to a saved fingerprint / proxy profile, picked from a
+  // dropdown in the task editor (like saved credentials). null = none selected.
+  fingerprintProfileId: integer("fingerprint_profile_id"),
+  proxyProfileId: integer("proxy_profile_id"),
 });
 
 export const insertTaskSchema = createInsertSchema(tasksTable).omit({ id: true, createdAt: true, updatedAt: true });

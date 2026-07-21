@@ -73,6 +73,23 @@ import { pool } from "@workspace/db";
     "updated_at"    timestamptz NOT NULL DEFAULT now()
   );
   CREATE UNIQUE INDEX IF NOT EXISTS "browser_sessions_task_key_unique" ON "browser_sessions" ("task_id", "session_key");
+  CREATE TABLE IF NOT EXISTS "fingerprint_profiles" (
+    "id"         serial      PRIMARY KEY,
+    "name"       text        NOT NULL,
+    "os"         text        NOT NULL,
+    "config"     jsonb,
+    "created_at" timestamptz NOT NULL DEFAULT now(),
+    "updated_at" timestamptz NOT NULL DEFAULT now()
+  );
+  CREATE TABLE IF NOT EXISTS "proxy_profiles" (
+    "id"         serial      PRIMARY KEY,
+    "name"       text        NOT NULL,
+    "url"        text        NOT NULL,
+    "created_at" timestamptz NOT NULL DEFAULT now(),
+    "updated_at" timestamptz NOT NULL DEFAULT now()
+  );
+  ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "fingerprint_profile_id" integer;
+  ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "proxy_profile_id" integer;
   `;
 
   export async function runMigrations(): Promise<void> {

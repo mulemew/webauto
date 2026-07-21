@@ -5,4 +5,6 @@
   export * from "./settings";
   export * from "./saved-credentials";
   export * from "./browser-sessions";
+  export * from "./fingerprint-profiles";
+  export * from "./proxy-profiles";
  
