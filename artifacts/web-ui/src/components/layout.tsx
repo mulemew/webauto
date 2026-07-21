@@ -2,7 +2,7 @@ import { Link } from "wouter";
 import { Sun, Moon, Languages } from "lucide-react";
 import { useTheme } from "@/contexts/theme-context";
 import { useLang } from "@/contexts/lang-context";
-  import { Terminal, Settings, LayoutDashboard, Search, LogOut, RefreshCw, PauseCircle, HeartPulse, Crosshair, KeyRound } from "lucide-react";
+  import { Terminal, Settings, LayoutDashboard, Search, LogOut, RefreshCw, PauseCircle, HeartPulse, Crosshair, KeyRound, Fingerprint, Network } from "lucide-react";
   import { useAuth } from "@/hooks/use-auth";
   import { Button } from "@/components/ui/button";
   import { usePollingInterval } from "@/hooks/use-polling-interval";
@@ -83,6 +83,14 @@ import { useLang } from "@/contexts/lang-context";
             <Link href="/credentials" className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground">
               <KeyRound className="h-4 w-4" />
               {t.credentials}
+            </Link>
+            <Link href="/fingerprints" className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground">
+              <Fingerprint className="h-4 w-4" />
+              Fingerprints
+            </Link>
+            <Link href="/proxies" className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground">
+              <Network className="h-4 w-4" />
+              Proxies
             </Link>
             <Link href="/status" className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground">
               <HeartPulse className="h-4 w-4" />
