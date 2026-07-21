@@ -22,7 +22,7 @@ import { Router, type IRouter } from "express";
 
   const router: IRouter = Router();
 
-  const VALID_PROVIDERS: BrowserProviderType[] = ["playwright", "puppeteer", "local", "seleniumbase"];
+  const VALID_PROVIDERS: BrowserProviderType[] = ["playwright", "puppeteer", "seleniumbase"];
 
   router.get("/settings/browser", async (_req, res): Promise<void> => {
       try {
@@ -51,7 +51,7 @@ import { Router, type IRouter } from "express";
       const body = req.body as Partial<BrowserProviderConfig>;
       const { provider, wsEndpoint, testUrl } = body;
       const resolvedProvider: BrowserProviderType = provider && VALID_PROVIDERS.includes(provider) ? provider : "playwright";
-      if (resolvedProvider !== "local" && resolvedProvider !== "seleniumbase" && !wsEndpoint?.trim()) { res.status(400).json({ error: "WebSocket endpoint URL is required" }); return; }
+      if (resolvedProvider !== "seleniumbase" && !wsEndpoint?.trim()) { res.status(400).json({ error: "WebSocket endpoint URL is required" }); return; }
       const proxyUrl = typeof body.proxyUrl === "string" ? body.proxyUrl.trim() : "";
       const proxyType =
         typeof body.proxyType === "string" && body.proxyType.trim()
@@ -86,7 +86,7 @@ import { Router, type IRouter } from "express";
   router.post("/settings/browser/test", async (req, res): Promise<void> => {
     const { provider, wsEndpoint, testUrl } = req.body as Partial<BrowserProviderConfig> & { testUrl?: string };
     const resolvedProvider: BrowserProviderType = provider && VALID_PROVIDERS.includes(provider) ? provider : "playwright";
-    if (resolvedProvider !== "seleniumbase" && resolvedProvider !== "local" && !wsEndpoint?.trim()) { res.json({ ok: false, message: "WebSocket endpoint URL is required" }); return; }
+    if (resolvedProvider !== "seleniumbase" && !wsEndpoint?.trim()) { res.json({ ok: false, message: "WebSocket endpoint URL is required" }); return; }
     const config: BrowserProviderConfig = { provider: resolvedProvider, wsEndpoint: wsEndpoint?.trim() ?? "" };
     // SeleniumBase sessions are created through the cf-proxy sidecar. On a
     // freshly pulled image, cf-proxy may still be warming its first UC Chrome

@@ -87,11 +87,6 @@ import net from "net";
       return;
     }
 
-    if (config.provider === "local") {
-      res.json(BrowserHealthCheckResponse.parse({ status: "connected", url: "local" }));
-      return;
-    }
-
     const wsEndpoint = config.wsEndpoint;
 
     if (!wsEndpoint) {
@@ -181,9 +176,6 @@ import net from "net";
           browserStatus = "error";
           browserError = `cf-proxy unreachable at ${cfProxyUrl.replace(/([?&]token=)[^&]*/g, "$1***")}`;
         }
-      } else if (config.provider === "local") {
-        // Local browser availability is validated by the Settings test route;
-        // no remote endpoint needs to be reachable for this provider.
       } else if (!config.wsEndpoint) {
         browserStatus = "error";
         browserError = "Browser endpoint is not configured";

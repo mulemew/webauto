@@ -255,7 +255,7 @@ const INTERVAL_LABELS: Record<PollingIntervalMs, string> = {
   5000: "5 seconds — slower, reduced network usage",
 };
 
-type BrowserProviderType = "playwright" | "puppeteer" | "local" | "seleniumbase";
+type BrowserProviderType = "playwright" | "puppeteer" | "seleniumbase";
 
 interface BrowserConfig {
     provider: BrowserProviderType;
@@ -303,14 +303,6 @@ const PROVIDER_OPTIONS: Array<{
     description: "CDP via Puppeteer (browserWSEndpoint). Same compatibility as Playwright CDP — use if your service works better with the Puppeteer library.",
     placeholder: "ws://browserless:3000",
     hint: "Docker Compose default: ws://browserless:3000 — replace with your actual host if running externally.",
-  },
-  {
-    value: "local",
-    label: "Local Chrome",
-    tag: "local",
-    description: "Launches Playwright\'s bundled Chromium directly on this host. No remote browser service needed — ideal for single-machine deployments. Requires Chromium installed (npx playwright install chromium).",
-    placeholder: "",
-    hint: "No WebSocket endpoint needed — Chromium is launched locally on the server.",
   },
   {
     value: "seleniumbase",
@@ -795,7 +787,7 @@ function BrowserProviderSection() {
     fetch(`${BASE}/api/settings/browser`, { credentials: "same-origin" })
       .then((r) => r.json())
       .then((data: Partial<BrowserConfig>) => {
-        const validProviders: BrowserProviderType[] = ["playwright", "puppeteer", "local", "seleniumbase"];
+        const validProviders: BrowserProviderType[] = ["playwright", "puppeteer", "seleniumbase"];
         setConfig({
             provider: validProviders.includes(data.provider as BrowserProviderType)
               ? (data.provider as BrowserProviderType)
@@ -818,7 +810,7 @@ function BrowserProviderSection() {
   }, []);
 
   const handleSave = async () => {
-    if (config.provider !== "seleniumbase" && config.provider !== "local" && !config.wsEndpoint.trim()) {
+    if (config.provider !== "seleniumbase" && !config.wsEndpoint.trim()) {
       toast({ title: t.wsEndpoint, variant: "destructive" });
       return;
     }
@@ -845,7 +837,7 @@ function BrowserProviderSection() {
   };
 
   const handleTest = async () => {
-    if (config.provider !== "seleniumbase" && config.provider !== "local" && !config.wsEndpoint.trim()) {
+    if (config.provider !== "seleniumbase" && !config.wsEndpoint.trim()) {
       toast({ title: t.wsEndpoint, variant: "destructive" });
       return;
     }
@@ -932,8 +924,8 @@ function BrowserProviderSection() {
         </div>
       </div>
 
-      {/* WS endpoint — hidden for local provider */}
-      {config.provider !== "local" && (
+      {/* WS/HTTP endpoint — required by all remaining providers */}
+      {true && (
       <div className="space-y-2">
         <Label htmlFor="wsEndpoint">{config.provider === "seleniumbase" ? "HTTP Endpoint URL" : "WebSocket Endpoint URL"}</Label>
         <Input

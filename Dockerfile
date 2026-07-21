@@ -52,27 +52,18 @@ FROM ghcr.io/sagernet/sing-box:v1.11.4 AS singbox
 # ─── Stage 3: Production runtime ─────────────────────────────
 FROM node:20-bookworm-slim AS runner
 
-# Install system dependencies required by Chromium + wget for healthcheck.
-# These are the libraries Playwright's Chromium needs at runtime.
+# Minimal system deps. The app container no longer runs a local browser — all
+# browsing goes to the cf-proxy sidecar (SeleniumBase) or a remote CDP service —
+# so Chromium's runtime libs, Xvfb/xdotool/fluxbox and screenshot fonts are gone.
+# This is what makes the image small and the build fast.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    # wget — healthcheck
     wget \
-    # curl — used by the /tasks/:id/proxy-geo endpoint to query the exit IP's
-    # geolocation THROUGH the configured proxy (handles socks5:// and http://
-    # uniformly, which Node's built-in undici cannot do for SOCKS).
+    # curl — /tasks/:id/proxy-geo queries the exit IP's geolocation THROUGH the
+    # configured proxy (handles socks5:// and http:// uniformly, unlike undici).
     curl \
-    # tini — PID-1 init that reaps orphaned Chrome/sing-box/Xvfb zombies (see CMD)
+    # tini — PID-1 init that reaps orphaned sing-box helpers
     tini \
-    # xdotool + Xvfb + window manager — required for OS-level mouse clicks (bypasses CF Turnstile)
-    xdotool xvfb x11-utils fluxbox \
-    # Chromium runtime dependencies
-    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
-    libdrm2 libdbus-1-3 libxkbcommon0 libatspi2.0-0 \
-    libx11-6 libxcomposite1 libxdamage1 libxext6 libxfixes3 \
-    libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 \
-    libxshmfence1 \
-    # Fonts — needed for proper text rendering in screenshots
-    fonts-liberation fonts-noto-color-emoji \
-    fonts-noto-cjk fonts-wqy-microhei fonts-wqy-zenhei \
   && rm -rf /var/lib/apt/lists/*
 
 # ─── sing-box (advanced proxy protocols: VLESS/VMess/Trojan/Hysteria2/WARP) ───
@@ -92,29 +83,26 @@ RUN set -eux; \
 
 WORKDIR /app
 
-# Install puppeteer, playwright-core, and patchright.
-# puppeteer: skip download — used only for remote CDP connections.
-# patchright: installs its patched Chromium for the "local" browser provider.
+# Install puppeteer + playwright-core ONLY for the remote-CDP providers
+# (playwright/puppeteer connect to an external browser service — no local browser
+# is downloaded). The "local" Patchright provider was removed, so patchright and
+# its bundled Chromium are no longer installed — this is the bulk of the size/
+# build-time savings.
 COPY artifacts/api-server/package.json ./package-src.json
 RUN node -e "\
   const p = JSON.parse(require('fs').readFileSync('./package-src.json', 'utf-8'));\
   const out = { name: 'autoops', version: '1.0.0', type: 'module',\
     dependencies: {\
       puppeteer: p.dependencies.puppeteer,\
-      'playwright-core': p.dependencies['playwright-core'],\
-      'patchright': p.dependencies['patchright']\
+      'playwright-core': p.dependencies['playwright-core']\
     }\
   };\
   require('fs').writeFileSync('./package.json', JSON.stringify(out, null, 2));\
   " && rm package-src.json
 
 ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN npm install --omit=dev
-
-# Install Patchright's patched Chromium (used by the "local" provider).
-# Patchright patches Chromium at the binary level — no JS injection — so it
-# passes Cloudflare Turnstile invisible natively without any extra tricks.
-RUN npx patchright install chromium
 
 # API bundle (pino workers are included by esbuild-plugin-pino)
 COPY --from=api-builder /workspace/artifacts/api-server/dist ./dist
@@ -134,13 +122,9 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD wget -qO- http://localhost:8080/api/healthz || exit 1
 
 # tini as PID 1 (-g forwards signals to the whole process group) reaps orphaned
-# Chrome/sing-box/Xvfb/fluxbox zombies that reparent to PID 1 when they crash or
-# are killed out from under the Node child-registry. The Node-side reaper only
-# tracks helpers it spawned itself; tini is the catch-all for everything else.
+# sing-box helpers that reparent to PID 1 if the Node child-registry misses them.
 ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
 
-# Start Xvfb (virtual display) before the Node process so the local browser
-# provider can launch Chromium in headed mode. Headed mode is critical for
-# bypassing Cloudflare Turnstile — headless is detectable. Also enables
-# xdotool for OS-level mouse clicks that CF cannot distinguish from human input.
-CMD ["sh", "-c", "rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null; Xvfb :99 -screen 0 1920x1080x24 -ac &>/dev/null & export DISPLAY=:99 && sleep 0.5 && fluxbox &>/dev/null & sleep 0.5 && exec node --enable-source-maps dist/index.mjs"]
+# No local browser to launch anymore — just run the Node server (browsing goes to
+# the cf-proxy sidecar or a remote CDP service, each with its own display).
+CMD ["node", "--enable-source-maps", "dist/index.mjs"]

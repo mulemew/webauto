@@ -155,7 +155,7 @@ const formSchema = z.object({
 
 type FormValues = z.infer<typeof formSchema>;
 
-type BrowserProvider = "playwright" | "puppeteer" | "local" | "seleniumbase";
+type BrowserProvider = "playwright" | "puppeteer" | "seleniumbase";
 
 type ProxyType =
   | "http"
@@ -217,7 +217,6 @@ const defaultBrowserConfig: BrowserConfigState = {
 const PROVIDER_LABELS: Record<BrowserProvider, string> = {
   playwright: "Playwright (默认)",
   puppeteer: "Puppeteer",
-  local: "Local Chrome",
   seleniumbase: "SeleniumBase (CF Bypass)",
 };
 
@@ -951,9 +950,6 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                             Playwright（默认）
                           </SelectItem>
                           <SelectItem value="puppeteer">Puppeteer</SelectItem>
-                          <SelectItem value="local">
-                            Local Chrome（本地 Chrome）
-                          </SelectItem>
                           <SelectItem value="seleniumbase">
                             SeleniumBase（CF 绕过）
                           </SelectItem>
@@ -966,8 +962,6 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                           "Playwright CDP 模式，可配置远程 WebSocket 端点连接外部浏览器"}
                         {browserConfig.provider === "puppeteer" &&
                           "Puppeteer，兼容性好，支持 CDP 端点"}
-                        {browserConfig.provider === "local" &&
-                          "直接启动本地安装的 Chrome/Chromium，无沙箱"}
                       </p>
                     </div>
 

@@ -1,9 +1,7 @@
 import { logger } from "../lib/logger";
 import { SeleniumBaseProvider } from "./seleniumbase-adapter";
-import { wrapPuppeteerPage, wrapPlaywrightPage, puppeteer, chromium, patchrightChromium } from "./page-adapter";
+import { wrapPuppeteerPage, wrapPlaywrightPage, puppeteer, chromium } from "./page-adapter";
 import type { PageAdapter } from "./page-adapter";
-import { execSync, spawn } from "child_process";
-import { trackChild } from "../lib/child-registry";
 import { startLocalProxy, type ProxyType, type ResolvedProxy } from "./proxy-manager";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -34,7 +32,6 @@ import { startLocalProxy, type ProxyType, type ResolvedProxy } from "./proxy-man
 export type BrowserProviderType =
   | "playwright"
   | "puppeteer"
-  | "local"
   | "seleniumbase";
 
 export interface BrowserProviderConfig {
@@ -684,204 +681,6 @@ class PlaywrightCDPProvider implements BrowserProvider {
   async close(): Promise<void> {}
 }
 
-// ── Xvfb management (for headed mode in Docker / CI) ────────────────────────
-
-let _xvfbStarted = false;
-
-/**
- * Start a virtual framebuffer if Xvfb is available and no display is set.
- * This allows running Chromium in headed mode inside Docker containers,
- * which is critical for bypassing CF Turnstile — headless mode is detectable.
- */
-function ensureXvfb(): void {
-  if (_xvfbStarted) return;
-  // If DISPLAY is already set (e.g. developer machine), skip
-  if (process.env.DISPLAY) {
-    _xvfbStarted = true;
-    return;
-  }
-  try {
-    execSync("which Xvfb", { stdio: "ignore" });
-  } catch {
-    logger.debug("Xvfb not found — using headless mode");
-    return;
-  }
-  try {
-    const display = `:${99 + Math.floor(Math.random() * 100)}`;
-    const xvfb = spawn("Xvfb", [display, "-screen", "0", "1920x1080x24", "-ac"], {
-      stdio: "ignore",
-      detached: true,
-    });
-    // detached+unref keeps Xvfb alive independently of the event loop, but it also
-    // means nothing ever reaped it: every restart spawned another on a fresh display
-    // and the old ones piled up. Track it so shutdown kills it.
-    trackChild(xvfb, `Xvfb${display}`);
-    xvfb.unref();
-    process.env.DISPLAY = display;
-    _xvfbStarted = true;
-    logger.info({ display }, "Xvfb started — headed mode enabled for better CF bypass");
-    // Give Xvfb a moment to initialize
-    execSync("sleep 0.5");
-  } catch (err) {
-    logger.warn({ err }, "Failed to start Xvfb — falling back to headless mode");
-  }
-}
-
-// ── Patchright local (launch) provider ─────────────────────────────────────────
-  // Uses Patchright (a Playwright fork patched at the Chromium level) instead of
-  // stock playwright-core. Patchright removes all automation fingerprints from
-  // Chromium itself — no JS injection — so it passes Turnstile invisible natively.
-
-class PlaywrightLocalProvider implements BrowserProvider {
-    /** Tracks all live browsers so close() can force-kill them all. */
-    private readonly _browsers = new Set<import("playwright-core").Browser>();
-    constructor(private readonly config: BrowserProviderConfig) {}
-
-    async newPage(): Promise<PageAdapter> {
-      // Resolve the proxy up-front so protocol helpers (warp/vless/…) are dialed
-      // before Chromium launches.
-      const proxyServer = await resolveProxyForConfig(this.config);
-
-      // Headed vs headless:
-      //  - config.headed === true  → force headed (start Xvfb if needed)
-      //  - config.headed === false → force headless (skip Xvfb)
-      //  - undefined               → auto: headed when a display is available
-      let useHeaded: boolean;
-      if (this.config.headed === false) {
-        useHeaded = false;
-      } else if (this.config.headed === true) {
-        ensureXvfb();
-        useHeaded = !!process.env.DISPLAY;
-      } else {
-        ensureXvfb();
-        useHeaded = !!process.env.DISPLAY;
-      }
-      logger.info({ headed: useHeaded, display: process.env.DISPLAY, forced: this.config.headed }, "Launching local Patchright Chromium");
-
-      const launchArgs = [
-        "--disable-blink-features=AutomationControlled",
-        "--disable-features=AutomationControlled",
-        "--disable-infobars",
-        "--no-first-run",
-        // Improve cross-origin iframe access for Turnstile widgets
-        "--disable-features=IsolateOrigins,site-per-process",
-        "--disable-site-isolation-trials",
-        // Disable automation-related flags that Turnstile/CF can detect
-        "--disable-component-extensions-with-background-pages",
-        "--no-default-browser-check",
-        // Window size for Xvfb headed mode
-        "--window-size=1920,1080",
-        "--window-position=0,0",
-          // ── GPU / rendering — critical for CF Turnstile canvas timing ─────
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--use-gl=egl",
-          "--use-angle=swiftshader",
-          "--enable-webgl",
-          "--ignore-gpu-blocklist",
-          "--enable-gpu-rasterization",
-          "--enable-zero-copy",
-      ];
-      if (proxyServer) {
-        launchArgs.push(`--proxy-server=${proxyServer.serverUrl}`);
-      }
-      if (this.config.ignoreHTTPS) {
-        launchArgs.push("--ignore-certificate-errors");
-      }
-
-      // Cast to playwright-core types — patchright is an API-compatible fork but
-      // ships its own type declarations that TypeScript treats as incompatible.
-      const browser = await patchrightChromium.launch({
-        headless: !useHeaded,
-        args: launchArgs,
-      }) as unknown as import("playwright-core").Browser;
-      this._browsers.add(browser);
-
-      // Auto-kill guard: honour sessionTimeoutMs so zombie Chromium processes
-      // cannot accumulate if the caller never invokes adapter.close().
-      const SESSION_TIMEOUT_MS = this.config.sessionTimeoutMs ?? 30 * 60 * 1000;
-      const timeoutHandle = setTimeout(() => {
-        logger.warn({ sessionTimeoutMs: SESSION_TIMEOUT_MS }, "Patchright local session timed out — force-closing browser");
-        void browser.close().catch(() => {});
-        this._browsers.delete(browser);
-      }, SESSION_TIMEOUT_MS);
-      // Allow Node.js to exit even if the timer is still pending.
-      if (typeof (timeoutHandle as NodeJS.Timeout).unref === "function") (timeoutHandle as NodeJS.Timeout).unref();
-
-      const vp = resolveViewport(this.config);
-      const ua = pickRandom(UA_POOL);
-      const context = await browser.newContext({
-        viewport: vp,
-        userAgent: ua,
-        screen: vp,
-        ...(this.config.storageState ? { storageState: this.config.storageState as never } : {}),
-        ignoreHTTPSErrors: this.config.ignoreHTTPS ?? false,
-      });
-
-      // Expose a storage-state dumper for cookie-mode session persistence.
-      if (this.config.onContextReady) {
-        this.config.onContextReady(async () => context.storageState());
-      }
-
-      context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
-      context.setDefaultTimeout(NAV_TIMEOUT_MS);
-
-      if (this.config.blockAds) {
-        await context.route((url) => AD_BLOCK_RE.test(url.hostname), (route) => route.abort());
-      }
-
-      // Stealth init scripts — still useful for sites that probe specific APIs.
-      // Local Chromium already has better defaults but the extra patches don't hurt.
-      await context.addInitScript(STEALTH_INIT_SCRIPT);
-      const pwPlatform = ua.includes("Macintosh") ? "MacIntel" : ua.includes("Linux") ? "Linux x86_64" : "Win32";
-      await context.addInitScript(([w, h, p]: [number, number, string]) => {
-        Object.defineProperty(screen, "width", { get: () => w });
-        Object.defineProperty(screen, "height", { get: () => h });
-        Object.defineProperty(screen, "availWidth", { get: () => w });
-        Object.defineProperty(screen, "availHeight", { get: () => h - 40 });
-        Object.defineProperty(window, "outerWidth", { get: () => w });
-        Object.defineProperty(window, "outerHeight", { get: () => h });
-        Object.defineProperty(navigator, "platform", { get: () => p });
-      }, [vp.width, vp.height, pwPlatform] as [number, number, string]);
-
-      const page = await context.newPage();
-      page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
-      page.setDefaultTimeout(NAV_TIMEOUT_MS);
-
-      const makeAdapter = (p: import("playwright-core").Page): PageAdapter => {
-        p.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
-        p.setDefaultTimeout(NAV_TIMEOUT_MS);
-        const a = wrapPlaywrightPage(p);
-        a.close = async () => { await p.close().catch(() => {}); };
-        a.waitForNewPage = async (opts) => {
-          const newPage = await context.waitForEvent("page", { timeout: opts?.timeout ?? 30000 });
-          try { await newPage.waitForLoadState("domcontentloaded", { timeout: 5000 }); } catch { /* ignore */ }
-          return makeAdapter(newPage);
-        };
-        return a;
-      };
-
-      const adapter = makeAdapter(page);
-
-      adapter.close = async () => {
-        clearTimeout(timeoutHandle);
-        this._browsers.delete(browser);
-        await page.close().catch(() => {});
-        await context.close().catch(() => {});
-        await browser.close().catch(() => {});
-        if (proxyServer) await proxyServer.stop().catch(() => {});
-      };
-
-      return adapter;
-    }
-
-    /** Force-close all open local browsers (e.g. on server shutdown). */
-    async close(): Promise<void> {
-      await Promise.allSettled([...this._browsers].map((b) => b.close()));
-      this._browsers.clear();
-    }
-  }
-
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 /**
@@ -950,10 +749,6 @@ class PlaywrightLocalProvider implements BrowserProvider {
 
   export function createBrowserProvider(config: BrowserProviderConfig): BrowserProvider {
   const p = config.provider ?? "playwright";
-
-  if (p === "local") {
-    return new PlaywrightLocalProvider(config);
-  }
 
   if (p === "seleniumbase") {
       // ── cf-proxy base URL resolution ──────────────────────────────────────
