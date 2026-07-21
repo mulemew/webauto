@@ -10,16 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fluxbox \
     ffmpeg \
     fonts-liberation fonts-crosextra-carlito fonts-crosextra-caladea \
-    fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji \
   && rm -rf /var/lib/apt/lists/*
 # fonts-liberation / carlito / caladea are free, metric-compatible substitutes
 # for Arial/Times New Roman/Courier New / Calibri / Cambria — so a Windows
 # fingerprint (FINGERPRINT_OS=windows) passes width-based font detection.
-# fonts-noto-* give BROAD Unicode coverage so page text renders instead of
-# tofu/乱码, regardless of language: noto-core covers Latin/Cyrillic/Greek/
-# Arabic/Hebrew/Thai/Devanagari/…, noto-cjk covers Chinese/Japanese/Korean,
-# and color-emoji covers emoji. Added once here so a NEW language never needs
-# a new font package chased down later.
 
 # Create the runtime user before installing SeleniumBase so root can prepare
 # driver/cache permissions explicitly. UC mode executes and may patch
