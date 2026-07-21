@@ -420,7 +420,7 @@ async function executeStep(
             while (true) {
               if (page.isClosed()) throw new Error(`waitFor aborted — page was closed before text "${needle}" appeared`);
               const bodyText = ((await page.evaluate(() => document.body?.innerText).catch(() => null)) ?? "") as string;
-              if (bodyText.includes(needle)) break;
+              if (pageTextMatches(bodyText, needle)) break;
               if (Date.now() >= deadline) throw new Error(`Text "${needle}" did not appear within ${timeout}ms`);
               await new Promise((r) => setTimeout(r, 500));
             }
@@ -766,12 +766,12 @@ async function executeStep(
           switch (conditionType) {
             case "text_contains": {
               const bodyText = ((await page.evaluate(() => document.body?.innerText).catch(() => null)) ?? "") as string;
-              conditionMet = bodyText.includes(conditionValue);
+              conditionMet = pageTextMatches(bodyText, conditionValue);
               break;
             }
             case "text_not_contains": {
               const bodyText2 = ((await page.evaluate(() => document.body?.innerText).catch(() => null)) ?? "") as string;
-              conditionMet = !bodyText2.includes(conditionValue);
+              conditionMet = !pageTextMatches(bodyText2, conditionValue);
               break;
             }
             case "element_visible": {
@@ -975,6 +975,27 @@ async function waitForSelectorWithCf(
     const cleared = await clearCloudflareIfPresent(page);
     if (!cleared) throw firstErr;
     await page.waitForSelector(selector, { timeout });
+  }
+}
+
+/**
+ * EXACT, case-sensitive text match against page text — the shared rule for the
+ * "Page contains text" condition and the "Text on page" waitFor. "Stop" matches the
+ * word "Stop" but NOT "Stopped" and NOT "stop". ASCII values use whole-token
+ * boundaries; values with non-ASCII characters (CJK has no word boundaries) fall back
+ * to a case-sensitive substring so Chinese phrases still match inside a longer run.
+ */
+function pageTextMatches(haystack: string, needle: string): boolean {
+  const v = needle;
+  if (!v) return false;
+  // Non-ASCII (CJK etc.) → case-sensitive substring (word boundaries don't apply).
+  if (/[^\x00-\x7F]/.test(v)) return haystack.includes(v);
+  // ASCII → whole-token, case-sensitive: no [A-Za-z0-9_] may touch either side.
+  const escaped = v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  try {
+    return new RegExp(`(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`).test(haystack);
+  } catch {
+    return haystack.includes(v);
   }
 }
 

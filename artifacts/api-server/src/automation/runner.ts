@@ -693,7 +693,13 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
         await page.close().catch(() => {});
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      // Never let the failure log come out blank: some errors carry an empty
+      // message, which made a retried run's log show only "(retry N/M in Xm)" with
+      // no reason at all. Fall back to the error name, then a clear default.
+      let message = err instanceof Error ? (err.message || err.name) : String(err);
+      if (!message || !message.trim()) {
+        message = "Task failed but produced no error message — see the failure screenshot and the cf-proxy / server logs.";
+      }
       const isCancelled = message === "Task cancelled by user";
       logger.error({ taskId, dryRun, isCancelled, err }, "Task runner error");
       emitTaskDone(taskId, false, isCancelled ? "Task cancelled by user" : `Error: ${message}`);
