@@ -282,8 +282,6 @@ export interface Translations {
       result: string;
       executionScreenshot: string;
       stepScreenshot: string;
-      copy: string;
-      noStepLogs: string;
       finalScreenshot: string;
       dryRun: string;
       executionAborted: string;
@@ -618,8 +616,6 @@ export interface Translations {
       result: "结果",
       executionScreenshot: "执行截图",
       stepScreenshot: "步骤截图",
-      copy: "复制",
-      noStepLogs: "本次运行没有步骤日志（失败发生在步骤开始之前）。",
       finalScreenshot: "最终截图",
       dryRun: "预演",
       executionAborted: "执行已中止",
@@ -950,8 +946,6 @@ export interface Translations {
       result: "Result",
       executionScreenshot: "Execution Screenshot",
       stepScreenshot: "Step Screenshot",
-      copy: "Copy",
-      noStepLogs: "No step logs for this run (it failed before any step started).",
       finalScreenshot: "Final Screenshot",
       dryRun: "Dry Run",
       executionAborted: "Execution aborted",
