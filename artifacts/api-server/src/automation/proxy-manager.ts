@@ -575,17 +575,13 @@ export async function registerWarpIdentity(): Promise<Record<string, unknown>> {
   const pubB64 = (publicKey.export({ type: "spki", format: "der" }) as Buffer).subarray(-32).toString("base64");
   const privB64 = (privateKey.export({ type: "pkcs8", format: "der" }) as Buffer).subarray(-32).toString("base64");
 
-  const API = "https://api.cloudflareclient.com/v0a2158";
-  const HEADERS = {
-    "Content-Type": "application/json",
-    "User-Agent": "okhttp/3.12.1",
-    "CF-Client-Version": "a-6.10-2158",
-  };
-
-  // Step 1 — register the device and get an identity + API token.
-  const res = await fetch(`${API}/reg`, {
+  const res = await fetch("https://api.cloudflareclient.com/v0a2158/reg", {
     method: "POST",
-    headers: HEADERS,
+    headers: {
+      "Content-Type": "application/json",
+      "User-Agent": "okhttp/3.12.1",
+      "CF-Client-Version": "a-6.10-2158",
+    },
     body: JSON.stringify({
       install_id: "",
       fcm_token: "",
@@ -598,45 +594,13 @@ export async function registerWarpIdentity(): Promise<Record<string, unknown>> {
   if (!res.ok) {
     throw new Error(`WARP registration failed: HTTP ${res.status} ${await res.text().catch(() => "")}`);
   }
-  // warp_enabled is a TOP-LEVEL field on the registration — it is NOT inside `config`
-  // (config only carries client_id / peers / interface / services). Verified against
-  // the live API; reading it from config returns undefined forever, which made the
-  // post-PATCH assertion below throw on every call.
-  type WarpReg = {
-    id?: string;
-    token?: string;
-    warp_enabled?: boolean;
+  const data = (await res.json()) as {
     config?: {
       peers?: Array<{ public_key?: string; endpoint?: { host?: string } }>;
       interface?: { addresses?: { v4?: string; v6?: string } };
       client_id?: string;
     };
   };
-  let data = (await res.json()) as WarpReg;
-
-  // Step 2 — ENABLE WARP. Registration alone returns warp_enabled:false (verified
-  // against the live API), and an unactivated identity's WireGuard handshake never
-  // completes: sing-box routes into the tunnel and the connection just times out with
-  // no error. This PATCH is what makes the identity usable.
-  if (data.warp_enabled !== true) {
-    if (!data.id || !data.token) {
-      throw new Error("WARP registration returned no id/token — cannot enable WARP");
-    }
-    const up = await fetch(`${API}/reg/${data.id}`, {
-      method: "PATCH",
-      headers: { ...HEADERS, Authorization: `Bearer ${data.token}` },
-      body: JSON.stringify({ warp_enabled: true }),
-    });
-    if (!up.ok) {
-      throw new Error(`WARP enable failed: HTTP ${up.status} ${await up.text().catch(() => "")}`);
-    }
-    const enabled = (await up.json()) as WarpReg;
-    if (enabled.warp_enabled !== true) {
-      throw new Error("WARP enable did not take effect (warp_enabled is still false)");
-    }
-    // The PATCH echoes the same config back — only adopt it if it actually has peers.
-    if (enabled.config?.peers?.length) data = enabled;
-  }
   const peer = data.config?.peers?.[0];
   const addrs = data.config?.interface?.addresses;
   if (!peer?.public_key || !addrs?.v4 || !data.config?.client_id) {
@@ -662,52 +626,7 @@ export async function registerWarpIdentity(): Promise<Record<string, unknown>> {
   };
 }
 
-/**
- * Cache for the registered WARP identity.
- *
- * Registering is NOT free: api.cloudflareclient.com rate-limits per source IP and
- * answers HTTP 429 / "Error 1015 — you are being rate limited", after which WARP
- * stops working entirely. Minting a fresh identity on every startLocalProxy() did
- * exactly that — a registration per task run, per exit-IP card lookup, per rotation,
- * and one per task during the startup backfill.
- *
- * So: register ONCE and reuse. Only rotation (which explicitly wants a different exit
- * IP) mints a new one. Persisted to disk so restarts don't re-register either.
- */
-const WARP_CACHE_FILE = path.join(process.env.DATA_DIR ?? path.join(process.cwd(), "data"), "warp-identity.json");
-let warpIdentity: Record<string, unknown> | null = null;
-
-function loadCachedWarpIdentity(): Record<string, unknown> | null {
-  if (warpIdentity) return warpIdentity;
-  try {
-    if (fs.existsSync(WARP_CACHE_FILE)) {
-      warpIdentity = JSON.parse(fs.readFileSync(WARP_CACHE_FILE, "utf8")) as Record<string, unknown>;
-      return warpIdentity;
-    }
-  } catch (err) {
-    logger.warn({ err }, "could not read cached WARP identity — will register a new one");
-  }
-  return null;
-}
-
-function storeWarpIdentity(id: Record<string, unknown>): void {
-  warpIdentity = id;
-  try {
-    fs.mkdirSync(path.dirname(WARP_CACHE_FILE), { recursive: true });
-    fs.writeFileSync(WARP_CACHE_FILE, JSON.stringify(id));
-  } catch (err) {
-    logger.warn({ err }, "could not persist WARP identity (will re-register after restart)");
-  }
-}
-
-/** Register a NEW identity and make it the cached one. Used by rotate(). */
-export async function refreshWarpIdentity(): Promise<Record<string, unknown>> {
-  const fresh = await registerWarpIdentity();
-  storeWarpIdentity(fresh);
-  return fresh;
-}
-
-/** WARP: a WireGuard outbound. WARP_CONFIG_PATH > cached identity > fresh registration. */
+/** WARP: a WireGuard outbound. Uses WARP_CONFIG_PATH if mounted, else registers a fresh identity. */
 async function parseWarp(): Promise<Record<string, unknown>> {
   const cfgPath = process.env.WARP_CONFIG_PATH;
   if (cfgPath && fs.existsSync(cfgPath)) {
@@ -717,9 +636,8 @@ async function parseWarp(): Promise<Record<string, unknown>> {
     >;
     return { tag: "proxy", ...cfg };
   }
-  const cached = loadCachedWarpIdentity();
-  if (cached) return cached;
-  return refreshWarpIdentity();
+  // No pre-generated config — register one on the fly.
+  return registerWarpIdentity();
 }
 
 async function buildOutbound(type: ProxyType, link: string): Promise<Record<string, unknown>> {
@@ -850,11 +768,9 @@ async function startSingBox(
       type !== "warp"
         ? undefined
         : async (): Promise<{ ok: boolean; error?: string }> => {
-            // A new WARP registration = new WireGuard identity = new exit IP. This is
-            // the ONE place that mints a new one (and replaces the cached identity);
-            // everything else reuses the cache so we don't get rate-limited.
+            // A new WARP registration = new WireGuard identity = new exit IP.
             try {
-              const fresh = await refreshWarpIdentity();
+              const fresh = await registerWarpIdentity();
               await restartWith(fresh);
               logger.info({ localPort: port }, "WARP identity rotated (same local SOCKS port)");
               return { ok: true };
@@ -911,12 +827,8 @@ export async function startLocalProxy(
   // treating that as an active proxy makes providers do unnecessary proxy
   // resolution and, for WARP, can accidentally start sing-box for every task.
   if (!url) {
-    // WARP legitimately has no URL — it's a WireGuard identity, not an address. It
-    // used to require a pre-generated WARP_CONFIG_PATH, so without one we bailed out
-    // and silently ran with NO proxy: the task went out over the host IP, the exit-IP
-    // card found nothing, and rotation reported "no proxy is configured". Identities
-    // are registered on demand now (parseWarp), so warp is always startable.
-    if (type === "warp") {
+    const warpConfigPath = process.env.WARP_CONFIG_PATH?.trim();
+    if (type === "warp" && warpConfigPath) {
       return startSingBox(type, url, remoteConsumer);
     }
     logger.warn(

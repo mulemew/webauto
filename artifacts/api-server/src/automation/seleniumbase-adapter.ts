@@ -98,14 +98,8 @@
     private _cachedUrl: string = "about:blank";
     private _closed = false;
     private _cachedFrames: FrameAdapter[] = [];
-    /** Local sing-box helper backing an advanced proxy. Only the OWNER stops it. */
+    /** Local sing-box helper backing an advanced proxy — stopped on close(). */
     private _resolvedProxy: ResolvedProxy | null = null;
-    /**
-     * Whether this adapter owns the proxy's lifetime. An adapter for a new tab shares
-     * the same helper (same browser, same tunnel) but must NOT stop it on close, or
-     * closing a popup would tear the tunnel out from under the original page.
-     */
-    private _ownsProxy = false;
     /** Per-task cap on WARP IP rotations (browserConfig.warpRotations); null = env default. */
     private _maxRotations: number | null = null;
 
@@ -114,13 +108,11 @@
       sid: string,
       resolvedProxy: ResolvedProxy | null = null,
       maxRotations: number | null = null,
-      ownsProxy = true,
     ) {
       this._maxRotations = maxRotations;
       this.baseUrl = baseUrl;
       this.sid = sid;
       this._resolvedProxy = resolvedProxy;
-      this._ownsProxy = ownsProxy && !!resolvedProxy;
     }
 
     readonly keyboard: KeyboardAdapter = {
@@ -228,12 +220,10 @@
     async close(_options?: Record<string, unknown>): Promise<void> {
       this._closed = true;
       await cfDelete(this.baseUrl, `/sessions/${this.sid}`);
-      // Only the owner tears the helper down — a shared handle on a tab's adapter
-      // must be left running for the page that owns it.
-      if (this._resolvedProxy && this._ownsProxy) {
+      if (this._resolvedProxy) {
         await this._resolvedProxy.stop().catch(() => {});
+        this._resolvedProxy = null;
       }
-      this._resolvedProxy = null;
     }
 
     viewport(): { width: number; height: number } | null {
@@ -364,19 +354,7 @@
     async waitForNewPage(options?: { timeout?: number }): Promise<PageAdapter> {
       const timeout = options?.timeout ?? 30_000;
       const data = await cfPost(this.baseUrl, `/sessions/${this.sid}/wait-for-new-page`, { timeout });
-      // Carry the proxy handle (and the rotation cap) over to the new tab's adapter.
-      // It's the same browser behind the same tunnel, but this adapter used to be
-      // built with no proxy at all — so once a task opened a tab, every later call
-      // ran against an adapter whose _resolvedProxy was null and rotateProxy()
-      // reported "no proxy is configured for this task" even though WARP was live.
-      // ownsProxy=false: closing the tab must not stop the shared helper.
-      const newAdapter = new SeleniumBasePageAdapter(
-        this.baseUrl,
-        data["session_id"] as string,
-        this._resolvedProxy,
-        this._maxRotations,
-        false,
-      );
+      const newAdapter = new SeleniumBasePageAdapter(this.baseUrl, data["session_id"] as string);
       newAdapter._cachedUrl = (data["url"] as string) ?? "about:blank";
       return newAdapter;
     }

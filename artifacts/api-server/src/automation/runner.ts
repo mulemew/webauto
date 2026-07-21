@@ -469,20 +469,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
         }
       }
 
-      // Replay budget for captcha IP-blocks. Per-task browserConfig.warpRotations wins,
-      // else the env default. Each replay = one fresh exit IP + one full re-run.
-      const maxIpRotations =
-        ("maxProxyRotations" in page &&
-        typeof (page as unknown as { maxProxyRotations?: unknown }).maxProxyRotations === "function"
-          ? (page as unknown as { maxProxyRotations: () => number | null }).maxProxyRotations()
-          : null) ?? Number(process.env.RECAPTCHA_MAX_IP_ROTATIONS ?? 5);
-      let ipRotationsUsed = 0;
-      let ipRotateError = "";
-
       try {
-        // eslint-disable-next-line no-constant-condition
-        for (;;) {
-        let replay = false;
         await Promise.race([
           (async () => {
             let fullMessage = "";
@@ -519,69 +506,12 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
                 fullMessage = stepResults.map((r) => r.message).join("\n");
                 if (stepResults.some((r) => !r.success)) overallSuccess = false;
               } catch (err) {
-                // ── Captcha refused the exit IP → rotate and REPLAY the workflow ──
-                //
-                // Only a different IP can change an "automated queries" refusal. We
-                // replay from step 1 rather than retrying the captcha in place: the
-                // captcha is often inside a modal that an earlier step opened
-                // (host2play's "Renew server" dialog), so the only way to get a fresh
-                // one issued to the new IP is to redo the actions that produced it.
-                // (Retrying in place left the widget bound to the old IP; reloading to
-                // force a re-issue destroyed the modal — "bframe not found".)
-                if (
-                  err instanceof CaptchaBlockedError &&
-                  err.ipBlocked &&
-                  !dryRun &&
-                  ipRotationsUsed < maxIpRotations &&
-                  "rotateProxy" in page &&
-                  typeof (page as unknown as { rotateProxy?: unknown }).rotateProxy === "function"
-                ) {
-                  const rot = await (page as unknown as {
-                    rotateProxy: () => Promise<{ ok: boolean; error?: string }>;
-                  })
-                    .rotateProxy()
-                    .catch((e: unknown) => ({
-                      ok: false,
-                      error: e instanceof Error ? e.message : String(e),
-                    }));
-                  if (rot.ok) {
-                    ipRotationsUsed++;
-                    emitTaskProgress(
-                      taskId,
-                      `Captcha blocked this IP — rotated to a new exit IP, replaying the workflow (${ipRotationsUsed}/${maxIpRotations})-¦`,
-                    );
-                    logger.warn({ taskId, attempt: ipRotationsUsed, maxIpRotations }, "captcha IP-blocked — rotated exit IP, replaying workflow");
-                    // Drop the aborted attempt's step logs so the run shows the attempt
-                    // that actually decided the outcome, not a pile of partial ones.
-                    collectedStepLogs.length = 0;
-                    _stepCallbackIdx = 0;
-                    await new Promise((r) => setTimeout(r, 1500)); // let the tunnel settle
-                    replay = true;
-                    return; // leave the IIFE; the outer loop re-runs the workflow
-                  }
-                  logger.warn({ taskId, reason: rot.error }, "captcha IP-blocked but rotation failed — not replaying");
-                  ipRotateError = rot.error ?? "unknown error";
-                }
                 if (err instanceof CaptchaBlockedError) {
                   emitTaskProgress(taskId, "Captcha detected - taking screenshot-¦");
                   const shot = await finalPage.screenshot({ type: "png" });
                   const buffer = Buffer.isBuffer(shot) ? shot : Buffer.from(shot as unknown as Uint8Array);
                   screenshotPath = await saveScreenshot(taskId, buffer);
-                  // Say what happened with the IP, so "blocked" isn't confused with
-                  // "we never actually tried another IP".
-                  let ipNote = "";
-                  if (err.ipBlocked) {
-                    if (ipRotateError) {
-                      ipNote = `\n\nIP rotation FAILED (${ipRotateError}) — every attempt used the SAME exit IP.`;
-                    } else if (ipRotationsUsed > 0) {
-                      ipNote = `\n\nStill blocked after ${ipRotationsUsed} IP rotation(s) (limit ${maxIpRotations}); the workflow was replayed from the start on each new IP.`;
-                    } else if (maxIpRotations <= 0) {
-                      ipNote = "\n\nIP rotation is disabled for this task (rotation limit is 0).";
-                    } else if (!("rotateProxy" in page)) {
-                      ipNote = "\n\nThis task's proxy cannot rotate its exit IP (set the proxy type to WARP to enable rotation).";
-                    }
-                  }
-                  const msg = `${dryRun ? "[DRY RUN] " : ""}${err.message}${ipNote}\n\nA captcha screenshot has been saved.`;
+                  const msg = `${dryRun ? "[DRY RUN] " : ""}${err.message}\n\nA captcha screenshot has been saved.`;
                   await writeLog(taskId, false, msg, screenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
                   if (!dryRun) await db.update(tasksTable).set({ status: "needs_attention", lastRunAt: new Date() }).where(eq(tasksTable.id, taskId));
                   emitTaskDone(taskId, false, dryRun ? "[DRY RUN] Captcha encountered" : "Task paused - captcha needs resolution");
@@ -682,10 +612,6 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
           timeoutPromise,
           cancelPromise,
         ]);
-        // The captcha refused the old IP; we rotated and want the whole workflow
-        // re-run against the new one. Anything else means this run is finished.
-        if (!replay) break;
-        }
       } finally {
         if (timeoutHandle) clearTimeout(timeoutHandle);
         if (cancelCheckInterval) clearInterval(cancelCheckInterval);

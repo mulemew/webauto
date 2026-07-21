@@ -58,16 +58,9 @@ export interface StepResult {
 
 /** Thrown by the login step when a captcha blocks authentication. */
 export class CaptchaBlockedError extends Error {
-  /**
-   * True when the captcha refused the EXIT IP rather than failing to be solved. The
-   * runner uses this to decide whether rotating the IP and replaying the workflow is
-   * worth it — for any other captcha failure, a new IP changes nothing.
-   */
-  readonly ipBlocked: boolean;
-  constructor(message: string, ipBlocked = false) {
+  constructor(message: string) {
     super(message);
     this.name = "CaptchaBlockedError";
-    this.ipBlocked = ipBlocked;
   }
 }
 
@@ -331,7 +324,7 @@ async function executeStep(
         await settleAfterClick(page, urlBefore);
         const reaction = res.reacted
           ? `page reacted (${res.changes} DOM changes)`
-          : `NO page reaction (${res.changes} DOM changes — the click may not have landed on the button, or the button ignored it)`;
+          : `NO page reaction (${res.changes} DOM changes — the button may ignore automated clicks or the spin was rejected)`;
         return { message: `Clicked element matching text "${step.selector}" [${res.method} click] — ${reaction}` };
       }
 
@@ -604,10 +597,7 @@ async function executeStep(
               ? ` Widget captcha needs attention: ${(captchaResult as { message: string }).message}`
               : ` Widget captcha detected but not solved: ${(captchaResult as { message: string }).message}`;
           if (!captchaResult.solved && captchaResult.needsAttention) {
-            throw new CaptchaBlockedError(
-              (captchaResult as { message: string }).message,
-              (captchaResult as { ipBlocked?: boolean }).ipBlocked === true,
-            );
+            throw new CaptchaBlockedError((captchaResult as { message: string }).message);
           }
         }
       } catch (err) {
