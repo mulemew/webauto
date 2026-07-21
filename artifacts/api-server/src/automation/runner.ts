@@ -564,9 +564,17 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
                 }
                 if (err instanceof CaptchaBlockedError) {
                   emitTaskProgress(taskId, "Captcha detected - taking screenshot-¦");
-                  const shot = await finalPage.screenshot({ type: "png" });
-                  const buffer = Buffer.isBuffer(shot) ? shot : Buffer.from(shot as unknown as Uint8Array);
-                  screenshotPath = await saveScreenshot(taskId, buffer);
+                  // A FAILED screenshot must NOT abandon the captcha log: if this threw,
+                  // the whole handler was skipped and the run fell through to the outer
+                  // catch — turning a detailed "captcha blocked" log (with steps + reason)
+                  // into a blank "Error (retry …)". Capture the screenshot best-effort.
+                  try {
+                    const shot = await finalPage.screenshot({ type: "png" });
+                    const buffer = Buffer.isBuffer(shot) ? shot : Buffer.from(shot as unknown as Uint8Array);
+                    screenshotPath = await saveScreenshot(taskId, buffer);
+                  } catch (shotErr) {
+                    logger.warn({ taskId, shotErr }, "Captcha screenshot failed — logging the block without it");
+                  }
                   // Say what happened with the IP, so "blocked" isn't confused with
                   // "we never actually tried another IP".
                   let ipNote = "";

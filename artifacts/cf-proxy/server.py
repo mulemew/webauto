@@ -13,7 +13,6 @@ background so that POST /sessions returns near-instantly instead of waiting
 import os
 import queue
 import shutil
-import signal
 import subprocess
 import socket
 import threading
@@ -203,16 +202,7 @@ def _install_chrome_popen_patch():
                         env = dict(kwargs.get("env") or os.environ)
                         env["TZ"] = chrome_tz
                         kwargs["env"] = env
-                    proc = _orig_popen(cmd, *args, **kwargs)
-                    # Remember this browser PID on the owning session so close()
-                    # can force-kill it if graceful teardown never runs.
-                    sess = getattr(_thread_local, "session", None)
-                    if sess is not None:
-                        try:
-                            sess._chrome_pids.add(proc.pid)
-                        except Exception:
-                            pass
-                    return proc
+                    return _orig_popen(cmd, *args, **kwargs)
                 finally:
                     for h in handles:
                         try:
@@ -860,12 +850,6 @@ class SessionThread:
         # Temp dir of the per-session fingerprint extension (if any); cleaned up
         # on close.
         self._fp_ext_dir = None
-        # PIDs of Chrome/Chromium browser processes THIS session Popen'd (recorded
-        # by the popen patch). Used by close() to force-kill the browser even when
-        # the worker thread is hung inside a selenium call and never reaches
-        # driver.quit() — otherwise the browser leaks as a live orphan (not a
-        # zombie the reaper can collect, since it never exited).
-        self._chrome_pids: set[int] = set()
         self._log_dir = os.path.join("/tmp/cf-proxy-logs", self.session_id)
         os.makedirs(self._log_dir, exist_ok=True)
         self._chrome_stdout_path = os.path.join(self._log_dir, "chrome.stdout.log")
@@ -912,7 +896,6 @@ class SessionThread:
             for attempt in range(1, attempts + 1):
                 try:
                     _install_chrome_popen_patch()
-                    _thread_local.session = self
                     _thread_local.chrome_stdout_path = self._chrome_stdout_path
                     _thread_local.chrome_stderr_path = self._chrome_stderr_path
                     from seleniumbase import SB
@@ -1103,43 +1086,15 @@ class SessionThread:
                 raise RuntimeError(result.get("error", "Command failed"))
             return result.get("result")
 
-    def _kill_tracked_procs(self):
-        """SIGKILL any browser process this session Popen'd that is still alive.
-
-        Recycle-safe: a PID could have been reaped (by the reaper) and reused by
-        an unrelated process, so we verify /proc/<pid>/cmdline still looks like a
-        Chrome/Chromium launch before signalling. Already-dead PIDs (/proc gone)
-        are skipped. Killing the browser also makes any selenium call the worker
-        is hung inside unwind, so the worker can finish teardown.
-        """
-        for pid in list(self._chrome_pids):
-            try:
-                with open(f"/proc/{pid}/cmdline", "rb") as f:
-                    cmdline = f.read().replace(b"\0", b" ").lower()
-                if b"chrome" not in cmdline and b"chromium" not in cmdline:
-                    continue  # PID recycled into something else — do not kill
-                os.kill(pid, signal.SIGKILL)
-            except (ProcessLookupError, FileNotFoundError):
-                pass  # already gone
-            except Exception:
-                pass
-
     def close(self):
         self._closed = True
         try:
             self._cmd_q.put(None)
-            self._thread.join(timeout=12)
-            if self._thread.is_alive():
-                # Worker stuck in a selenium call and never reached driver.quit().
-                # Kill the browser so the call unwinds and the leaked process dies;
-                # the reaper then collects the resulting zombie.
-                self._kill_tracked_procs()
-                self._thread.join(timeout=3)
+            self._thread.join(timeout=15)
+            if not self._thread.is_alive():
+                self._cleanup_logs()
         except Exception:
             pass
-        # Final guarantee: no live browser is left behind regardless of how the
-        # worker exited (a no-op when graceful quit() already closed it).
-        self._kill_tracked_procs()
         self._cleanup_logs()
         if self._fp_ext_dir:
             try:
@@ -1322,45 +1277,6 @@ def _cleanup_worker():
 threading.Thread(target=_cleanup_worker, daemon=True).start()
 
 
-# ── Zombie reaper ────────────────────────────────────────────────────────────
-#
-# SeleniumBase UC launches the Chrome/Chromium BROWSER as a subprocess of THIS
-# python process (see _install_chrome_popen_patch — the very fact that we can
-# intercept the browser launch proves it is Popen'd here). Nothing in the SB/UC
-# teardown path ever wait()s on that browser process, so every finished session
-# left the browser — plus its chrome_crashpad helper and occasionally uc_driver —
-# as a <defunct> zombie parented to this PID-1 server. Observed: 94 zombies
-# (~70 chromium, ~20 chrome_crashpad, 1 uc_driver) after a batch of runs.
-#
-# tini as PID 1 only reaps orphans REPARENTED to PID 1 (e.g. crashpad after its
-# chromium parent dies); it can NOT reap the browser processes that are DIRECT
-# children of this python process. So we reap them here: os.waitpid(-1, WNOHANG)
-# collects every exited child — direct children and reparented orphans alike —
-# without touching live ones.
-#
-# This does NOT disturb selenium's Service.stop() or subprocess.run(): both
-# waitpid a SPECIFIC pid, and CPython's Popen._try_wait treats a child that was
-# already reaped (ChildProcessError) as a clean exit, so their teardown still
-# completes normally even when this reaper wins the race.
-def _reap_worker():
-    while True:
-        reaped = 0
-        try:
-            while True:
-                pid, _status = os.waitpid(-1, os.WNOHANG)
-                if pid == 0:
-                    break  # children exist but none have exited yet
-                reaped += 1
-        except ChildProcessError:
-            pass  # no child processes at all
-        except Exception:
-            pass
-        # Short interval: browsers exit at session teardown, and we want the
-        # zombie window to be brief. WNOHANG makes each pass cheap.
-        time.sleep(2)
-
-
-threading.Thread(target=_reap_worker, daemon=True).start()
 
 
 def _get(sid):
