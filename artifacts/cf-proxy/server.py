@@ -2029,11 +2029,6 @@ def _element_abs_xy(sb, css, dx=0, dy_frac=0.5, wid=None, parent=False):
         pass
     ax = int(rect["x"]) + dx + win_x
     ay = int(rect["y"]) + int(rect["h"] * dy_frac) + win_y + title_bar
-    # Log every term. An OS-level click that silently misses is otherwise impossible to
-    # tell apart from one that landed and was rejected — the only visible difference is
-    # a checkbox that stays unticked, which looks identical either way.
-    print(f"[coords] {css!r} rect=({rect['x']:.0f},{rect['y']:.0f} {rect['w']:.0f}x{rect['h']:.0f}) "
-          f"win=({win_x},{win_y}) titlebar={title_bar} dx={dx} -> click=({ax},{ay})", flush=True)
     return (ax, ay)
 
 
@@ -2069,10 +2064,7 @@ def _turnstile_token(sb):
     """Return the Turnstile response token (native OR reCAPTCHA-compat), or ''."""
     try:
         return sb.execute_script(
-            # The modern full-page interstitial fills input#cf-chl-widget-<rand>_response
-            # instead of the named field, so a passed challenge looked unsolved without it.
             "var q='input[name=\"cf-turnstile-response\"],textarea[name=\"cf-turnstile-response\"],"
-            "input[id^=\"cf-chl-widget-\"][id$=\"_response\"],"
             "textarea[name=\"g-recaptcha-response\"]';"
             "var els=document.querySelectorAll(q);"
             "for(var i=0;i<els.length;i++){if(els[i].value&&els[i].value.length>20)return els[i].value;}"
@@ -2083,32 +2075,16 @@ def _turnstile_token(sb):
 
 
 def _cf_interstitial_present(sb):
-    """True while a FULL-PAGE Cloudflare challenge is BLOCKING the page.
+    """True while a FULL-PAGE Cloudflare challenge ("Just a moment…") is showing.
 
-    Detect STRUCTURALLY, not by English title: Cloudflare localises the page ("请稍候…"
-    for a zh client) and the modern challenge has none of the legacy #challenge-running
-    markup — its ids are random (cf-chl-widget-kjlr4_response), so only the id PREFIX
-    matches.
-
-    Crucially this must be FALSE for a real page that merely EMBEDS a Turnstile: a
-    login form with a Turnstile also loads challenges.cloudflare.com and also has a
-    cf-chl-widget-*_response input, so those markers alone can't tell "the gate is up"
-    from "we're through and the form has its own widget" — and callers loop/reload
-    while an interstitial is 'present', which on a login page means spinning until
-    timeout. The site's own content is the discriminator: an interstitial shows only
-    the challenge, never the app's form.
+    Unlike an embedded widget there is no cf-turnstile-response token on the page,
+    so the interstitial disappearing IS the success signal.
     """
     try:
         return bool(sb.execute_script(
-            "var real = document.querySelector("
-            "  \"input[type='password'], form[action*='login'], input[name='email'], \" +"
-            "  \"input[name='username'], nav, header\");"
-            "if (real) return false;"   # site content is rendered => we're past the gate
             "return !!(document.querySelector("
-            "'input[id^=\"cf-chl-widget-\"][id$=\"_response\"], [id^=\"cf-chl-widget\"], "
-            "script[src*=\"challenges.cloudflare.com\"], "
-            "#challenge-stage, #challenge-running, #cf-challenge-running, "
-            "#challenge-form, .cf-browser-verification') || "
+            "'#challenge-stage, #challenge-running, #cf-challenge-running, "
+            "#challenge-form, .cf-browser-verification, #cf-chl-widget') || "
             "/just a moment|checking your browser|checking if the site connection is secure/i"
             ".test(document.title || ''));"
         ))
@@ -2258,27 +2234,12 @@ def click_turnstile(sid):
                             return attempt + 1
                 return None
 
-            # (a) The response input is in the LIGHT DOM and its PARENT is the rendered
-            # widget, so it's our click target. Two spellings:
-            #   name="cf-turnstile-response"          — embedded widgets
-            #   id="cf-chl-widget-<rand>_response"    — the modern full-page challenge
-            # Only the first was handled, so on a modern challenge this found nothing —
-            # and (b) below can't help either, because Turnstile renders its iframe in a
-            # CLOSED shadow root that document.querySelectorAll("iframe") cannot see
-            # (verified: iframes:[] on a page that visibly has the checkbox). Both
-            # targets missed, nothing was ever clicked, and the page span until timeout.
-            for _sel, _label in (
-                ('input[name="cf-turnstile-response"]', "embedded"),
-                ('input[id^="cf-chl-widget-"][id$="_response"]', "chl-widget"),
-            ):
-                cbxy = _element_abs_xy(sb, _sel, dx=28, dy_frac=0.5, wid=_wid, parent=True)
-                if not cbxy:
-                    continue
-                hit = _coord_click_loop(
-                    cbxy,
-                    lambda: bool(_turnstile_token(sb)) or (not _cf_interstitial_present(sb)),
-                    _label,
-                )
+            # (a) Embedded widget: the hidden cf-turnstile-response input is in the
+            # light DOM and its PARENT is the rendered widget.
+            cbxy = _element_abs_xy(sb, 'input[name="cf-turnstile-response"]',
+                                   dx=28, dy_frac=0.5, wid=_wid, parent=True)
+            if cbxy:
+                hit = _coord_click_loop(cbxy, lambda: bool(_turnstile_token(sb)), "embedded")
                 if hit:
                     return {"solved": True, "method": "coord", "attempt": hit}
 
@@ -2462,78 +2423,19 @@ def solve_recaptcha_audio(sid):
                     pass
             # detach → drift+click (OS-level) → let reCAPTCHA score undisturbed → reconnect
             _detached_wait(sb, 3, during=_click_checkbox)
-
-        def _click_registered():
-            """Did the anchor click take effect?
-
-            NOT the same as "the checkbox is ticked": aria-checked only flips when the
-            captcha is PASSED. While a challenge is open the anchor sits unticked and
-            greyed — so testing aria-checked reported "the click never landed" with an
-            image challenge plainly on screen, and we bailed out of a captcha that was
-            working. Any of these means the click registered:
-              • a token (passed outright)
-              • the anchor ticked
-              • a challenge is up in the bframe (image / audio / IP refusal)
-            """
+        else:
+            # Couldn't locate the anchor iframe — fall back to a WebDriver click.
             try:
-                d.switch_to.default_content()
-                try:
-                    d.switch_to.frame(find(_anchor_css))
-                    el = find("#recaptcha-anchor, .recaptcha-checkbox")
-                    if (el.get_attribute("aria-checked") == "true"
-                            or "recaptcha-checkbox-checked" in (el.get_attribute("class") or "")):
-                        return True
-                except Exception:
-                    pass
-                d.switch_to.default_content()
-                try:
-                    d.switch_to.frame(find("iframe[src*='api2/bframe'], "
-                                           "iframe[src*='recaptcha/api2/bframe'], "
-                                           "iframe[src*='enterprise/bframe']"))
-                    return bool(d.execute_script(
-                        "return !!document.querySelector('.rc-imageselect, #rc-imageselect, "
-                        ".rc-imageselect-instructions, .rc-audiochallenge-tdownload-link, "
-                        "#audio-source, #audio-response, .rc-doscaptcha-header-text');"
-                    ))
-                except Exception:
-                    return False
-            finally:
-                try:
-                    d.switch_to.default_content()
-                except Exception:
-                    pass
-
-        # VERIFY, then fall back. This used to be an either/or: an OS click was fired
-        # when the coordinates resolved, and the WebDriver click ran ONLY when they
-        # didn't. So an OS click that missed (wrong window, stale coords, an overlay)
-        # was never noticed and never retried — we walked on with an unticked box and
-        # then blamed the audio solver for a challenge that had never opened.
-        if not token_present() and not _click_registered():
-            print("[recaptcha] OS click did not register — falling back to a WebDriver click", flush=True)
-            try:
-                d.switch_to.default_content()
-                d.switch_to.frame(find(_anchor_css))
+                anchor = find(_anchor_css)
+                d.switch_to.frame(anchor)
                 find("#recaptcha-anchor, .recaptcha-checkbox").click()
-            except Exception as e:
-                print(f"[recaptcha] WebDriver anchor click failed: {e}", flush=True)
+            except Exception:
+                pass
             finally:
-                try:
-                    d.switch_to.default_content()
-                except Exception:
-                    pass
+                d.switch_to.default_content()
             time.sleep(2)
-
         if token_present():
             return {"solved": True, "blocked": False, "message": "passed on checkbox"}
-
-        # Neither method got the click to register (no token, anchor unticked, no
-        # challenge in the bframe) — the challenge genuinely never opened. Say that,
-        # rather than failing later on a missing audio button.
-        if not _click_registered():
-            d.switch_to.default_content()
-            return {"solved": False, "blocked": False,
-                    "message": "the reCAPTCHA checkbox click did not register (neither the OS-level "
-                               "nor the WebDriver click opened a challenge)."}
 
         # 2. Switch the challenge frame to audio mode.
         try:
@@ -2547,47 +2449,20 @@ def solve_recaptcha_audio(sid):
         # served — we carried on into the round loop anyway, found no audio, and
         # reported "not solved after N audio rounds" despite never having downloaded a
         # single clip. Capture the reason and retry through JS, which ignores occlusion.
-        # WAIT for the challenge to render before touching it. The bframe loads its
-        # content asynchronously, and under a proxy (WARP especially) that takes a
-        # while. The previous code swallowed a missing audio button and fell into a
-        # retry loop whose sleeps happened to cover the delay; when I replaced that
-        # with an immediate check, a slow-rendering challenge got no time at all and we
-        # bailed out with "audio button not found" on a challenge that was still
-        # loading — which is why an image challenge used to appear and then stopped.
         audio_err = None
-        btn = None
-        _deadline = time.time() + 20
-        while time.time() < _deadline:
-            try:
-                btn = find("#recaptcha-audio-button, button.rc-button-audio")
-                if btn.is_displayed():
-                    break
-            except Exception:
-                btn = None
-            # An IP refusal ends the wait early — no button is ever coming.
-            try:
-                _b = find(".rc-doscaptcha-header-text, .rc-audiochallenge-error-message").text or ""
-                if "try again later" in _b.lower() or "automated queries" in _b.lower():
-                    break
-            except Exception:
-                pass
-            time.sleep(0.5)
-
-        if btn is not None:
+        try:
+            btn = find("#recaptcha-audio-button, button.rc-button-audio")
             try:
                 btn.click()
             except Exception as e1:
                 audio_err = f"click intercepted: {e1}"
                 print(f"[recaptcha] audio button click intercepted — retrying via JS: {e1}", flush=True)
-                try:
-                    d.execute_script("arguments[0].click();", btn)
-                    audio_err = None
-                except Exception as e2:
-                    audio_err = f"click failed: {e2}"
+                d.execute_script("arguments[0].click();", btn)
+                audio_err = None
             time.sleep(1.5)
-        else:
-            audio_err = "audio button never rendered within 20s"
-            print("[recaptcha] audio button never rendered within 20s", flush=True)
+        except Exception as e:
+            audio_err = str(e)
+            print(f"[recaptcha] audio button unavailable: {e}", flush=True)
 
         # An IP block can surface the moment the audio button is pressed, so check it
         # before concluding anything about the audio challenge.
@@ -2600,19 +2475,11 @@ def solve_recaptcha_audio(sid):
         except Exception:
             pass
 
-        # Confirm we ACTUALLY reached the audio challenge before looping over it —
-        # polling, because the audio panel mounts asynchronously too. Checking once,
-        # immediately, is what made a slow challenge look like "no audio at all".
-        on_audio = False
-        _deadline = time.time() + 15
-        while time.time() < _deadline:
-            on_audio = bool(sb.execute_script(
-                "return !!document.querySelector("
-                "'.rc-audiochallenge-tdownload-link, #audio-source, #audio-response');"
-            ))
-            if on_audio:
-                break
-            time.sleep(0.5)
+        # Confirm we ACTUALLY reached the audio challenge before looping over it.
+        on_audio = bool(sb.execute_script(
+            "return !!document.querySelector("
+            "'.rc-audiochallenge-tdownload-link, #audio-source, #audio-response');"
+        ))
         if not on_audio:
             is_image = bool(sb.execute_script(
                 "return !!document.querySelector('.rc-imageselect, #rc-imageselect, "

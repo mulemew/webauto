@@ -578,72 +578,10 @@ import type { PageAdapter } from "./page-adapter";
       try {
         const cleared = await clearCloudflareInterstitial(page, { url: targetUrl });
         if (!cleared) {
-          // Is the challenge STILL up? If so, stop here instead of hunting for a form
-          // that cannot exist yet. This also stops the caller from burning its
-          // remaining login attempts: each one would re-run the full CF bypass budget
-          // (~90s) against the same wall, which is how a doomed login stretched into
-          // 15 minutes. captchaBlocked marks it as "needs attention", not a retry.
-          const stillBlocked = (await page
-            .evaluate(() =>
-              !!document.querySelector(
-                'input[id^="cf-chl-widget-"][id$="_response"], #challenge-stage, ' +
-                  '#challenge-running, .cf-browser-verification',
-              ),
-            )
-            .catch(() => false)) as boolean;
-          if (stillBlocked) {
-            return {
-              success: false,
-              captchaBlocked: true,
-              message:
-                "Cloudflare challenge is still up after the bypass budget — the login page never loaded. " +
-                "The checkbox could not be passed from this IP/fingerprint.",
-            };
-          }
           logger.warn({ targetUrl }, "Cloudflare interstitial not confirmed cleared before login — continuing anyway");
         }
       } catch (cfErr) {
         logger.warn({ targetUrl, cfErr }, "Cloudflare interstitial pre-clear threw — continuing");
-      }
-
-      // ── 0b. Wait for the post-challenge redirect to land ───────────────────
-      // Passing the interstitial does NOT mean the login form is there: sites like
-      // dash.hidencloud.com gate /auth/login behind a challenge page that, once
-      // passed, REDIRECTS to the real login page. We used to fall straight through
-      // (a 500ms sleep) and hunt for inputs while the challenge page was still up,
-      // so login failed with "could not find username field" even though the
-      // challenge had been cleared. Wait for a login form (or another challenge —
-      // some of these sites then embed a SECOND captcha in the form itself) to
-      // actually materialise before moving on.
-      {
-        const deadline = Date.now() + 20_000;
-        while (Date.now() < deadline) {
-          const state = (await page
-            .evaluate(() => {
-              const vis = (el: Element | null): boolean => {
-                if (!el) return false;
-                const r = (el as HTMLElement).getBoundingClientRect();
-                const s = window.getComputedStyle(el as HTMLElement);
-                return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden";
-              };
-              const hasForm =
-                vis(document.querySelector("input[type='password']")) ||
-                vis(document.querySelector("input[type='email']")) ||
-                vis(document.querySelector("input[name*='user' i], input[name*='email' i]"));
-              const onChallenge = !!document.querySelector(
-                'input[id^="cf-chl-widget-"][id$="_response"], script[src*="challenges.cloudflare.com"]',
-              );
-              return { hasForm, onChallenge };
-            })
-            .catch(() => ({ hasForm: false, onChallenge: false }))) as {
-            hasForm: boolean;
-            onChallenge: boolean;
-          };
-          // The form is up — done, even if a second (embedded) captcha rides along:
-          // the captcha handling further down deals with that one.
-          if (state.hasForm) break;
-          await sleep(1000);
-        }
       }
 
       // ── 0. Dismiss cookie consent banners & common popups ─────────────────
