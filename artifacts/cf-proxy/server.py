@@ -1277,6 +1277,33 @@ def _cleanup_worker():
 threading.Thread(target=_cleanup_worker, daemon=True).start()
 
 
+# ── Zombie reaper ────────────────────────────────────────────────────────────
+# SeleniumBase UC launches Chrome as a subprocess of THIS python process, and
+# nothing in the SB/UC teardown wait()s on it, so finished sessions leave the
+# browser (+ crashpad/uc_driver) as <defunct> zombies. os.waitpid(-1, WNOHANG)
+# reaps ONLY children that have ALREADY exited — it never signals or kills a live
+# process, so it cannot break an active session. (It replaces the removed
+# _kill_tracked_procs, which SIGKILL'd LIVE browsers on close() and crashed
+# in-progress Turnstile solves.) CPython's Popen._try_wait treats a child reaped
+# here (ChildProcessError) as a clean exit, so selenium/subprocess teardown is
+# unaffected.
+def _reap_worker():
+    while True:
+        try:
+            while True:
+                pid, _status = os.waitpid(-1, os.WNOHANG)
+                if pid == 0:
+                    break  # children exist but none have exited yet
+        except ChildProcessError:
+            pass  # no child processes at all
+        except Exception:
+            pass
+        time.sleep(2)
+
+
+threading.Thread(target=_reap_worker, daemon=True).start()
+
+
 
 
 def _get(sid):
