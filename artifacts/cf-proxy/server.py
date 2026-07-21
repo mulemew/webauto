@@ -471,10 +471,53 @@ def _fp_ua(os_name: str, major: str) -> str:
             f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36")
 
 
-def _fp_profile(os_name: str, major: str, full: str) -> dict:
+# A POOL of Windows GPU/OS variants so the fingerprint is no longer a single
+# hard-coded value. Each entry is internally consistent (vendor matches renderer).
+# When one variant gets flagged by Cloudflare, the task can switch to another
+# instead of every Windows task sharing (and being blocked on) the same
+# fingerprint. (webgl_vendor, webgl_renderer, platformVersion)
+_WIN_FP_VARIANTS = [
+    ("Google Inc. (Intel)",
+     "ANGLE (Intel, Intel(R) UHD Graphics 630 (0x00003E9B) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+     "15.0.0"),
+    ("Google Inc. (NVIDIA)",
+     "ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 (0x00001F82) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+     "15.0.0"),
+    ("Google Inc. (NVIDIA)",
+     "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 (0x00002504) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+     "15.0.0"),
+    ("Google Inc. (AMD)",
+     "ANGLE (AMD, AMD Radeon RX 580 Series (0x000067DF) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+     "10.0.0"),
+    ("Google Inc. (Intel)",
+     "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x00009A49) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+     "15.0.0"),
+]
+
+
+def _pick_fp_variant(fp: dict) -> int:
+    """Choose a Windows fingerprint variant index for THIS session. An explicit
+    fp["variant"] (set from the task, e.g. to move off a flagged one) wins;
+    otherwise a random variant so tasks don't all share one fingerprint. Resolve
+    ONCE per session (store in fp["_variant"]) so the extension + CDP overlay never
+    diverge."""
+    import random
+    v = fp.get("_variant")
+    if v is None:
+        v = fp.get("variant")
+    try:
+        idx = int(v) % len(_WIN_FP_VARIANTS)
+    except (TypeError, ValueError):
+        idx = random.randrange(len(_WIN_FP_VARIANTS))
+    fp["_variant"] = idx  # memoise so the extension + every CDP re-apply agree
+    return idx
+
+
+def _fp_profile(os_name: str, major: str, full: str, variant: int = 0) -> dict:
     """Canonical values for a spoofed OS profile — the single source of truth
     shared by the launch-loaded MAIN-world extension and the (secondary,
-    pre-navigation) CDP overlay, so the two never diverge."""
+    pre-navigation) CDP overlay, so the two never diverge. `variant` selects a
+    Windows GPU/OS profile from _WIN_FP_VARIANTS (ignored for mac)."""
     if os_name == "mac":
         platform = "MacIntel"
         meta_platform, meta_pv, meta_arch = "macOS", "14.5.0", "arm"
@@ -482,10 +525,8 @@ def _fp_profile(os_name: str, major: str, full: str) -> dict:
         webgl_renderer = "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)"
     else:
         platform = "Win32"
-        meta_platform, meta_pv, meta_arch = "Windows", "15.0.0", "x86"
-        webgl_vendor = "Google Inc. (Intel)"
-        webgl_renderer = ("ANGLE (Intel, Intel(R) UHD Graphics 630 (0x00003E9B) "
-                          "Direct3D11 vs_5_0 ps_5_0, D3D11)")
+        webgl_vendor, webgl_renderer, meta_pv = _WIN_FP_VARIANTS[variant % len(_WIN_FP_VARIANTS)]
+        meta_platform, meta_arch = "Windows", "x86"
     brands = [
         {"brand": "Chromium", "version": major},
         {"brand": "Google Chrome", "version": major},
@@ -582,13 +623,13 @@ try{patchGL(window.WebGL2RenderingContext&&WebGL2RenderingContext.prototype);}ca
 })();"""
 
 
-def _write_fp_extension(os_name: str, major: str, full: str, lang_list: list) -> str:
+def _write_fp_extension(os_name: str, major: str, full: str, lang_list: list, variant: int = 0) -> str:
     """Generate a per-session unpacked MV3 extension whose MAIN-world,
     document_start content script spoofs navigator.platform / userAgentData /
     languages / WebGL. Returns the extension directory (loaded via
     --load-extension). Caller cleans it up on session close."""
     import json, tempfile
-    prof = _fp_profile(os_name, major, full)
+    prof = _fp_profile(os_name, major, full, variant)
     langs = lang_list or ["en-US", "en"]
     js = _FP_EXT_JS
     for tok, val in (
@@ -684,7 +725,7 @@ def _apply_fingerprint(sb, proxy=None, fp=None):
         langs = FINGERPRINT_LANGS or (f"{locale},{locale.split('-')[0]},en" if locale else "en-US,en")
         lang_list = [x.strip() for x in langs.split(",") if x.strip()]
 
-        prof = _fp_profile(os_name, major, full)
+        prof = _fp_profile(os_name, major, full, _pick_fp_variant(fp))
         ua = fp.get("_ua") or prof["ua"]
         platform = prof["platform"]
         webgl_vendor = prof["webgl_vendor"]
@@ -882,7 +923,12 @@ class SessionThread:
                     # of which survive uc_open_with_reconnect (CDP overrides do
                     # not). Pre-resolved in create_session as _tz/_locale.
                     _thread_local.chrome_tz = None
-                    _fp = self.fingerprint or {}
+                    # Use the SESSION's own fingerprint dict (not a throwaway copy) so a
+                    # once-picked Windows variant memoised into it is seen identically by
+                    # both the launch extension and every CDP re-apply.
+                    if not isinstance(self.fingerprint, dict):
+                        self.fingerprint = {}
+                    _fp = self.fingerprint
                     _fp_tz = _fp.get("_tz")
                     _fp_locale = _fp.get("_locale")
                     _fp_ua_str = _fp.get("_ua")
@@ -919,7 +965,7 @@ class SessionThread:
                             _langs_str = FINGERPRINT_LANGS or (
                                 f"{_loc},{_loc.split('-')[0]},en" if _loc else "en-US,en")
                             _llist = [x.strip() for x in _langs_str.split(",") if x.strip()]
-                            _ext_dir = _write_fp_extension(_fp_os_name, _cmajor, _cfull, _llist)
+                            _ext_dir = _write_fp_extension(_fp_os_name, _cmajor, _cfull, _llist, _pick_fp_variant(_fp))
                             args.append(f"--disable-extensions-except={_ext_dir}")
                             args.append(f"--load-extension={_ext_dir}")
                             self._fp_ext_dir = _ext_dir
