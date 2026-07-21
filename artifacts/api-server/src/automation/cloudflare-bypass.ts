@@ -731,15 +731,13 @@ export async function bypassCloudflareChallenge(
   }
 
   if (challengeType === "js_challenge") {
-    // A non-interactive / "managed" challenge VERIFIES ITSELF — the spinner
-    // ("Vérification…" / "en cours") runs and issues the token when it's satisfied.
-    // The right thing is to WAIT for it, uninterrupted, not to reload: a reload
-    // restarts the spinner, so it never finishes (that's what made these fail while
-    // the screenshot still showed it verifying). So poll to the deadline instead of a
-    // fixed attempt count. detectCfChallenge returns "none" the instant the real page
-    // renders, so a page that clears exits immediately; we only wait the full budget
-    // when it genuinely never resolves.
-    const jsDeadline = opts?.deadline ?? Date.now() + 120_000;
+    // A non-interactive / "managed" challenge VERIFIES ITSELF and issues its token
+    // within SECONDS — if it hasn't cleared in ~30s it isn't going to (the IP/
+    // fingerprint is being refused), and waiting longer just keeps probing the page
+    // with execute_script during CF's watch window, which itself trips detection.
+    // A page that clears exits immediately (detectCfChallenge → "none"); the cap only
+    // bounds the give-up time on a genuine failure. Tunable via CF_JS_DEADLINE_MS.
+    const jsDeadline = opts?.deadline ?? Date.now() + Number(process.env.CF_JS_DEADLINE_MS ?? 30_000);
     let attempt = 0;
     while (Date.now() < jsDeadline) {
       attempt++;
@@ -883,13 +881,13 @@ export async function clearCloudflareInterstitial(
   opts?: { url?: string; maxReloads?: number; budgetMs?: number },
 ): Promise<boolean> {
   const maxReloads = opts?.maxReloads ?? 2;
-  // Wall-clock budget for the WHOLE clear. 180s: a non-interactive challenge can take
-  // a while to self-verify (slow site / proxy / WARP), and cutting it off at 90s while
-  // the spinner was still going is exactly what made these fail. The old 10-minute
-  // hangs came from a login page being MISread as a challenge and looping forever —
-  // that root cause is fixed (a page with a real form is no longer "a challenge"), so
-  // a generous budget no longer risks a long hang. Tunable via CF_CLEAR_BUDGET_MS.
-  const budgetMs = opts?.budgetMs ?? Number(process.env.CF_CLEAR_BUDGET_MS ?? 180_000);
+  // Wall-clock budget for the WHOLE clear. A full-page interstitial that is going to
+  // clear does so within seconds; if it hasn't cleared in ~60s the IP/fingerprint is
+  // being refused and more waiting only keeps probing the page (a detection tell) and
+  // drags a failing login out for minutes. A page that clears exits immediately, so
+  // this cap only bounds the give-up time on genuine failure. Tunable via
+  // CF_CLEAR_BUDGET_MS.
+  const budgetMs = opts?.budgetMs ?? Number(process.env.CF_CLEAR_BUDGET_MS ?? 60_000);
   const deadline = Date.now() + budgetMs;
 
   // This function clears FULL-PAGE interstitials — the ones that block the page and
