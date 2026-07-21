@@ -419,8 +419,7 @@ async function executeStep(
             const deadline = Date.now() + timeout;
             while (true) {
               if (page.isClosed()) throw new Error(`waitFor aborted — page was closed before text "${needle}" appeared`);
-              const bodyText = ((await page.evaluate(() => document.body?.innerText).catch(() => null)) ?? "") as string;
-              if (pageTextMatches(bodyText, needle)) break;
+              if (await pageHasExactText(page, needle)) break;
               if (Date.now() >= deadline) throw new Error(`Text "${needle}" did not appear within ${timeout}ms`);
               await new Promise((r) => setTimeout(r, 500));
             }
@@ -765,13 +764,11 @@ async function executeStep(
         try {
           switch (conditionType) {
             case "text_contains": {
-              const bodyText = ((await page.evaluate(() => document.body?.innerText).catch(() => null)) ?? "") as string;
-              conditionMet = pageTextMatches(bodyText, conditionValue);
+              conditionMet = await pageHasExactText(page, conditionValue);
               break;
             }
             case "text_not_contains": {
-              const bodyText2 = ((await page.evaluate(() => document.body?.innerText).catch(() => null)) ?? "") as string;
-              conditionMet = !pageTextMatches(bodyText2, conditionValue);
+              conditionMet = !(await pageHasExactText(page, conditionValue));
               break;
             }
             case "element_visible": {
@@ -979,24 +976,24 @@ async function waitForSelectorWithCf(
 }
 
 /**
- * EXACT, case-sensitive text match against page text — the shared rule for the
- * "Page contains text" condition and the "Text on page" waitFor. "Stop" matches the
- * word "Stop" but NOT "Stopped" and NOT "stop". ASCII values use whole-token
- * boundaries; values with non-ASCII characters (CJK has no word boundaries) fall back
- * to a case-sensitive substring so Chinese phrases still match inside a longer run.
+ * TRUE exact, case-sensitive text presence for the "Page contains text" condition and
+ * the "Text on page" waitFor: is there a VISIBLE element whose trimmed text equals
+ * `needle` exactly? "Stop" matches <button>Stop</button> but NOT "Stopped" nor
+ * "Server Stopped"; "停止" matches <span>停止</span> but NOT "已停止". Works identically
+ * for ASCII and CJK — no word-boundary tricks — and mirrors clickByText's strictness.
  */
-function pageTextMatches(haystack: string, needle: string): boolean {
-  const v = needle;
-  if (!v) return false;
-  // Non-ASCII (CJK etc.) → case-sensitive substring (word boundaries don't apply).
-  if (/[^\x00-\x7F]/.test(v)) return haystack.includes(v);
-  // ASCII → whole-token, case-sensitive: no [A-Za-z0-9_] may touch either side.
-  const escaped = v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  try {
-    return new RegExp(`(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`).test(haystack);
-  } catch {
-    return haystack.includes(v);
-  }
+async function pageHasExactText(page: PageAdapter, needle: string): Promise<boolean> {
+  const target = needle.trim();
+  if (!target) return false;
+  return (await page.evaluate((want: unknown) => {
+    const t = String(want);
+    for (const el of Array.from(document.querySelectorAll("body, body *"))) {
+      if (((el.textContent || "").trim()) !== t) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) return true; // visible element with EXACTLY this text
+    }
+    return false;
+  }, target).catch(() => false)) as boolean;
 }
 
 async function clickByText(
