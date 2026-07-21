@@ -42,7 +42,14 @@
     }
     const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     if (!res.ok || data["error"]) {
-      throw new Error(String(data["error"] ?? `HTTP ${res.status} ${res.statusText}`));
+      // data["error"] can be an EMPTY string (?? won't catch ""), which threw
+      // `new Error("")` — a blank failure with no reason. Always build a message.
+      const raw = data["error"];
+      const detail = raw != null && String(raw).trim() ? String(raw) : "";
+      throw new Error(
+        detail ||
+          `cf-proxy ${init?.method ?? "GET"} ${maskUrl(url)} → HTTP ${res.status} ${res.statusText || ""}`.trim(),
+      );
     }
     return data;
   }
