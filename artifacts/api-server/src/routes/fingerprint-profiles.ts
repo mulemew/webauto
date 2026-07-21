@@ -1,0 +1,60 @@
+import { Router, type IRouter } from "express";
+import { db, fingerprintProfilesTable, tasksTable, eq } from "@workspace/db";
+import { logger } from "../lib/logger";
+import { z } from "zod";
+
+const router: IRouter = Router();
+
+const OS = z.enum(["windows", "mac", "linux"]);
+
+const CreateBody = z.object({
+  name: z.string().min(1),
+  os: OS,
+  config: z.record(z.string(), z.unknown()).nullable().optional(),
+});
+
+const UpdateBody = z.object({
+  name: z.string().min(1).optional(),
+  os: OS.optional(),
+  config: z.record(z.string(), z.unknown()).nullable().optional(),
+});
+
+router.get("/fingerprint-profiles", async (_req, res): Promise<void> => {
+  const rows = await db.select().from(fingerprintProfilesTable).orderBy(fingerprintProfilesTable.name);
+  res.json(rows);
+});
+
+router.post("/fingerprint-profiles", async (req, res): Promise<void> => {
+  const body = CreateBody.safeParse(req.body);
+  if (!body.success) { res.status(400).json({ error: "Invalid input" }); return; }
+  const [row] = await db.insert(fingerprintProfilesTable)
+    .values({ name: body.data.name, os: body.data.os, config: body.data.config ?? null })
+    .returning();
+  logger.info({ id: row.id, name: row.name }, "Fingerprint profile created");
+  res.status(201).json(row);
+});
+
+router.put("/fingerprint-profiles/:id", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const body = UpdateBody.safeParse(req.body);
+  if (!body.success) { res.status(400).json({ error: "Invalid input" }); return; }
+  const update: Partial<{ name: string; os: string; config: unknown }> = {};
+  if (body.data.name !== undefined) update.name = body.data.name;
+  if (body.data.os !== undefined) update.os = body.data.os;
+  if (body.data.config !== undefined) update.config = body.data.config;
+  const [updated] = await db.update(fingerprintProfilesTable).set(update).where(eq(fingerprintProfilesTable.id, id)).returning();
+  if (!updated) { res.status(404).json({ error: "Not found" }); return; }
+  res.json(updated);
+});
+
+router.delete("/fingerprint-profiles/:id", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  // Null out any task that referenced it so a deleted profile doesn't dangle.
+  await db.update(tasksTable).set({ fingerprintProfileId: null }).where(eq(tasksTable.fingerprintProfileId, id));
+  await db.delete(fingerprintProfilesTable).where(eq(fingerprintProfilesTable.id, id));
+  res.status(204).end();
+});
+
+export default router;

@@ -5,6 +5,8 @@ import { Router, type IRouter } from "express";
   import settingsRouter from "./settings";
   import recorderRouter from "./recorder";
   import savedCredentialsRouter from "./saved-credentials";
+  import fingerprintProfilesRouter from "./fingerprint-profiles";
+  import proxyProfilesRouter from "./proxy-profiles";
   import webhookRouter from "./webhook";
   import { requireAuth } from "../middlewares/requireAuth";
 
@@ -21,6 +23,8 @@ import { Router, type IRouter } from "express";
   router.use(settingsRouter);
   router.use(recorderRouter);
   router.use(savedCredentialsRouter);
+  router.use(fingerprintProfilesRouter);
+  router.use(proxyProfilesRouter);
 
   export default router;
   
