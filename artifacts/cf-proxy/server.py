@@ -13,6 +13,7 @@ background so that POST /sessions returns near-instantly instead of waiting
 import os
 import queue
 import shutil
+import signal
 import subprocess
 import socket
 import threading
@@ -202,7 +203,16 @@ def _install_chrome_popen_patch():
                         env = dict(kwargs.get("env") or os.environ)
                         env["TZ"] = chrome_tz
                         kwargs["env"] = env
-                    return _orig_popen(cmd, *args, **kwargs)
+                    proc = _orig_popen(cmd, *args, **kwargs)
+                    # Remember this browser PID on the owning session so close()
+                    # can force-kill it if graceful teardown never runs.
+                    sess = getattr(_thread_local, "session", None)
+                    if sess is not None:
+                        try:
+                            sess._chrome_pids.add(proc.pid)
+                        except Exception:
+                            pass
+                    return proc
                 finally:
                     for h in handles:
                         try:
@@ -313,19 +323,20 @@ def _resolve_selector(selector: str):
 
 
 def _is_cf_challenge(sb) -> bool:
+    # STRUCTURAL, language-independent. Cloudflare LOCALISES the interstitial
+    # ("请稍候…", "Vérification…", …), so the old English-title/body test ("Just a
+    # moment" / "Attention Required" / "Checking your browser") silently missed every
+    # non-English full-page challenge: the goto loop then broke WITHOUT clicking and
+    # reported it "passed". Key off the markers CF emits regardless of language —
+    # the challenges.cloudflare.com URL, plus the cf-chl-widget / challenge-stage /
+    # turnstile-response structure that _cf_interstitial_present already matches.
     try:
-        title = sb.driver.title or ""
         url = sb.get_current_url() or ""
-        body_text = sb.execute_script("return document.body?.innerText || ''") or ""
-        return (
-            "Just a moment" in title
-            or "Attention Required" in title
-            or "challenges.cloudflare.com" in url
-            or "cf-browser-verification" in body_text
-            or "Checking your browser" in body_text
-        )
     except Exception:
-        return False
+        url = ""
+    if "challenges.cloudflare.com" in url:
+        return True
+    return _cf_interstitial_present(sb)
 
 
 def _classify_start_error(error_text: str) -> str:
@@ -808,6 +819,12 @@ class SessionThread:
         # Temp dir of the per-session fingerprint extension (if any); cleaned up
         # on close.
         self._fp_ext_dir = None
+        # PIDs of Chrome/Chromium browser processes THIS session Popen'd (recorded
+        # by the popen patch). Used by close() to force-kill the browser even when
+        # the worker thread is hung inside a selenium call and never reaches
+        # driver.quit() — otherwise the browser leaks as a live orphan (not a
+        # zombie the reaper can collect, since it never exited).
+        self._chrome_pids: set[int] = set()
         self._log_dir = os.path.join("/tmp/cf-proxy-logs", self.session_id)
         os.makedirs(self._log_dir, exist_ok=True)
         self._chrome_stdout_path = os.path.join(self._log_dir, "chrome.stdout.log")
@@ -854,6 +871,7 @@ class SessionThread:
             for attempt in range(1, attempts + 1):
                 try:
                     _install_chrome_popen_patch()
+                    _thread_local.session = self
                     _thread_local.chrome_stdout_path = self._chrome_stdout_path
                     _thread_local.chrome_stderr_path = self._chrome_stderr_path
                     from seleniumbase import SB
@@ -1039,15 +1057,44 @@ class SessionThread:
                 raise RuntimeError(result.get("error", "Command failed"))
             return result.get("result")
 
+    def _kill_tracked_procs(self):
+        """SIGKILL any browser process this session Popen'd that is still alive.
+
+        Recycle-safe: a PID could have been reaped (by the reaper) and reused by
+        an unrelated process, so we verify /proc/<pid>/cmdline still looks like a
+        Chrome/Chromium launch before signalling. Already-dead PIDs (/proc gone)
+        are skipped. Killing the browser also makes any selenium call the worker
+        is hung inside unwind, so the worker can finish teardown.
+        """
+        for pid in list(self._chrome_pids):
+            try:
+                with open(f"/proc/{pid}/cmdline", "rb") as f:
+                    cmdline = f.read().replace(b"\0", b" ").lower()
+                if b"chrome" not in cmdline and b"chromium" not in cmdline:
+                    continue  # PID recycled into something else — do not kill
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, FileNotFoundError):
+                pass  # already gone
+            except Exception:
+                pass
+
     def close(self):
         self._closed = True
         try:
             self._cmd_q.put(None)
-            self._thread.join(timeout=15)
-            if not self._thread.is_alive():
-                self._cleanup_logs()
+            self._thread.join(timeout=12)
+            if self._thread.is_alive():
+                # Worker stuck in a selenium call and never reached driver.quit().
+                # Kill the browser so the call unwinds and the leaked process dies;
+                # the reaper then collects the resulting zombie.
+                self._kill_tracked_procs()
+                self._thread.join(timeout=3)
         except Exception:
             pass
+        # Final guarantee: no live browser is left behind regardless of how the
+        # worker exited (a no-op when graceful quit() already closed it).
+        self._kill_tracked_procs()
+        self._cleanup_logs()
         if self._fp_ext_dir:
             try:
                 import shutil
@@ -1227,6 +1274,47 @@ def _cleanup_worker():
 
 
 threading.Thread(target=_cleanup_worker, daemon=True).start()
+
+
+# ── Zombie reaper ────────────────────────────────────────────────────────────
+#
+# SeleniumBase UC launches the Chrome/Chromium BROWSER as a subprocess of THIS
+# python process (see _install_chrome_popen_patch — the very fact that we can
+# intercept the browser launch proves it is Popen'd here). Nothing in the SB/UC
+# teardown path ever wait()s on that browser process, so every finished session
+# left the browser — plus its chrome_crashpad helper and occasionally uc_driver —
+# as a <defunct> zombie parented to this PID-1 server. Observed: 94 zombies
+# (~70 chromium, ~20 chrome_crashpad, 1 uc_driver) after a batch of runs.
+#
+# tini as PID 1 only reaps orphans REPARENTED to PID 1 (e.g. crashpad after its
+# chromium parent dies); it can NOT reap the browser processes that are DIRECT
+# children of this python process. So we reap them here: os.waitpid(-1, WNOHANG)
+# collects every exited child — direct children and reparented orphans alike —
+# without touching live ones.
+#
+# This does NOT disturb selenium's Service.stop() or subprocess.run(): both
+# waitpid a SPECIFIC pid, and CPython's Popen._try_wait treats a child that was
+# already reaped (ChildProcessError) as a clean exit, so their teardown still
+# completes normally even when this reaper wins the race.
+def _reap_worker():
+    while True:
+        reaped = 0
+        try:
+            while True:
+                pid, _status = os.waitpid(-1, os.WNOHANG)
+                if pid == 0:
+                    break  # children exist but none have exited yet
+                reaped += 1
+        except ChildProcessError:
+            pass  # no child processes at all
+        except Exception:
+            pass
+        # Short interval: browsers exit at session teardown, and we want the
+        # zombie window to be brief. WNOHANG makes each pass cheap.
+        time.sleep(2)
+
+
+threading.Thread(target=_reap_worker, daemon=True).start()
 
 
 def _get(sid):
@@ -2029,6 +2117,11 @@ def _element_abs_xy(sb, css, dx=0, dy_frac=0.5, wid=None, parent=False):
         pass
     ax = int(rect["x"]) + dx + win_x
     ay = int(rect["y"]) + int(rect["h"] * dy_frac) + win_y + title_bar
+    # Log every term. An OS-level click that silently misses is otherwise impossible to
+    # tell apart from one that landed and was rejected — the only visible difference is
+    # a checkbox that stays unticked, which looks identical either way.
+    print(f"[coords] {css!r} rect=({rect['x']:.0f},{rect['y']:.0f} {rect['w']:.0f}x{rect['h']:.0f}) "
+          f"win=({win_x},{win_y}) titlebar={title_bar} dx={dx} -> click=({ax},{ay})", flush=True)
     return (ax, ay)
 
 
@@ -2064,7 +2157,10 @@ def _turnstile_token(sb):
     """Return the Turnstile response token (native OR reCAPTCHA-compat), or ''."""
     try:
         return sb.execute_script(
+            # The modern full-page interstitial fills input#cf-chl-widget-<rand>_response
+            # instead of the named field, so a passed challenge looked unsolved without it.
             "var q='input[name=\"cf-turnstile-response\"],textarea[name=\"cf-turnstile-response\"],"
+            "input[id^=\"cf-chl-widget-\"][id$=\"_response\"],"
             "textarea[name=\"g-recaptcha-response\"]';"
             "var els=document.querySelectorAll(q);"
             "for(var i=0;i<els.length;i++){if(els[i].value&&els[i].value.length>20)return els[i].value;}"
@@ -2075,16 +2171,38 @@ def _turnstile_token(sb):
 
 
 def _cf_interstitial_present(sb):
-    """True while a FULL-PAGE Cloudflare challenge ("Just a moment…") is showing.
+    """True while a FULL-PAGE Cloudflare challenge is BLOCKING the page.
 
-    Unlike an embedded widget there is no cf-turnstile-response token on the page,
-    so the interstitial disappearing IS the success signal.
+    Detect STRUCTURALLY, not by English title: Cloudflare localises the page ("请稍候…"
+    for a zh client) and the modern challenge has none of the legacy #challenge-running
+    markup — its ids are random (cf-chl-widget-kjlr4_response), so only the id PREFIX
+    matches.
+
+    Crucially this must be FALSE for a real page that merely EMBEDS a Turnstile: a
+    login form with a Turnstile also loads challenges.cloudflare.com and also has a
+    cf-chl-widget-*_response input, so those markers alone can't tell "the gate is up"
+    from "we're through and the form has its own widget" — and callers loop/reload
+    while an interstitial is 'present', which on a login page means spinning until
+    timeout. The site's own content is the discriminator: an interstitial shows only
+    the challenge, never the app's form.
     """
+    #
+    # The discriminator is a real INTERACTIVE FORM (password / login inputs), NOT
+    # nav/header: a full-page Cloudflare challenge is wrapped in the site's own chrome
+    # and DOES carry a nav/header, so excluding on those made every framed full-page
+    # challenge look like it wasn't a challenge — which is why the checkbox on
+    # hub.weirdhost.xyz never got treated as one. A login form, by contrast, only
+    # exists once we're actually past the gate.
     try:
         return bool(sb.execute_script(
+            "var real = document.querySelector("
+            "  \"input[type='password'], input[name='email'], input[name='username']\");"
+            "if (real) return false;"   # a real form is rendered => we're past the gate
             "return !!(document.querySelector("
-            "'#challenge-stage, #challenge-running, #cf-challenge-running, "
-            "#challenge-form, .cf-browser-verification, #cf-chl-widget') || "
+            "'input[id^=\"cf-chl-widget-\"][id$=\"_response\"], [id^=\"cf-chl-widget\"], "
+            "script[src*=\"challenges.cloudflare.com\"], "
+            "#challenge-stage, #challenge-running, #cf-challenge-running, "
+            "#challenge-form, .cf-browser-verification') || "
             "/just a moment|checking your browser|checking if the site connection is secure/i"
             ".test(document.title || ''));"
         ))
@@ -2206,6 +2324,48 @@ def click_turnstile(sid):
         # the rendered widget — so click its checkbox (left side, vertically
         # centered) at OS level with human drift, the same primitives as the
         # reCAPTCHA anchor click. Generic: works on any such shadow/hidden widget.
+        # ── CDP viewport click ───────────────────────────────────────────────
+        # A trusted click at the checkbox's VIEWPORT position passes this challenge
+        # outright (verified in-browser: one click → redirect, no image challenge, no
+        # trajectory needed). CDP Input.dispatchMouseEvent takes CSS/viewport coords,
+        # so it sidesteps the whole window-geometry→screen conversion (the title-bar
+        # offset that made the OS-level xdotool click miss). The checkbox sits a fixed
+        # ~30px in from the response input's widget container, vertically centred.
+        def _cdp_click_checkbox():
+            try:
+                box = sb.execute_script(
+                    "var i=document.querySelector("
+                    "'input[name=\"cf-turnstile-response\"],input[id^=\"cf-chl-widget-\"][id$=\"_response\"]');"
+                    "if(!i||!i.parentElement)return null;"
+                    "var r=i.parentElement.getBoundingClientRect();"
+                    "return {x:r.x,y:r.y,h:r.height};")
+                if not box:
+                    return False
+                cx = float(box["x"]) + 30
+                cy = float(box["y"]) + float(box["h"]) * 0.5
+                for ev in ("mouseMoved", "mousePressed", "mouseReleased"):
+                    p = {"type": ev, "x": cx, "y": cy, "button": "left", "clickCount": 1}
+                    if ev == "mouseMoved":
+                        p = {"type": ev, "x": cx, "y": cy}
+                    sb.driver.execute_cdp_cmd("Input.dispatchMouseEvent", p)
+                print(f"[turnstile] CDP viewport click at ({cx:.0f},{cy:.0f})", flush=True)
+                return True
+            except Exception as e:
+                print(f"[turnstile] CDP click err: {e}", flush=True)
+                return False
+
+        if not _turnstile_token(sb):
+            _cdp_was_intr = _cf_interstitial_present(sb)
+            for _ in range(3):
+                if _turnstile_token(sb) or (_cdp_was_intr and not _cf_interstitial_present(sb)):
+                    return {"solved": True, "method": "cdp", "attempt": 1}
+                if not _cdp_click_checkbox():
+                    break
+                for _ in range(10):
+                    time.sleep(0.5)
+                    if _turnstile_token(sb) or (_cdp_was_intr and not _cf_interstitial_present(sb)):
+                        return {"solved": True, "method": "cdp", "attempt": 1}
+
         if not _turnstile_token(sb):
             import subprocess
             try:
@@ -2234,12 +2394,37 @@ def click_turnstile(sid):
                             return attempt + 1
                 return None
 
-            # (a) Embedded widget: the hidden cf-turnstile-response input is in the
-            # light DOM and its PARENT is the rendered widget.
-            cbxy = _element_abs_xy(sb, 'input[name="cf-turnstile-response"]',
-                                   dx=28, dy_frac=0.5, wid=_wid, parent=True)
-            if cbxy:
-                hit = _coord_click_loop(cbxy, lambda: bool(_turnstile_token(sb)), "embedded")
+            # (a) The response input is in the LIGHT DOM and its PARENT is the rendered
+            # widget, so it's our click target. Two spellings:
+            #   name="cf-turnstile-response"          — embedded widgets
+            #   id="cf-chl-widget-<rand>_response"    — the modern full-page challenge
+            # Only the first was handled, so on a modern challenge this found nothing —
+            # and (b) below can't help either, because Turnstile renders its iframe in a
+            # CLOSED shadow root that document.querySelectorAll("iframe") cannot see
+            # (verified: iframes:[] on a page that visibly has the checkbox). Both
+            # targets missed, nothing was ever clicked, and the page span until timeout.
+            # Success signal depends on WHERE the widget lives, captured up-front:
+            #   • Full-page interstitial → passing REDIRECTS, so "interstitial gone" is
+            #     the signal (its response input often never gets a token).
+            #   • Embedded/modal widget on the real app page (bot-hosting's renew
+            #     dialog) → the page ALWAYS has site content, so _cf_interstitial_present
+            #     is already False; using "not interstitial" as success made the loop
+            #     declare victory on its FIRST check without ever clicking — a false
+            #     "solved" while the checkbox sat there, which then broke the next step.
+            #     For these the only valid signal is the token.
+            _was_interstitial = _cf_interstitial_present(sb)
+            for _sel, _label in (
+                ('input[name="cf-turnstile-response"]', "embedded"),
+                ('input[id^="cf-chl-widget-"][id$="_response"]', "chl-widget"),
+            ):
+                cbxy = _element_abs_xy(sb, _sel, dx=28, dy_frac=0.5, wid=_wid, parent=True)
+                if not cbxy:
+                    continue
+                if _was_interstitial:
+                    _done = lambda: (not _cf_interstitial_present(sb)) or bool(_turnstile_token(sb))
+                else:
+                    _done = lambda: bool(_turnstile_token(sb))
+                hit = _coord_click_loop(cbxy, _done, _label)
                 if hit:
                     return {"solved": True, "method": "coord", "attempt": hit}
 
@@ -2406,36 +2591,112 @@ def solve_recaptcha_audio(sid):
             _wid = _find_session_window(sb)
         except Exception:
             _wid = None
-        cbxy = _element_abs_xy(sb, _anchor_css, dx=30, dy_frac=0.5, wid=_wid)
-        if cbxy:
-            def _click_checkbox():
-                import subprocess
+        def _click_registered():
+            """Did the anchor click take effect?
+
+            NOT the same as "the checkbox is ticked": aria-checked only flips when the
+            captcha is PASSED. While a challenge is open the anchor sits unticked and
+            greyed — so testing aria-checked reported "the click never landed" with an
+            image challenge plainly on screen, and we bailed out of a captcha that was
+            working. Any of these means the click registered:
+              • a token (passed outright)
+              • the anchor ticked
+              • a challenge is up in the bframe (image / audio / IP refusal)
+            """
+            try:
+                d.switch_to.default_content()
                 try:
-                    with _gui_lock:
-                        _raise_window(_wid)
-                        _human_mouse_drift(cbxy[0], cbxy[1])
-                        subprocess.run(
-                            ["xdotool", "mousemove", str(cbxy[0]), str(cbxy[1])],
-                            timeout=2, capture_output=True,
-                        )
-                        subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
+                    d.switch_to.frame(find(_anchor_css))
+                    el = find("#recaptcha-anchor, .recaptcha-checkbox")
+                    if (el.get_attribute("aria-checked") == "true"
+                            or "recaptcha-checkbox-checked" in (el.get_attribute("class") or "")):
+                        return True
                 except Exception:
                     pass
-            # detach → drift+click (OS-level) → let reCAPTCHA score undisturbed → reconnect
-            _detached_wait(sb, 3, during=_click_checkbox)
-        else:
-            # Couldn't locate the anchor iframe — fall back to a WebDriver click.
-            try:
-                anchor = find(_anchor_css)
-                d.switch_to.frame(anchor)
-                find("#recaptcha-anchor, .recaptcha-checkbox").click()
-            except Exception:
-                pass
-            finally:
                 d.switch_to.default_content()
+                try:
+                    d.switch_to.frame(find("iframe[src*='api2/bframe'], "
+                                           "iframe[src*='recaptcha/api2/bframe'], "
+                                           "iframe[src*='enterprise/bframe']"))
+                    return bool(d.execute_script(
+                        "return !!document.querySelector('.rc-imageselect, #rc-imageselect, "
+                        ".rc-imageselect-instructions, .rc-audiochallenge-tdownload-link, "
+                        "#audio-source, #audio-response, .rc-doscaptcha-header-text');"
+                    ))
+                except Exception:
+                    return False
+            finally:
+                try:
+                    d.switch_to.default_content()
+                except Exception:
+                    pass
+
+        # ── PRIMARY: SeleniumBase's built-in image-based captcha clicker ──────────
+        # It finds the checkbox by ON-SCREEN IMAGE MATCH and clicks it via PyAutoGUI,
+        # so it does NOT depend on our hand-computed window-geometry coordinates — the
+        # [coords] log proved those can be wrong (a title-bar offset that lands the
+        # click ~87px below the box). This is the same clicker the working Turnstile
+        # path and the reference project use.
+        for _i in range(3):
+            if token_present() or _click_registered():
+                break
+            try:
+                with _gui_lock:
+                    _raise_window(_wid)
+                    sb.uc_gui_click_captcha()
+                print(f"[recaptcha] uc_gui_click_captcha attempt {_i + 1}", flush=True)
+            except Exception as e:
+                print(f"[recaptcha] uc_gui_click_captcha: {e}", flush=True)
             time.sleep(2)
+
+        # FALLBACK: hand-computed OS-level click, driver detached while reCAPTCHA
+        # scores it. Only if the image clicker didn't take.
+        if not token_present() and not _click_registered():
+            cbxy = _element_abs_xy(sb, _anchor_css, dx=30, dy_frac=0.5, wid=_wid)
+            if cbxy:
+                def _click_checkbox():
+                    import subprocess
+                    try:
+                        with _gui_lock:
+                            _raise_window(_wid)
+                            _human_mouse_drift(cbxy[0], cbxy[1])
+                            subprocess.run(
+                                ["xdotool", "mousemove", str(cbxy[0]), str(cbxy[1])],
+                                timeout=2, capture_output=True,
+                            )
+                            subprocess.run(["xdotool", "click", "1"], timeout=2, capture_output=True)
+                    except Exception:
+                        pass
+                # detach → drift+click (OS-level) → let reCAPTCHA score undisturbed → reconnect
+                _detached_wait(sb, 3, during=_click_checkbox)
+
+        # LAST RESORT: a plain WebDriver click on the anchor (no coordinates at all).
+        if not token_present() and not _click_registered():
+            print("[recaptcha] neither image nor OS click registered — falling back to a WebDriver click", flush=True)
+            try:
+                d.switch_to.default_content()
+                d.switch_to.frame(find(_anchor_css))
+                find("#recaptcha-anchor, .recaptcha-checkbox").click()
+            except Exception as e:
+                print(f"[recaptcha] WebDriver anchor click failed: {e}", flush=True)
+            finally:
+                try:
+                    d.switch_to.default_content()
+                except Exception:
+                    pass
+            time.sleep(2)
+
         if token_present():
             return {"solved": True, "blocked": False, "message": "passed on checkbox"}
+
+        # Neither method got the click to register (no token, anchor unticked, no
+        # challenge in the bframe) — the challenge genuinely never opened. Say that,
+        # rather than failing later on a missing audio button.
+        if not _click_registered():
+            d.switch_to.default_content()
+            return {"solved": False, "blocked": False,
+                    "message": "the reCAPTCHA checkbox click did not register (neither the OS-level "
+                               "nor the WebDriver click opened a challenge)."}
 
         # 2. Switch the challenge frame to audio mode.
         try:
@@ -2449,20 +2710,47 @@ def solve_recaptcha_audio(sid):
         # served — we carried on into the round loop anyway, found no audio, and
         # reported "not solved after N audio rounds" despite never having downloaded a
         # single clip. Capture the reason and retry through JS, which ignores occlusion.
+        # WAIT for the challenge to render before touching it. The bframe loads its
+        # content asynchronously, and under a proxy (WARP especially) that takes a
+        # while. The previous code swallowed a missing audio button and fell into a
+        # retry loop whose sleeps happened to cover the delay; when I replaced that
+        # with an immediate check, a slow-rendering challenge got no time at all and we
+        # bailed out with "audio button not found" on a challenge that was still
+        # loading — which is why an image challenge used to appear and then stopped.
         audio_err = None
-        try:
-            btn = find("#recaptcha-audio-button, button.rc-button-audio")
+        btn = None
+        _deadline = time.time() + 20
+        while time.time() < _deadline:
+            try:
+                btn = find("#recaptcha-audio-button, button.rc-button-audio")
+                if btn.is_displayed():
+                    break
+            except Exception:
+                btn = None
+            # An IP refusal ends the wait early — no button is ever coming.
+            try:
+                _b = find(".rc-doscaptcha-header-text, .rc-audiochallenge-error-message").text or ""
+                if "try again later" in _b.lower() or "automated queries" in _b.lower():
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+
+        if btn is not None:
             try:
                 btn.click()
             except Exception as e1:
                 audio_err = f"click intercepted: {e1}"
                 print(f"[recaptcha] audio button click intercepted — retrying via JS: {e1}", flush=True)
-                d.execute_script("arguments[0].click();", btn)
-                audio_err = None
+                try:
+                    d.execute_script("arguments[0].click();", btn)
+                    audio_err = None
+                except Exception as e2:
+                    audio_err = f"click failed: {e2}"
             time.sleep(1.5)
-        except Exception as e:
-            audio_err = str(e)
-            print(f"[recaptcha] audio button unavailable: {e}", flush=True)
+        else:
+            audio_err = "audio button never rendered within 20s"
+            print("[recaptcha] audio button never rendered within 20s", flush=True)
 
         # An IP block can surface the moment the audio button is pressed, so check it
         # before concluding anything about the audio challenge.
@@ -2475,11 +2763,19 @@ def solve_recaptcha_audio(sid):
         except Exception:
             pass
 
-        # Confirm we ACTUALLY reached the audio challenge before looping over it.
-        on_audio = bool(sb.execute_script(
-            "return !!document.querySelector("
-            "'.rc-audiochallenge-tdownload-link, #audio-source, #audio-response');"
-        ))
+        # Confirm we ACTUALLY reached the audio challenge before looping over it —
+        # polling, because the audio panel mounts asynchronously too. Checking once,
+        # immediately, is what made a slow challenge look like "no audio at all".
+        on_audio = False
+        _deadline = time.time() + 15
+        while time.time() < _deadline:
+            on_audio = bool(sb.execute_script(
+                "return !!document.querySelector("
+                "'.rc-audiochallenge-tdownload-link, #audio-source, #audio-response');"
+            ))
+            if on_audio:
+                break
+            time.sleep(0.5)
         if not on_audio:
             is_image = bool(sb.execute_script(
                 "return !!document.querySelector('.rc-imageselect, #rc-imageselect, "

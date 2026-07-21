@@ -285,15 +285,64 @@ async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
     // ignore
   }
 
-  // Title-based detection
+  // ── Structural detection (language-independent) ──────────────────────────
+  // MUST come before the title/selector checks: the title test only knows the
+  // ENGLISH strings, but Cloudflare localises the interstitial ("请稍候…" for a
+  // zh client), and the modern challenge page carries none of the legacy
+  // #challenge-running / .cf-browser-verification markup — its ids are random
+  // (cf-chl-widget-kjlr4_response). So on a localised modern challenge we detected
+  // nothing, returned "none", never clicked the checkbox, and the caller then failed
+  // looking for login elements that were still behind the interstitial.
+  //
+  // These markers are stable across languages and widget ids:
+  //   input[id^="cf-chl-widget-"][id$="_response"]  — the modern challenge's field
+  //   [name="cf-turnstile-response"]                — Turnstile's response field
+  //   script[src*="challenges.cloudflare.com"]      — the challenge script
+  //
+  // It must also be FALSE for a real page that merely EMBEDS a Turnstile. A login form
+  // with a Turnstile loads challenges.cloudflare.com and has a cf-chl-widget-*_response
+  // input too, so those markers alone cannot tell "the gate is up" from "we're through
+  // and the form has its own widget" — and treating the login page as an interstitial
+  // makes the bypass loop retry/reload it until the budget runs out, then report that
+  // Cloudflare was never cleared. The site's own content is the discriminator: an
+  // interstitial renders only the challenge, never the app's form/nav.
   try {
-    const title = await page.title();
-    isCfPage =
-      title === "Just a moment..." ||
-      title === "Attention Required! | Cloudflare" ||
-      title.includes("DDoS protection by Cloudflare");
+    isCfPage = (await page.evaluate(() => {
+      // Discriminate the THREE cases by checking the site's OWN content FIRST. A login
+      // form (embedded widget) or a dashboard nav/header (popup/modal widget) means we
+      // are already PAST the gate, so a Turnstile here is an EMBEDDED / POPUP widget that
+      // detectAndHandleCaptcha's token path handles with a SINGLE click — it is NOT a
+      // full-page interstitial. This check MUST come first: an embedded/popup page has
+      // BOTH site content AND a widget box, so testing the widget first (as f98528b did)
+      // mis-routed every embedded/popup widget into the full-page bypass, which never
+      // clicked them. Only a page with NO site content can be a full-page challenge —
+      // that renders ONLY the challenge, never the app's own form/nav. This keeps the
+      // full-page path (handled below) completely separate from the widget path, so
+      // working on one can never again break the other.
+      const siteContent = document.querySelector(
+        "input[type='password'], form[action*='login'], input[name='email'], input[name='username'], nav, header",
+      );
+      if (siteContent) return false;
+      return !!document.querySelector(
+        'input[id^="cf-chl-widget-"][id$="_response"], [name="cf-turnstile-response"], ' +
+          'script[src*="challenges.cloudflare.com"], [id^="cf-chl-widget"]',
+      );
+    })) as boolean;
   } catch {
     // page may have been closed
+  }
+
+  // Title-based detection (English interstitials)
+  if (!isCfPage) {
+    try {
+      const title = await page.title();
+      isCfPage =
+        title === "Just a moment..." ||
+        title === "Attention Required! | Cloudflare" ||
+        title.includes("DDoS protection by Cloudflare");
+    } catch {
+      // page may have been closed
+    }
   }
 
   // DOM selector-based detection
@@ -320,6 +369,30 @@ async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
   }
 
   if (!isCfPage) return "none";
+
+  // We only reach here for a FULL-PAGE challenge (embedded/popup widgets returned "none"
+  // above via the site-content guard and are handled by the token path). If the full-page
+  // challenge renders a VISIBLE widget box it has a checkbox to CLICK, so route it to the
+  // click handler directly — NOT the iframe-gated resolution below. The modern Turnstile
+  // widget carries NO challenges.cloudflare.com <iframe> (its response input is in the
+  // light DOM), so the frame check would miss it and fall through to "js_challenge", whose
+  // branch only WAITS and never clicks — leaving an interactive full-page checkbox
+  // untouched. (A managed/self-verifying full-page challenge has no clickable box, so the
+  // native clicker's image search simply no-ops and we still fall through to waiting.)
+  try {
+    const hasVisibleWidget = (await page.evaluate(() => {
+      const resp = document.querySelector(
+        'input[id^="cf-chl-widget-"][id$="_response"], input[name="cf-turnstile-response"]',
+      );
+      const box = (resp && resp.parentElement) || document.querySelector(".cf-turnstile");
+      if (!box) return false;
+      const r = box.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    })) as boolean;
+    if (hasVisibleWidget) return "turnstile_click";
+  } catch {
+    // fall through to the frame-based resolution below
+  }
 
   // Distinguish JS-only challenge vs interactive Turnstile checkbox.
   //
@@ -359,8 +432,17 @@ async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
 async function isTurnstileSolved(page: PageAdapter): Promise<boolean> {
   try {
     return await page.evaluate(() => {
-      const input = document.querySelector<HTMLInputElement>('input[name="cf-turnstile-response"]');
-      return !!(input && input.value && input.value.length > 20);
+      // Embedded widgets use name="cf-turnstile-response"; the modern full-page
+      // interstitial instead fills input#cf-chl-widget-<random>_response. Checking
+      // only the former meant a passed full-page challenge never looked solved.
+      const els = document.querySelectorAll<HTMLInputElement>(
+        'input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"], ' +
+          'input[id^="cf-chl-widget-"][id$="_response"]',
+      );
+      for (const el of Array.from(els)) {
+        if (el.value && el.value.length > 20) return true;
+      }
+      return false;
     }) as boolean;
   } catch {
     return false;
@@ -649,56 +731,64 @@ export async function bypassCloudflareChallenge(
   }
 
   if (challengeType === "js_challenge") {
-    for (let attempt = 1; attempt <= 10; attempt++) {
-      // Respect the caller's overall time budget. Each attempt costs ~5-10s, so 10
-      // attempts x several bypass rounds used to stack up to 10+ minutes of blocking.
-      if (opts?.deadline && Date.now() > opts.deadline) {
-        logger.warn({ attempt }, "Cloudflare bypass hit its time budget — giving up");
-        return "failed";
-      }
-      // Expand any hidden Turnstile containers before interaction
+    // A non-interactive / "managed" challenge VERIFIES ITSELF — the spinner
+    // ("Vérification…" / "en cours") runs and issues the token when it's satisfied.
+    // The right thing is to WAIT for it, uninterrupted, not to reload: a reload
+    // restarts the spinner, so it never finishes (that's what made these fail while
+    // the screenshot still showed it verifying). So poll to the deadline instead of a
+    // fixed attempt count. detectCfChallenge returns "none" the instant the real page
+    // renders, so a page that clears exits immediately; we only wait the full budget
+    // when it genuinely never resolves.
+    const jsDeadline = opts?.deadline ?? Date.now() + 120_000;
+    let attempt = 0;
+    while (Date.now() < jsDeadline) {
+      attempt++;
       try { await page.evaluate(EXPAND_TURNSTILE_JS as unknown as string); } catch { /* ignore */ }
-      // Full human presence simulation (mouse + scroll + keyboard)
       await simulateHumanPresence(page);
-      // CF JS challenge typically resolves within 5s; increase wait each attempt
-      // On first attempt, give CF's JS more time to complete fingerprinting
-      const waitMs = attempt === 1
-        ? 3_000 + Math.random() * 2_000
-        : 2_000 + attempt * 400 + Math.random() * 1_000;
-      await sleep(waitMs);
+      await sleep(attempt === 1 ? 4_000 + Math.random() * 2_000 : 3_000 + Math.random() * 1_500);
 
       const still = await detectCfChallenge(page);
       if (still === "none") {
-        logger.info({ attempt }, "Cloudflare JS challenge bypassed");
+        logger.info({ attempt }, "Cloudflare JS challenge verified/cleared");
         return "passed";
       }
-      // If it upgraded to turnstile_click, try clicking
+      if (await isTurnstileSolved(page)) {
+        logger.info({ attempt }, "Turnstile token populated while waiting");
+        return "passed";
+      }
+      // If it upgraded to an interactive checkbox, click it.
       if (still === "turnstile_click") {
         logger.info({ attempt }, "JS challenge upgraded to Turnstile click — attempting click");
-        // Human presence before clicking the checkbox
         await simulateHumanPresence(page);
         await sleep(500 + Math.random() * 500);
         await clickTurnstileCheckbox(page);
         await sleep(3_000 + Math.random() * 2_000);
-        // Check both challenge status and Turnstile token
-        if (await isTurnstileSolved(page)) {
-          logger.info({ attempt }, "Turnstile token populated after click");
-          return "passed";
-        }
-        const afterClick = await detectCfChallenge(page);
-        if (afterClick === "none") {
+        if (await isTurnstileSolved(page) || (await detectCfChallenge(page)) === "none") {
           logger.info({ attempt }, "Cloudflare challenge bypassed after click");
           return "passed";
         }
       }
-      logger.debug({ attempt }, "CF JS challenge still active, retrying");
+      logger.debug({ attempt }, "CF JS challenge still verifying, waiting");
     }
-    logger.warn("Cloudflare JS challenge did not clear after 10 attempts");
+    logger.warn({ attempt }, "Cloudflare JS challenge did not clear before the deadline");
     return "failed";
   }
 
   if (challengeType === "turnstile_click") {
-    for (let attempt = 1; attempt <= 8; attempt++) {
+    // Do NOT re-run the whole solve many times. The cf-proxy native clicker already
+    // retries thoroughly WITHIN a single call (several spaced uc_gui image clicks, then
+    // CDP, then coordinate fallbacks — ~2 min of work). Repeating that from out here does
+    // not help: a Turnstile that didn't pass on a clean click needs a FRESH page, not more
+    // clicks on the same widget. Hammering it (this loop used to run 8×) just mashes the
+    // checkbox into CF's "Verification failed" — which both EXPOSES the automation and
+    // dragged a failing login out to ~20 min (8 × a ~2 min native solve). So: one pass on
+    // cf-proxy; a few on the local backend, whose per-call click is a single cheap
+    // xdotool/CDP click rather than a full internal retry sweep.
+    const isCfProxyClicker =
+      "clickTurnstile" in page &&
+      typeof (page as unknown as { clickTurnstile?: unknown }).clickTurnstile === "function";
+    const maxAttempts = isCfProxyClicker ? 1 : 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       // Expand hidden Turnstile containers before each attempt
       try { await page.evaluate(EXPAND_TURNSTILE_JS as unknown as string); } catch { /* ignore */ }
       // Full human presence simulation before clicking
@@ -706,10 +796,30 @@ export async function bypassCloudflareChallenge(
       await sleep(800 + Math.random() * 1200);
 
       const clicked = await clickTurnstileCheckbox(page);
+
+      // A FULL-PAGE challenge passes with NO token — it redirects / disappears — so the
+      // native clicker reports solved:false even when it actually cleared the challenge.
+      // Verify the challenge is really still up BEFORE treating !clicked as a miss, or a
+      // full-page challenge we DID pass gets reported as a failure. This branch is
+      // full-page only (embedded/popup widgets return "none" and go through the token
+      // path), so the "challenge gone" signal here can never affect a widget.
+      if ((await detectCfChallenge(page)) === "none" || (await isTurnstileSolved(page))) {
+        logger.info({ attempt }, "Cloudflare full-page challenge cleared after click");
+        return "passed";
+      }
       if (!clicked) {
         logger.warn({ attempt }, "Could not locate Turnstile checkbox, waiting for it to appear");
         await sleep(2_000 + Math.random() * 1_000);
         continue;
+      }
+
+      // A TOKEN is the real success signal for an EMBEDDED widget: unlike a full-page
+      // interstitial it does not redirect or disappear when passed (it just ticks), so
+      // waiting for the challenge to "go away" never succeeds and the loop failed after
+      // 8 clicks despite the checkbox being passed.
+      if (await isTurnstileSolved(page)) {
+        logger.info({ attempt }, "Turnstile solved (token present)");
+        return "passed";
       }
 
       // Wait for page navigation or challenge to clear — use domcontentloaded
@@ -717,6 +827,10 @@ export async function bypassCloudflareChallenge(
       await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 12_000 }).catch(() => {});
       await sleep(2_000 + Math.random() * 1_500);
 
+      if (await isTurnstileSolved(page)) {
+        logger.info({ attempt }, "Turnstile solved (token present after settle)");
+        return "passed";
+      }
       const still = await detectCfChallenge(page);
       if (still === "none") {
         logger.info({ attempt }, "Cloudflare Turnstile click challenge bypassed");
@@ -735,7 +849,7 @@ export async function bypassCloudflareChallenge(
         return "passed";
       }
     }
-    logger.warn("Cloudflare Turnstile click challenge not bypassed after 8 attempts");
+    logger.warn({ maxAttempts }, "Cloudflare Turnstile click challenge not bypassed");
     return "failed";
   }
 
@@ -769,11 +883,30 @@ export async function clearCloudflareInterstitial(
   opts?: { url?: string; maxReloads?: number; budgetMs?: number },
 ): Promise<boolean> {
   const maxReloads = opts?.maxReloads ?? 2;
-  // Wall-clock budget for the WHOLE clear. Without it, (maxReloads+1) rounds x 10
-  // internal attempts x ~5-10s each (plus a 30s goto per round) could block a task
-  // for 10+ minutes before failing. Tunable via CF_CLEAR_BUDGET_MS.
-  const budgetMs = opts?.budgetMs ?? Number(process.env.CF_CLEAR_BUDGET_MS ?? 90_000);
+  // Wall-clock budget for the WHOLE clear. 180s: a non-interactive challenge can take
+  // a while to self-verify (slow site / proxy / WARP), and cutting it off at 90s while
+  // the spinner was still going is exactly what made these fail. The old 10-minute
+  // hangs came from a login page being MISread as a challenge and looping forever —
+  // that root cause is fixed (a page with a real form is no longer "a challenge"), so
+  // a generous budget no longer risks a long hang. Tunable via CF_CLEAR_BUDGET_MS.
+  const budgetMs = opts?.budgetMs ?? Number(process.env.CF_CLEAR_BUDGET_MS ?? 180_000);
   const deadline = Date.now() + budgetMs;
+
+  // This function clears FULL-PAGE interstitials — the ones that block the page and
+  // redirect when passed. An embedded Turnstile that sits inside a login form is NOT
+  // one of those: it never redirects (it just ticks + issues a token), so trying to
+  // "clear" it here loops to the budget and reports failure, and the form never gets
+  // filled. If the page already shows its login form, there is no interstitial to
+  // pre-clear — leave the embedded widget to the before-submit captcha handling.
+  const hasLoginForm = (await page
+    .evaluate(() =>
+      !!document.querySelector("input[type='password'], input[name='email'], input[name='username']"),
+    )
+    .catch(() => false)) as boolean;
+  if (hasLoginForm) {
+    logger.info("Login form already present — no full-page interstitial to clear (embedded widget handled before submit)");
+    return true;
+  }
 
   for (let round = 0; round <= maxReloads; round++) {
     if (Date.now() > deadline) {
@@ -791,6 +924,16 @@ export async function clearCloudflareInterstitial(
     }
 
     // result === "failed" — reload and retry (analogue of uc_open_with_reconnect).
+    // But NOT if a non-interactive challenge is still verifying: reloading restarts
+    // its spinner from scratch and it never gets to finish. bypassCloudflareChallenge
+    // already waited to the deadline for that case, so if we're still on a js_challenge
+    // the reload wouldn't help — only an interactive/stuck one benefits from a fresh
+    // navigation.
+    const stillType = await detectCfChallenge(page).catch(() => "js_challenge" as const);
+    if (stillType === "js_challenge") {
+      logger.warn("CF non-interactive challenge still verifying at deadline — a reload would only restart it");
+      return false;
+    }
     if (round < maxReloads) {
       const reloadUrl = opts?.url || page.url();
       logger.info({ round, reloadUrl }, "CF interstitial not cleared — reloading page and retrying");

@@ -189,6 +189,7 @@ interface BrowserConfigState {
 }
 
 /** URL-safe random token for the webhook's Authorization header. */
+/** Random webhook token — Web Crypto only; this is an auth secret. */
 function genWebhookToken(): string {
   const bytes = new Uint8Array(24);
   crypto.getRandomValues(bytes);
@@ -772,7 +773,7 @@ export default function TaskForm() {
 
               {/* Failure auto-retry — independent of the schedule above. */}
               <div className="space-y-2 pt-4 mt-4 border-t border-border">
-                <FormLabel className="text-sm font-medium">失败自动重试</FormLabel>
+                <p className="text-sm font-medium">失败自动重试</p>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm text-muted-foreground">失败后重试</span>
                   <FormField
@@ -822,7 +823,7 @@ export default function TaskForm() {
               <div className="space-y-2 pt-4 mt-4 border-t border-border">
                 <div className="flex items-center justify-between">
                   <div>
-                    <FormLabel className="text-sm font-medium">Webhook 触发</FormLabel>
+                    <p className="text-sm font-medium">Webhook 触发</p>
                     <p className="text-xs text-muted-foreground mt-0.5">
                       开启后，第三方监控（Uptime Kuma 等）检测到服务挂掉时可以直接调用这个地址触发本任务。
                     </p>
@@ -840,7 +841,7 @@ export default function TaskForm() {
                 {webhookEnabled && (
                   <div className="space-y-2 pt-1">
                     <div className="space-y-1">
-                      <FormLabel className="text-xs">Authorization</FormLabel>
+                      <label className="block text-xs font-medium">Authorization</label>
                       <div className="flex items-center gap-2">
                         <Input
                           className="font-mono text-xs h-9"

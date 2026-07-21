@@ -9,7 +9,18 @@ export type { CaptchaSolver } from "./captcha-solver";
 export type CaptchaResult =
   | { detected: false }
   | { detected: true; solved: true; message: string }
-  | { detected: true; solved: false; needsAttention: boolean; message: string };
+  | {
+      detected: true;
+      solved: false;
+      needsAttention: boolean;
+      message: string;
+      /**
+       * The captcha refused this EXIT IP ("automated queries"), rather than failing to
+       * be solved. Only a different IP can change that, so the runner treats it as
+       * "rotate and replay the workflow" instead of a terminal failure.
+       */
+      ipBlocked?: boolean;
+    };
 
 // ── ALTCHA detection ─────────────────────────────────────────────────────────
 
@@ -1020,81 +1031,25 @@ export async function detectAndHandleCaptcha(
     // whisper) and Playwright backends. This is what makes cfVerify / login pass
     // reCAPTCHA on sites like host2play.gratis without a paid solver.
     if (type === "reCAPTCHA") {
-      let audio = await solveRecaptchaAudio(page);
-
-      // ── IP-block → rotate the exit IP and retry ────────────────────────────
-      // "automated queries" means Google refused the audio challenge for this
-      // egress IP — no STT/fingerprint/mouse work can fix that. The only lever is
-      // a different IP. When the proxy can rotate (WARP), register a new identity
-      // and try again: sing-box restarts on the same local SOCKS port, so the
-      // browser and the page/form state are untouched — we just re-run the solve
-      // from a fresh egress. Some attempts also pass on the checkbox outright.
-      const canRotate =
-        "rotateProxy" in page &&
-        typeof (page as unknown as { rotateProxy?: unknown }).rotateProxy === "function";
-      // Per-task browserConfig.warpRotations wins; otherwise the env default.
-      const perTask =
-        "maxProxyRotations" in page &&
-        typeof (page as unknown as { maxProxyRotations?: unknown }).maxProxyRotations === "function"
-          ? (page as unknown as { maxProxyRotations: () => number | null }).maxProxyRotations()
-          : null;
-      const maxRotations = perTask ?? Number(process.env.RECAPTCHA_MAX_IP_ROTATIONS ?? 5);
-      // Count only rotations that ACTUALLY happened. Counting attempts made a failed
-      // first rotation report "still blocked after 1 IP rotation(s)" — which reads as
-      // "we tried a different IP and it was also blocked" when in truth we never got
-      // a new IP at all.
-      let rotations = 0;
-      let rotateError = "";
-      while (audio.blocked && canRotate && rotations < maxRotations) {
-        logger.warn(
-          { done: rotations, maxRotations },
-          "reCAPTCHA audio blocked for this exit IP — rotating proxy IP and retrying",
-        );
-        const res = await (page as unknown as {
-          rotateProxy: () => Promise<{ ok: boolean; error?: string }>;
-        })
-          .rotateProxy()
-          .catch((err: unknown) => ({
-            ok: false,
-            error: err instanceof Error ? err.message : String(err),
-          }));
-        if (!res.ok) {
-          // Can't get a new IP — retrying from the same one is pointless. Keep the
-          // reason so it reaches the run's log instead of only the container's.
-          rotateError = res.error ?? "unknown error";
-          logger.warn({ rotateError }, "proxy rotation failed — giving up on IP rotation");
-          break;
-        }
-        rotations++;
-        await new Promise((r) => setTimeout(r, 1500)); // let the new tunnel settle
-        audio = await solveRecaptchaAudio(page);
-      }
+      const audio = await solveRecaptchaAudio(page);
 
       if (audio.solved) {
-        return {
-          detected: true,
-          solved: true,
-          message: rotations > 0 ? `${audio.message} (after ${rotations} IP rotation(s))` : audio.message,
-        };
+        return { detected: true, solved: true, message: audio.message };
       }
       if (audio.blocked) {
-        // Distinguish the three outcomes — they need different responses from the
-        // operator, and lumping them together is what made "1 rotation" misleading.
-        let why: string;
-        if (rotateError) {
-          why = ` — IP rotation FAILED (${rotateError}), so every attempt used the SAME exit IP.`;
-        } else if (rotations > 0) {
-          why = ` — still blocked after ${rotations} IP rotation(s) (of ${maxRotations} allowed).`;
-        } else if (!canRotate) {
-          why = " — this task's proxy cannot rotate its exit IP (set proxy type to WARP to enable rotation).";
-        } else {
-          why = ` — IP rotation is disabled for this task (rotation limit is ${maxRotations}).`;
-        }
+        // IP-level refusal ("automated queries"): no STT/fingerprint/mouse work fixes
+        // it — only a different exit IP does. We do NOT rotate here: this function has
+        // no idea how the captcha got on screen. host2play's lives in a modal opened by
+        // an earlier click step, so rotating + reloading here destroyed the very
+        // captcha we were solving ("bframe not found"). The runner owns the retry: it
+        // rotates the IP and replays the whole workflow, which re-opens the modal and
+        // makes the site re-issue the captcha from the new IP.
         return {
           detected: true,
           solved: false,
           needsAttention: true,
-          message: `${audio.message}${why}`,
+          ipBlocked: true,
+          message: audio.message,
         };
       }
       if (!solver) {
