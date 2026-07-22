@@ -43,17 +43,17 @@ _WS_RE = re.compile(r"(ws://[^\s]+)")
 
 def _build_options(body: dict) -> dict:
     """Map the api-server's fingerprint/proxy config to Camoufox launch options."""
-    # CAMOUFOX_HEADLESS: "virtual" (headful on Camoufox's own Xvfb, default), "false"
-    # (REAL headful — renders on this container's Xvfb via DISPLAY=:99), or "true"
-    # (real headless, detectable). Both "virtual" and "false" are fully-rendered headful
-    # browsers; only "true" is headless.
-    _h = os.getenv("CAMOUFOX_HEADLESS", "virtual").strip().lower()
-    if _h in ("false", "0", "no", "off"):
-        _headless: object = False
-    elif _h in ("true", "1", "yes", "on"):
-        _headless = True
-    else:
-        _headless = "virtual"
+    # CAMOUFOX_HEADLESS controls headful vs headless. IMPORTANT: launch_server() forwards
+    # `headless` straight to the browser process, which accepts a BOOL only — the string
+    # "virtual" (valid on the Camoufox() context-manager, not here) makes the child exit
+    # with "headless: expected boolean, got string". This container already runs its own
+    # Xvfb :99 (DISPLAY=:99), so headless=False = a real, fully-rendered headful browser
+    # on that display — no need for Camoufox's own virtual-display mode.
+    #   "true"/"1"/"yes"/"on"      → True  (real headless, more detectable)
+    #   anything else (default,     → False (headful on Xvfb :99 — the intended mode)
+    #    incl. "false"/"virtual")
+    _h = os.getenv("CAMOUFOX_HEADLESS", "false").strip().lower()
+    _headless: bool = _h in ("true", "1", "yes", "on")
     opts: dict = {
         "headless": _headless,
         # Camoufox rotates a realistic, internally-consistent fingerprint for the OS.

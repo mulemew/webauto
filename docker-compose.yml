@@ -71,7 +71,8 @@ services:
         dockerfile: Dockerfile
       environment:
         PORT: "7318"
-        CAMOUFOX_HEADLESS: "${CAMOUFOX_HEADLESS:-virtual}"
+        # 有头(默认,渲染在容器 Xvfb :99);true=无头。launch_server 的 headless 只收 bool。
+        CAMOUFOX_HEADLESS: "${CAMOUFOX_HEADLESS:-false}"
       shm_size: 2g
       healthcheck:
         test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:7318/health')\" || exit 1"]

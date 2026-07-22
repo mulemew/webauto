@@ -75,8 +75,9 @@
       image: ghcr.io/mulemew/webauto-camoufox-proxy:latest
       environment:
         PORT: "7318"
-        # virtual=虚拟显示上有头(默认); false=真有头(同一 Xvfb); true=无头(可检测)
-        CAMOUFOX_HEADLESS: "${CAMOUFOX_HEADLESS:-virtual}"
+        # 有头(默认,渲染在容器自带的 Xvfb :99 上); true=无头(可检测)。
+        # 注意 launch_server 的 headless 只收 bool,别再用 "virtual" 字符串。
+        CAMOUFOX_HEADLESS: "${CAMOUFOX_HEADLESS:-false}"
       shm_size: 2g
       healthcheck:
         test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:7318/health')\" || exit 1"]
