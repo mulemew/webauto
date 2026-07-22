@@ -155,7 +155,7 @@ const formSchema = z.object({
 
 type FormValues = z.infer<typeof formSchema>;
 
-type BrowserProvider = "playwright" | "puppeteer" | "seleniumbase";
+type BrowserProvider = "playwright" | "puppeteer" | "seleniumbase" | "camoufox";
 
 type ProxyType =
   | "http"
@@ -186,6 +186,9 @@ interface BrowserConfigState {
   fpTimezone: string;
   fpLocale: string;
   fpAutoGeo: boolean;
+  // Saved profiles (override the inline fingerprint/proxy above when set)
+  fingerprintProfileId: number | null;
+  proxyProfileId: number | null;
 }
 
 /** URL-safe random token for the webhook's Authorization header. */
@@ -212,12 +215,15 @@ const defaultBrowserConfig: BrowserConfigState = {
   fpTimezone: "",
   fpLocale: "",
   fpAutoGeo: true,
+  fingerprintProfileId: null,
+  proxyProfileId: null,
 };
 
 const PROVIDER_LABELS: Record<BrowserProvider, string> = {
   playwright: "Playwright (默认)",
   puppeteer: "Puppeteer",
   seleniumbase: "SeleniumBase (CF Bypass)",
+  camoufox: "Camoufox (anti-detect Firefox)",
 };
 
 /**
@@ -290,12 +296,16 @@ export default function TaskForm() {
   const [browserConfig, setBrowserConfig] =
     useState<BrowserConfigState>(defaultBrowserConfig);
   const [browserConfigExpanded, setBrowserConfigExpanded] = useState(false);
+  const [fingerprintProfiles, setFingerprintProfiles] = useState<Array<{ id: number; name: string; os: string }>>([]);
+  const [proxyProfiles, setProxyProfiles] = useState<Array<{ id: number; name: string }>>([]);
 
   useEffect(() => {
     fetch("/api/saved-credentials")
       .then((r) => r.json())
       .then(setSavedCredentials)
       .catch(() => {});
+    fetch("/api/fingerprint-profiles").then((r) => r.json()).then(setFingerprintProfiles).catch(() => {});
+    fetch("/api/proxy-profiles").then((r) => r.json()).then(setProxyProfiles).catch(() => {});
   }, []);
 
   const createTask = useCreateTask();
@@ -419,6 +429,8 @@ export default function TaskForm() {
             ((bc.fingerprint as Record<string, unknown> | undefined)?.locale as string) || "",
           fpAutoGeo:
             ((bc.fingerprint as Record<string, unknown> | undefined)?.autoGeo as boolean) ?? true,
+          fingerprintProfileId: (bc.fingerprintProfileId as number | null) ?? null,
+          proxyProfileId: (bc.proxyProfileId as number | null) ?? null,
         });
         setBrowserConfigExpanded(true);
       }
@@ -431,6 +443,8 @@ export default function TaskForm() {
     return {
       provider: browserConfig.provider,
       wsEndpoint: browserConfig.wsEndpoint || null,
+      fingerprintProfileId: browserConfig.fingerprintProfileId ?? null,
+      proxyProfileId: browserConfig.proxyProfileId ?? null,
       proxyUrl: proxyUrl || null,
       proxyType: proxyUrl || browserConfig.proxyType === "warp" ? browserConfig.proxyType : null,
       // WARP-only knob; blank means "use the RECAPTCHA_MAX_IP_ROTATIONS default".
@@ -484,7 +498,10 @@ export default function TaskForm() {
     const retryIntervalValue = retryCountValue ? (_n(values.retryIntervalMinutes) ?? 5) : null;
     const stepsPayload =
       values.steps.length > 0 ? (values.steps as ApiWorkflowStep[]) : null;
-    const browserConfigPayload = buildBrowserConfigPayload();
+    // Cast: browserConfig is jsonb (accepts any shape at runtime); the generated
+    // api-client-react TaskBrowserConfig type lags the spec (no camoufox / profile ids
+    // until its codegen is re-run in CI), so the payload is structurally wider here.
+    const browserConfigPayload = buildBrowserConfigPayload() as unknown as Parameters<typeof createTask.mutate>[0]["data"]["browserConfig"];
 
     if (isEditMode && taskId) {
       updateTask.mutate(
@@ -953,17 +970,64 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                           <SelectItem value="seleniumbase">
                             SeleniumBase（CF 绕过）
                           </SelectItem>
+                          <SelectItem value="camoufox">
+                            Camoufox（反检测 Firefox）
+                          </SelectItem>
                         </SelectContent>
                       </Select>
                       <p className="text-[11px] text-muted-foreground">
                         {browserConfig.provider === "seleniumbase" &&
                           "使用 SeleniumBase + undetected-chromedriver，擅长绕过 Cloudflare 5秒盾"}
+                        {browserConfig.provider === "camoufox" &&
+                          "Camoufox 反检测 Firefox，引擎级指纹伪装（canvas/WebGL/屏幕/UA），独立 camoufox-proxy"}
                         {browserConfig.provider === "playwright" &&
                           "Playwright CDP 模式，可配置远程 WebSocket 端点连接外部浏览器"}
                         {browserConfig.provider === "puppeteer" &&
                           "Puppeteer，兼容性好，支持 CDP 端点"}
                       </p>
                     </div>
+
+                    {/* Saved proxy profile — overrides the manual proxy below when chosen */}
+                    <div className="space-y-1.5">
+                      <label className="text-sm font-medium">代理（已保存）</label>
+                      <Select
+                        value={browserConfig.proxyProfileId != null ? String(browserConfig.proxyProfileId) : "none"}
+                        onValueChange={(v) =>
+                          setBrowserConfig((s) => ({ ...s, proxyProfileId: v === "none" ? null : Number(v) }))
+                        }
+                      >
+                        <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">不使用（用下方手填 / WARP）</SelectItem>
+                          {proxyProfiles.map((p) => (
+                            <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[11px] text-muted-foreground">选一个「代理」页里保存的出口;选了会覆盖下方手填的代理。</p>
+                    </div>
+
+                    {/* Saved fingerprint profile — overrides the inline fingerprint below */}
+                    {(browserConfig.provider === "seleniumbase" || browserConfig.provider === "camoufox") && (
+                      <div className="space-y-1.5">
+                        <label className="text-sm font-medium">浏览器指纹（已保存）</label>
+                        <Select
+                          value={browserConfig.fingerprintProfileId != null ? String(browserConfig.fingerprintProfileId) : "none"}
+                          onValueChange={(v) =>
+                            setBrowserConfig((s) => ({ ...s, fingerprintProfileId: v === "none" ? null : Number(v) }))
+                          }
+                        >
+                          <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">不使用（用下方手填指纹）</SelectItem>
+                            {fingerprintProfiles.map((p) => (
+                              <SelectItem key={p.id} value={String(p.id)}>{p.name}（{p.os}）</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-[11px] text-muted-foreground">选一个「浏览器指纹」页里保存的;选了会覆盖下方手填的指纹。</p>
+                      </div>
+                    )}
 
                     {/* WS Endpoint */}
                     {(browserConfig.provider === "playwright" ||

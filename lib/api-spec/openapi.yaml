@@ -786,11 +786,21 @@ components:
       properties:
         provider:
           type: string
-          enum: [playwright, puppeteer, local, seleniumbase]
+          enum: [playwright, puppeteer, seleniumbase, camoufox]
           description: |
             Browser backend for this task:
             playwright=Playwright CDP (default), puppeteer=Puppeteer CDP,
-            local=local Chromium launch, seleniumbase=CF Proxy bypass mode
+            seleniumbase=CF Proxy bypass mode, camoufox=anti-detect Firefox
+        fingerprintProfileId:
+          type: ["integer", "null"]
+          description: >
+            Saved fingerprint profile to use for this task. When set, it overrides the
+            inline `fingerprint` field below. Null = use the inline fingerprint.
+        proxyProfileId:
+          type: ["integer", "null"]
+          description: >
+            Saved proxy profile to use for this task. When set, its URL overrides the
+            inline `proxyUrl`. Null = use the inline proxy. WARP is set inline, not here.
         wsEndpoint:
           type: ["string", "null"]
           description: WebSocket endpoint override for this task

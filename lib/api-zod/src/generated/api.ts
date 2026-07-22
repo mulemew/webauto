@@ -102,11 +102,25 @@ export const ListTasksResponseItem = zod.object({
         zod.object({
           type: zod.enum(["dismissPopups"]),
         }),
-        zod.object({
-          type: zod.enum(["cfVerify"]),
-          url: zod.string().optional(),
-          maxReloads: zod.number().optional(),
-        }),
+        zod
+          .object({
+            type: zod.enum(["cfVerify"]),
+            url: zod
+              .string()
+              .optional()
+              .describe(
+                "Optional URL to (re)navigate to before verifying — defaults to the current page",
+              ),
+            maxReloads: zod
+              .number()
+              .optional()
+              .describe(
+                "Max page reloads to attempt while clearing the challenge (default 2)",
+              ),
+          })
+          .describe(
+            'Explicitly clear a Cloudflare challenge \/ click a Turnstile \"verify you are human\" checkbox that is gating the current page. Use before a click or fill step whose target only becomes interactive after CF passes.\n',
+          ),
         zod.object({
           type: zod.enum(["select"]),
           selector: zod
@@ -187,10 +201,17 @@ export const ListTasksResponseItem = zod.object({
                 key: zod.string().optional(),
                 x: zod.number().optional(),
                 y: zod.number().optional(),
-                message: zod.string().optional(),
+                message: zod
+                  .string()
+                  .optional()
+                  .describe(
+                    "For exitSuccess \/ exitFailure, an optional message recorded in the log",
+                  ),
               })
               .optional()
-              .describe("Action to execute when the condition is true"),
+              .describe(
+                "An if\/else branch action. Either performs a sub-step (click\/fill\/navigate\/wait\/keypress\/screenshot\/scroll), or a control-flow action: continue to the next step, or end the task (exitSuccess\/exitFailure).",
+              ),
             elseAction: zod
               .object({
                 type: zod.enum([
@@ -213,7 +234,12 @@ export const ListTasksResponseItem = zod.object({
                 key: zod.string().optional(),
                 x: zod.number().optional(),
                 y: zod.number().optional(),
-                message: zod.string().optional(),
+                message: zod
+                  .string()
+                  .optional()
+                  .describe(
+                    "For exitSuccess \/ exitFailure, an optional message recorded in the log",
+                  ),
               })
               .optional()
               .describe("Action to execute when the condition is false"),
@@ -241,7 +267,12 @@ export const ListTasksResponseItem = zod.object({
               .optional()
               .describe("When true, persist th\n"),
             sessionKey: zod.string().optional(),
-            cookies: zod.string().optional(),
+            cookies: zod
+              .string()
+              .optional()
+              .describe(
+                'Cookie-mode seed, in document.cookie format (\"name=value; name2=value2\"). Only the site\'s login-ticket cookie is needed — its name differs per site (Pterodactyl\/Laravel panels use remember_web_\*, GitHub uses _github_session). Used only when no session has been saved yet; once a run succeeds the live cookie jar is persisted and takes over.\n',
+              ),
             successText: zod.string().optional(),
             credentialId: zod
               .number()
@@ -277,14 +308,30 @@ export const ListTasksResponseItem = zod.object({
     )
     .nullish(),
   cronExpression: zod.string().nullish(),
-  retryCount: zod.number().nullish(),
-  retryIntervalMinutes: zod.number().nullish(),
-  webhookEnabled: zod.boolean().nullish(),
-  webhookToken: zod.string().nullish(),
+  retryCount: zod
+    .number()
+    .nullish()
+    .describe(
+      "Auto-retry after a failed run: extra attempts before giving up and waiting for the normal schedule. null\/0 = no retry.\n",
+    ),
+  retryIntervalMinutes: zod
+    .number()
+    .nullish()
+    .describe("Minutes between retry attempts (default 5)."),
+  webhookEnabled: zod
+    .boolean()
+    .nullish()
+    .describe(
+      "Allow POST \/api\/tasks\/{id}\/webhook (bearer webhookToken) to trigger this task, e.g. from an uptime monitor. Requires webhookToken to be set.\n",
+    ),
+  webhookToken: zod
+    .string()
+    .nullish()
+    .describe("Bearer token the webhook caller must present."),
   status: zod
     .enum(["idle", "queued", "running", "success", "failed", "needs_attention"])
     .describe(
-      "idle=not yet run, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution",
+      "idle=not yet run, queued=waiting for a concurrency slot, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution",
     ),
   lastRunAt: zod.coerce.date().nullish(),
   nextRunAt: zod.coerce
@@ -304,10 +351,22 @@ export const ListTasksResponseItem = zod.object({
       zod
         .object({
           provider: zod
-            .enum(["playwright", "puppeteer", "local", "seleniumbase"])
+            .enum(["playwright", "puppeteer", "seleniumbase", "camoufox"])
             .optional()
             .describe(
-              "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nlocal=local Chromium launch, seleniumbase=CF Proxy bypass mode\n",
+              "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nseleniumbase=CF Proxy bypass mode, camoufox=anti-detect Firefox\n",
+            ),
+          fingerprintProfileId: zod
+            .number()
+            .nullish()
+            .describe(
+              "Saved fingerprint profile to use for this task. When set, it overrides the inline `fingerprint` field below. Null = use the inline fingerprint.\n",
+            ),
+          proxyProfileId: zod
+            .number()
+            .nullish()
+            .describe(
+              "Saved proxy profile to use for this task. When set, its URL overrides the inline `proxyUrl`. Null = use the inline proxy. WARP is set inline, not here.\n",
             ),
           wsEndpoint: zod
             .string()
@@ -320,15 +379,46 @@ export const ListTasksResponseItem = zod.object({
               'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
             ),
           proxyType: zod
-            .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2", "tuic", "ss"])
+            .enum([
+              "http",
+              "socks5",
+              "warp",
+              "vless",
+              "vmess",
+              "trojan",
+              "hy2",
+              "tuic",
+              "ss",
+            ])
             .nullish(),
-          warpRotations: zod.number().nullish(),
+          warpRotations: zod
+            .number()
+            .nullish()
+            .describe(
+              "WARP only. How many times to register a fresh WARP identity (new exit IP) and retry when Google refuses the reCAPTCHA audio challenge for the current IP. sing-box restarts on the same local SOCKS port, so the browser is untouched. 0 disables rotation. Defaults to RECAPTCHA_MAX_IP_ROTATIONS.\n",
+            ),
           headed: zod.boolean().nullish(),
           stealth: zod.boolean().nullish(),
           blockAds: zod.boolean().nullish(),
           ignoreHTTPS: zod.boolean().nullish(),
           sessionTimeoutMs: zod.number().nullish(),
-          fingerprint: zod.object({ os: zod.string().nullish(), timezone: zod.string().nullish(), locale: zod.string().nullish(), autoGeo: zod.boolean().nullish() }).nullish(),
+          fingerprint: zod
+            .object({
+              os: zod.enum(["", "windows", "mac"]).optional(),
+              timezone: zod
+                .string()
+                .optional()
+                .describe("IANA timezone; empty = auto-detect from exit IP"),
+              locale: zod
+                .string()
+                .optional()
+                .describe("BCP-47 locale; empty = auto-detect from exit IP"),
+              autoGeo: zod.boolean().optional(),
+            })
+            .nullish()
+            .describe(
+              "Browser fingerprint spoofing (SeleniumBase\/cf-proxy backend only). Overlays a Windows\/Mac OS profile (UA, UA-CH, platform, WebGL, timezone, locale). Leave os empty\/off for the honest Linux fingerprint.\n",
+            ),
         })
         .describe(
           "Per-task browser backend override. When set, these values are merged over the global browser config (Settings page), letting each task use a different execution backend.\n",
@@ -403,11 +493,25 @@ export const CreateTaskBody = zod.object({
         zod.object({
           type: zod.enum(["dismissPopups"]),
         }),
-        zod.object({
-          type: zod.enum(["cfVerify"]),
-          url: zod.string().optional(),
-          maxReloads: zod.number().optional(),
-        }),
+        zod
+          .object({
+            type: zod.enum(["cfVerify"]),
+            url: zod
+              .string()
+              .optional()
+              .describe(
+                "Optional URL to (re)navigate to before verifying — defaults to the current page",
+              ),
+            maxReloads: zod
+              .number()
+              .optional()
+              .describe(
+                "Max page reloads to attempt while clearing the challenge (default 2)",
+              ),
+          })
+          .describe(
+            'Explicitly clear a Cloudflare challenge \/ click a Turnstile \"verify you are human\" checkbox that is gating the current page. Use before a click or fill step whose target only becomes interactive after CF passes.\n',
+          ),
         zod.object({
           type: zod.enum(["select"]),
           selector: zod
@@ -488,10 +592,17 @@ export const CreateTaskBody = zod.object({
                 key: zod.string().optional(),
                 x: zod.number().optional(),
                 y: zod.number().optional(),
-                message: zod.string().optional(),
+                message: zod
+                  .string()
+                  .optional()
+                  .describe(
+                    "For exitSuccess \/ exitFailure, an optional message recorded in the log",
+                  ),
               })
               .optional()
-              .describe("Action to execute when the condition is true"),
+              .describe(
+                "An if\/else branch action. Either performs a sub-step (click\/fill\/navigate\/wait\/keypress\/screenshot\/scroll), or a control-flow action: continue to the next step, or end the task (exitSuccess\/exitFailure).",
+              ),
             elseAction: zod
               .object({
                 type: zod.enum([
@@ -514,7 +625,12 @@ export const CreateTaskBody = zod.object({
                 key: zod.string().optional(),
                 x: zod.number().optional(),
                 y: zod.number().optional(),
-                message: zod.string().optional(),
+                message: zod
+                  .string()
+                  .optional()
+                  .describe(
+                    "For exitSuccess \/ exitFailure, an optional message recorded in the log",
+                  ),
               })
               .optional()
               .describe("Action to execute when the condition is false"),
@@ -542,7 +658,12 @@ export const CreateTaskBody = zod.object({
               .optional()
               .describe("When true, persist th\n"),
             sessionKey: zod.string().optional(),
-            cookies: zod.string().optional(),
+            cookies: zod
+              .string()
+              .optional()
+              .describe(
+                'Cookie-mode seed, in document.cookie format (\"name=value; name2=value2\"). Only the site\'s login-ticket cookie is needed — its name differs per site (Pterodactyl\/Laravel panels use remember_web_\*, GitHub uses _github_session). Used only when no session has been saved yet; once a run succeeds the live cookie jar is persisted and takes over.\n',
+              ),
             successText: zod.string().optional(),
             credentialId: zod
               .number()
@@ -578,19 +699,47 @@ export const CreateTaskBody = zod.object({
     )
     .nullish(),
   cronExpression: zod.string().nullish(),
-  retryCount: zod.number().nullish(),
-  retryIntervalMinutes: zod.number().nullish(),
-  webhookEnabled: zod.boolean().nullish(),
-  webhookToken: zod.string().nullish(),
+  retryCount: zod
+    .number()
+    .nullish()
+    .describe(
+      "Auto-retry after a failed run: extra attempts before giving up. null\/0 = no retry.",
+    ),
+  retryIntervalMinutes: zod
+    .number()
+    .nullish()
+    .describe("Minutes between retry attempts (default 5)."),
+  webhookEnabled: zod
+    .boolean()
+    .nullish()
+    .describe(
+      "Allow POST \/api\/tasks\/{id}\/webhook (bearer webhookToken) to trigger this task, e.g. from an uptime monitor. Requires webhookToken to be set.\n",
+    ),
+  webhookToken: zod
+    .string()
+    .nullish()
+    .describe("Bearer token the webhook caller must present."),
   browserConfig: zod
     .union([
       zod
         .object({
           provider: zod
-            .enum(["playwright", "puppeteer", "local", "seleniumbase"])
+            .enum(["playwright", "puppeteer", "seleniumbase", "camoufox"])
             .optional()
             .describe(
-              "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nlocal=local Chromium launch, seleniumbase=CF Proxy bypass mode\n",
+              "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nseleniumbase=CF Proxy bypass mode, camoufox=anti-detect Firefox\n",
+            ),
+          fingerprintProfileId: zod
+            .number()
+            .nullish()
+            .describe(
+              "Saved fingerprint profile to use for this task. When set, it overrides the inline `fingerprint` field below. Null = use the inline fingerprint.\n",
+            ),
+          proxyProfileId: zod
+            .number()
+            .nullish()
+            .describe(
+              "Saved proxy profile to use for this task. When set, its URL overrides the inline `proxyUrl`. Null = use the inline proxy. WARP is set inline, not here.\n",
             ),
           wsEndpoint: zod
             .string()
@@ -603,15 +752,46 @@ export const CreateTaskBody = zod.object({
               'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
             ),
           proxyType: zod
-            .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2", "tuic", "ss"])
+            .enum([
+              "http",
+              "socks5",
+              "warp",
+              "vless",
+              "vmess",
+              "trojan",
+              "hy2",
+              "tuic",
+              "ss",
+            ])
             .nullish(),
-          warpRotations: zod.number().nullish(),
+          warpRotations: zod
+            .number()
+            .nullish()
+            .describe(
+              "WARP only. How many times to register a fresh WARP identity (new exit IP) and retry when Google refuses the reCAPTCHA audio challenge for the current IP. sing-box restarts on the same local SOCKS port, so the browser is untouched. 0 disables rotation. Defaults to RECAPTCHA_MAX_IP_ROTATIONS.\n",
+            ),
           headed: zod.boolean().nullish(),
           stealth: zod.boolean().nullish(),
           blockAds: zod.boolean().nullish(),
           ignoreHTTPS: zod.boolean().nullish(),
           sessionTimeoutMs: zod.number().nullish(),
-          fingerprint: zod.object({ os: zod.string().nullish(), timezone: zod.string().nullish(), locale: zod.string().nullish(), autoGeo: zod.boolean().nullish() }).nullish(),
+          fingerprint: zod
+            .object({
+              os: zod.enum(["", "windows", "mac"]).optional(),
+              timezone: zod
+                .string()
+                .optional()
+                .describe("IANA timezone; empty = auto-detect from exit IP"),
+              locale: zod
+                .string()
+                .optional()
+                .describe("BCP-47 locale; empty = auto-detect from exit IP"),
+              autoGeo: zod.boolean().optional(),
+            })
+            .nullish()
+            .describe(
+              "Browser fingerprint spoofing (SeleniumBase\/cf-proxy backend only). Overlays a Windows\/Mac OS profile (UA, UA-CH, platform, WebGL, timezone, locale). Leave os empty\/off for the honest Linux fingerprint.\n",
+            ),
         })
         .describe(
           "Per-task browser backend override. When set, these values are merged over the global browser config (Settings page), letting each task use a different execution backend.\n",
@@ -689,11 +869,25 @@ export const GetTaskResponse = zod
           zod.object({
             type: zod.enum(["dismissPopups"]),
           }),
-          zod.object({
-            type: zod.enum(["cfVerify"]),
-            url: zod.string().optional(),
-            maxReloads: zod.number().optional(),
-          }),
+          zod
+            .object({
+              type: zod.enum(["cfVerify"]),
+              url: zod
+                .string()
+                .optional()
+                .describe(
+                  "Optional URL to (re)navigate to before verifying — defaults to the current page",
+                ),
+              maxReloads: zod
+                .number()
+                .optional()
+                .describe(
+                  "Max page reloads to attempt while clearing the challenge (default 2)",
+                ),
+            })
+            .describe(
+              'Explicitly clear a Cloudflare challenge \/ click a Turnstile \"verify you are human\" checkbox that is gating the current page. Use before a click or fill step whose target only becomes interactive after CF passes.\n',
+            ),
           zod.object({
             type: zod.enum(["select"]),
             selector: zod
@@ -774,10 +968,17 @@ export const GetTaskResponse = zod
                   key: zod.string().optional(),
                   x: zod.number().optional(),
                   y: zod.number().optional(),
-                  message: zod.string().optional(),
+                  message: zod
+                    .string()
+                    .optional()
+                    .describe(
+                      "For exitSuccess \/ exitFailure, an optional message recorded in the log",
+                    ),
                 })
                 .optional()
-                .describe("Action to execute when the condition is true"),
+                .describe(
+                  "An if\/else branch action. Either performs a sub-step (click\/fill\/navigate\/wait\/keypress\/screenshot\/scroll), or a control-flow action: continue to the next step, or end the task (exitSuccess\/exitFailure).",
+                ),
               elseAction: zod
                 .object({
                   type: zod.enum([
@@ -800,7 +1001,12 @@ export const GetTaskResponse = zod
                   key: zod.string().optional(),
                   x: zod.number().optional(),
                   y: zod.number().optional(),
-                  message: zod.string().optional(),
+                  message: zod
+                    .string()
+                    .optional()
+                    .describe(
+                      "For exitSuccess \/ exitFailure, an optional message recorded in the log",
+                    ),
                 })
                 .optional()
                 .describe("Action to execute when the condition is false"),
@@ -828,7 +1034,12 @@ export const GetTaskResponse = zod
                 .optional()
                 .describe("When true, persist th\n"),
               sessionKey: zod.string().optional(),
-              cookies: zod.string().optional(),
+              cookies: zod
+                .string()
+                .optional()
+                .describe(
+                  'Cookie-mode seed, in document.cookie format (\"name=value; name2=value2\"). Only the site\'s login-ticket cookie is needed — its name differs per site (Pterodactyl\/Laravel panels use remember_web_\*, GitHub uses _github_session). Used only when no session has been saved yet; once a run succeeds the live cookie jar is persisted and takes over.\n',
+                ),
               successText: zod.string().optional(),
               credentialId: zod
                 .number()
@@ -868,14 +1079,37 @@ export const GetTaskResponse = zod
       )
       .nullish(),
     cronExpression: zod.string().nullish(),
-    retryCount: zod.number().nullish(),
-    retryIntervalMinutes: zod.number().nullish(),
-    webhookEnabled: zod.boolean().nullish(),
-    webhookToken: zod.string().nullish(),
-    status: zod
-      .enum(["idle", "queued", "running", "success", "failed", "needs_attention"])
+    retryCount: zod
+      .number()
+      .nullish()
       .describe(
-        "idle=not yet run, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution",
+        "Auto-retry after a failed run: extra attempts before giving up and waiting for the normal schedule. null\/0 = no retry.\n",
+      ),
+    retryIntervalMinutes: zod
+      .number()
+      .nullish()
+      .describe("Minutes between retry attempts (default 5)."),
+    webhookEnabled: zod
+      .boolean()
+      .nullish()
+      .describe(
+        "Allow POST \/api\/tasks\/{id}\/webhook (bearer webhookToken) to trigger this task, e.g. from an uptime monitor. Requires webhookToken to be set.\n",
+      ),
+    webhookToken: zod
+      .string()
+      .nullish()
+      .describe("Bearer token the webhook caller must present."),
+    status: zod
+      .enum([
+        "idle",
+        "queued",
+        "running",
+        "success",
+        "failed",
+        "needs_attention",
+      ])
+      .describe(
+        "idle=not yet run, queued=waiting for a concurrency slot, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution",
       ),
     lastRunAt: zod.coerce.date().nullish(),
     nextRunAt: zod.coerce
@@ -895,10 +1129,22 @@ export const GetTaskResponse = zod
         zod
           .object({
             provider: zod
-              .enum(["playwright", "puppeteer", "local", "seleniumbase"])
+              .enum(["playwright", "puppeteer", "seleniumbase", "camoufox"])
               .optional()
               .describe(
-                "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nlocal=local Chromium launch, seleniumbase=CF Proxy bypass mode\n",
+                "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nseleniumbase=CF Proxy bypass mode, camoufox=anti-detect Firefox\n",
+              ),
+            fingerprintProfileId: zod
+              .number()
+              .nullish()
+              .describe(
+                "Saved fingerprint profile to use for this task. When set, it overrides the inline `fingerprint` field below. Null = use the inline fingerprint.\n",
+              ),
+            proxyProfileId: zod
+              .number()
+              .nullish()
+              .describe(
+                "Saved proxy profile to use for this task. When set, its URL overrides the inline `proxyUrl`. Null = use the inline proxy. WARP is set inline, not here.\n",
               ),
             wsEndpoint: zod
               .string()
@@ -911,15 +1157,46 @@ export const GetTaskResponse = zod
                 'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
               ),
             proxyType: zod
-              .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2", "tuic", "ss"])
+              .enum([
+                "http",
+                "socks5",
+                "warp",
+                "vless",
+                "vmess",
+                "trojan",
+                "hy2",
+                "tuic",
+                "ss",
+              ])
               .nullish(),
-            warpRotations: zod.number().nullish(),
+            warpRotations: zod
+              .number()
+              .nullish()
+              .describe(
+                "WARP only. How many times to register a fresh WARP identity (new exit IP) and retry when Google refuses the reCAPTCHA audio challenge for the current IP. sing-box restarts on the same local SOCKS port, so the browser is untouched. 0 disables rotation. Defaults to RECAPTCHA_MAX_IP_ROTATIONS.\n",
+              ),
             headed: zod.boolean().nullish(),
             stealth: zod.boolean().nullish(),
             blockAds: zod.boolean().nullish(),
             ignoreHTTPS: zod.boolean().nullish(),
             sessionTimeoutMs: zod.number().nullish(),
-            fingerprint: zod.object({ os: zod.string().nullish(), timezone: zod.string().nullish(), locale: zod.string().nullish(), autoGeo: zod.boolean().nullish() }).nullish(),
+            fingerprint: zod
+              .object({
+                os: zod.enum(["", "windows", "mac"]).optional(),
+                timezone: zod
+                  .string()
+                  .optional()
+                  .describe("IANA timezone; empty = auto-detect from exit IP"),
+                locale: zod
+                  .string()
+                  .optional()
+                  .describe("BCP-47 locale; empty = auto-detect from exit IP"),
+                autoGeo: zod.boolean().optional(),
+              })
+              .nullish()
+              .describe(
+                "Browser fingerprint spoofing (SeleniumBase\/cf-proxy backend only). Overlays a Windows\/Mac OS profile (UA, UA-CH, platform, WebGL, timezone, locale). Leave os empty\/off for the honest Linux fingerprint.\n",
+              ),
           })
           .describe(
             "Per-task browser backend override. When set, these values are merged over the global browser config (Settings page), letting each task use a different execution backend.\n",
@@ -1011,11 +1288,25 @@ export const UpdateTaskBody = zod.object({
         zod.object({
           type: zod.enum(["dismissPopups"]),
         }),
-        zod.object({
-          type: zod.enum(["cfVerify"]),
-          url: zod.string().optional(),
-          maxReloads: zod.number().optional(),
-        }),
+        zod
+          .object({
+            type: zod.enum(["cfVerify"]),
+            url: zod
+              .string()
+              .optional()
+              .describe(
+                "Optional URL to (re)navigate to before verifying — defaults to the current page",
+              ),
+            maxReloads: zod
+              .number()
+              .optional()
+              .describe(
+                "Max page reloads to attempt while clearing the challenge (default 2)",
+              ),
+          })
+          .describe(
+            'Explicitly clear a Cloudflare challenge \/ click a Turnstile \"verify you are human\" checkbox that is gating the current page. Use before a click or fill step whose target only becomes interactive after CF passes.\n',
+          ),
         zod.object({
           type: zod.enum(["select"]),
           selector: zod
@@ -1096,10 +1387,17 @@ export const UpdateTaskBody = zod.object({
                 key: zod.string().optional(),
                 x: zod.number().optional(),
                 y: zod.number().optional(),
-                message: zod.string().optional(),
+                message: zod
+                  .string()
+                  .optional()
+                  .describe(
+                    "For exitSuccess \/ exitFailure, an optional message recorded in the log",
+                  ),
               })
               .optional()
-              .describe("Action to execute when the condition is true"),
+              .describe(
+                "An if\/else branch action. Either performs a sub-step (click\/fill\/navigate\/wait\/keypress\/screenshot\/scroll), or a control-flow action: continue to the next step, or end the task (exitSuccess\/exitFailure).",
+              ),
             elseAction: zod
               .object({
                 type: zod.enum([
@@ -1122,7 +1420,12 @@ export const UpdateTaskBody = zod.object({
                 key: zod.string().optional(),
                 x: zod.number().optional(),
                 y: zod.number().optional(),
-                message: zod.string().optional(),
+                message: zod
+                  .string()
+                  .optional()
+                  .describe(
+                    "For exitSuccess \/ exitFailure, an optional message recorded in the log",
+                  ),
               })
               .optional()
               .describe("Action to execute when the condition is false"),
@@ -1150,7 +1453,12 @@ export const UpdateTaskBody = zod.object({
               .optional()
               .describe("When true, persist th\n"),
             sessionKey: zod.string().optional(),
-            cookies: zod.string().optional(),
+            cookies: zod
+              .string()
+              .optional()
+              .describe(
+                'Cookie-mode seed, in document.cookie format (\"name=value; name2=value2\"). Only the site\'s login-ticket cookie is needed — its name differs per site (Pterodactyl\/Laravel panels use remember_web_\*, GitHub uses _github_session). Used only when no session has been saved yet; once a run succeeds the live cookie jar is persisted and takes over.\n',
+              ),
             successText: zod.string().optional(),
             credentialId: zod
               .number()
@@ -1186,19 +1494,47 @@ export const UpdateTaskBody = zod.object({
     )
     .nullish(),
   cronExpression: zod.string().nullish(),
-  retryCount: zod.number().nullish(),
-  retryIntervalMinutes: zod.number().nullish(),
-  webhookEnabled: zod.boolean().nullish(),
-  webhookToken: zod.string().nullish(),
+  retryCount: zod
+    .number()
+    .nullish()
+    .describe(
+      "Auto-retry after a failed run: extra attempts before giving up. null\/0 = no retry.",
+    ),
+  retryIntervalMinutes: zod
+    .number()
+    .nullish()
+    .describe("Minutes between retry attempts (default 5)."),
+  webhookEnabled: zod
+    .boolean()
+    .nullish()
+    .describe(
+      "Allow POST \/api\/tasks\/{id}\/webhook (bearer webhookToken) to trigger this task, e.g. from an uptime monitor. Requires webhookToken to be set.\n",
+    ),
+  webhookToken: zod
+    .string()
+    .nullish()
+    .describe("Bearer token the webhook caller must present."),
   browserConfig: zod
     .union([
       zod
         .object({
           provider: zod
-            .enum(["playwright", "puppeteer", "local", "seleniumbase"])
+            .enum(["playwright", "puppeteer", "seleniumbase", "camoufox"])
             .optional()
             .describe(
-              "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nlocal=local Chromium launch, seleniumbase=CF Proxy bypass mode\n",
+              "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nseleniumbase=CF Proxy bypass mode, camoufox=anti-detect Firefox\n",
+            ),
+          fingerprintProfileId: zod
+            .number()
+            .nullish()
+            .describe(
+              "Saved fingerprint profile to use for this task. When set, it overrides the inline `fingerprint` field below. Null = use the inline fingerprint.\n",
+            ),
+          proxyProfileId: zod
+            .number()
+            .nullish()
+            .describe(
+              "Saved proxy profile to use for this task. When set, its URL overrides the inline `proxyUrl`. Null = use the inline proxy. WARP is set inline, not here.\n",
             ),
           wsEndpoint: zod
             .string()
@@ -1211,15 +1547,46 @@ export const UpdateTaskBody = zod.object({
               'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
             ),
           proxyType: zod
-            .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2", "tuic", "ss"])
+            .enum([
+              "http",
+              "socks5",
+              "warp",
+              "vless",
+              "vmess",
+              "trojan",
+              "hy2",
+              "tuic",
+              "ss",
+            ])
             .nullish(),
-          warpRotations: zod.number().nullish(),
+          warpRotations: zod
+            .number()
+            .nullish()
+            .describe(
+              "WARP only. How many times to register a fresh WARP identity (new exit IP) and retry when Google refuses the reCAPTCHA audio challenge for the current IP. sing-box restarts on the same local SOCKS port, so the browser is untouched. 0 disables rotation. Defaults to RECAPTCHA_MAX_IP_ROTATIONS.\n",
+            ),
           headed: zod.boolean().nullish(),
           stealth: zod.boolean().nullish(),
           blockAds: zod.boolean().nullish(),
           ignoreHTTPS: zod.boolean().nullish(),
           sessionTimeoutMs: zod.number().nullish(),
-          fingerprint: zod.object({ os: zod.string().nullish(), timezone: zod.string().nullish(), locale: zod.string().nullish(), autoGeo: zod.boolean().nullish() }).nullish(),
+          fingerprint: zod
+            .object({
+              os: zod.enum(["", "windows", "mac"]).optional(),
+              timezone: zod
+                .string()
+                .optional()
+                .describe("IANA timezone; empty = auto-detect from exit IP"),
+              locale: zod
+                .string()
+                .optional()
+                .describe("BCP-47 locale; empty = auto-detect from exit IP"),
+              autoGeo: zod.boolean().optional(),
+            })
+            .nullish()
+            .describe(
+              "Browser fingerprint spoofing (SeleniumBase\/cf-proxy backend only). Overlays a Windows\/Mac OS profile (UA, UA-CH, platform, WebGL, timezone, locale). Leave os empty\/off for the honest Linux fingerprint.\n",
+            ),
         })
         .describe(
           "Per-task browser backend override. When set, these values are merged over the global browser config (Settings page), letting each task use a different execution backend.\n",
@@ -1289,11 +1656,25 @@ export const UpdateTaskResponse = zod.object({
         zod.object({
           type: zod.enum(["dismissPopups"]),
         }),
-        zod.object({
-          type: zod.enum(["cfVerify"]),
-          url: zod.string().optional(),
-          maxReloads: zod.number().optional(),
-        }),
+        zod
+          .object({
+            type: zod.enum(["cfVerify"]),
+            url: zod
+              .string()
+              .optional()
+              .describe(
+                "Optional URL to (re)navigate to before verifying — defaults to the current page",
+              ),
+            maxReloads: zod
+              .number()
+              .optional()
+              .describe(
+                "Max page reloads to attempt while clearing the challenge (default 2)",
+              ),
+          })
+          .describe(
+            'Explicitly clear a Cloudflare challenge \/ click a Turnstile \"verify you are human\" checkbox that is gating the current page. Use before a click or fill step whose target only becomes interactive after CF passes.\n',
+          ),
         zod.object({
           type: zod.enum(["select"]),
           selector: zod
@@ -1374,10 +1755,17 @@ export const UpdateTaskResponse = zod.object({
                 key: zod.string().optional(),
                 x: zod.number().optional(),
                 y: zod.number().optional(),
-                message: zod.string().optional(),
+                message: zod
+                  .string()
+                  .optional()
+                  .describe(
+                    "For exitSuccess \/ exitFailure, an optional message recorded in the log",
+                  ),
               })
               .optional()
-              .describe("Action to execute when the condition is true"),
+              .describe(
+                "An if\/else branch action. Either performs a sub-step (click\/fill\/navigate\/wait\/keypress\/screenshot\/scroll), or a control-flow action: continue to the next step, or end the task (exitSuccess\/exitFailure).",
+              ),
             elseAction: zod
               .object({
                 type: zod.enum([
@@ -1400,7 +1788,12 @@ export const UpdateTaskResponse = zod.object({
                 key: zod.string().optional(),
                 x: zod.number().optional(),
                 y: zod.number().optional(),
-                message: zod.string().optional(),
+                message: zod
+                  .string()
+                  .optional()
+                  .describe(
+                    "For exitSuccess \/ exitFailure, an optional message recorded in the log",
+                  ),
               })
               .optional()
               .describe("Action to execute when the condition is false"),
@@ -1428,7 +1821,12 @@ export const UpdateTaskResponse = zod.object({
               .optional()
               .describe("When true, persist th\n"),
             sessionKey: zod.string().optional(),
-            cookies: zod.string().optional(),
+            cookies: zod
+              .string()
+              .optional()
+              .describe(
+                'Cookie-mode seed, in document.cookie format (\"name=value; name2=value2\"). Only the site\'s login-ticket cookie is needed — its name differs per site (Pterodactyl\/Laravel panels use remember_web_\*, GitHub uses _github_session). Used only when no session has been saved yet; once a run succeeds the live cookie jar is persisted and takes over.\n',
+              ),
             successText: zod.string().optional(),
             credentialId: zod
               .number()
@@ -1464,14 +1862,30 @@ export const UpdateTaskResponse = zod.object({
     )
     .nullish(),
   cronExpression: zod.string().nullish(),
-  retryCount: zod.number().nullish(),
-  retryIntervalMinutes: zod.number().nullish(),
-  webhookEnabled: zod.boolean().nullish(),
-  webhookToken: zod.string().nullish(),
+  retryCount: zod
+    .number()
+    .nullish()
+    .describe(
+      "Auto-retry after a failed run: extra attempts before giving up and waiting for the normal schedule. null\/0 = no retry.\n",
+    ),
+  retryIntervalMinutes: zod
+    .number()
+    .nullish()
+    .describe("Minutes between retry attempts (default 5)."),
+  webhookEnabled: zod
+    .boolean()
+    .nullish()
+    .describe(
+      "Allow POST \/api\/tasks\/{id}\/webhook (bearer webhookToken) to trigger this task, e.g. from an uptime monitor. Requires webhookToken to be set.\n",
+    ),
+  webhookToken: zod
+    .string()
+    .nullish()
+    .describe("Bearer token the webhook caller must present."),
   status: zod
     .enum(["idle", "queued", "running", "success", "failed", "needs_attention"])
     .describe(
-      "idle=not yet run, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution",
+      "idle=not yet run, queued=waiting for a concurrency slot, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution",
     ),
   lastRunAt: zod.coerce.date().nullish(),
   nextRunAt: zod.coerce
@@ -1491,10 +1905,22 @@ export const UpdateTaskResponse = zod.object({
       zod
         .object({
           provider: zod
-            .enum(["playwright", "puppeteer", "local", "seleniumbase"])
+            .enum(["playwright", "puppeteer", "seleniumbase", "camoufox"])
             .optional()
             .describe(
-              "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nlocal=local Chromium launch, seleniumbase=CF Proxy bypass mode\n",
+              "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nseleniumbase=CF Proxy bypass mode, camoufox=anti-detect Firefox\n",
+            ),
+          fingerprintProfileId: zod
+            .number()
+            .nullish()
+            .describe(
+              "Saved fingerprint profile to use for this task. When set, it overrides the inline `fingerprint` field below. Null = use the inline fingerprint.\n",
+            ),
+          proxyProfileId: zod
+            .number()
+            .nullish()
+            .describe(
+              "Saved proxy profile to use for this task. When set, its URL overrides the inline `proxyUrl`. Null = use the inline proxy. WARP is set inline, not here.\n",
             ),
           wsEndpoint: zod
             .string()
@@ -1507,15 +1933,46 @@ export const UpdateTaskResponse = zod.object({
               'HTTP\/SOCKS proxy URL (e.g. \"http:\/\/user:pass@host:1080\")',
             ),
           proxyType: zod
-            .enum(["http", "socks5", "warp", "vless", "vmess", "trojan", "hy2", "tuic", "ss"])
+            .enum([
+              "http",
+              "socks5",
+              "warp",
+              "vless",
+              "vmess",
+              "trojan",
+              "hy2",
+              "tuic",
+              "ss",
+            ])
             .nullish(),
-          warpRotations: zod.number().nullish(),
+          warpRotations: zod
+            .number()
+            .nullish()
+            .describe(
+              "WARP only. How many times to register a fresh WARP identity (new exit IP) and retry when Google refuses the reCAPTCHA audio challenge for the current IP. sing-box restarts on the same local SOCKS port, so the browser is untouched. 0 disables rotation. Defaults to RECAPTCHA_MAX_IP_ROTATIONS.\n",
+            ),
           headed: zod.boolean().nullish(),
           stealth: zod.boolean().nullish(),
           blockAds: zod.boolean().nullish(),
           ignoreHTTPS: zod.boolean().nullish(),
           sessionTimeoutMs: zod.number().nullish(),
-          fingerprint: zod.object({ os: zod.string().nullish(), timezone: zod.string().nullish(), locale: zod.string().nullish(), autoGeo: zod.boolean().nullish() }).nullish(),
+          fingerprint: zod
+            .object({
+              os: zod.enum(["", "windows", "mac"]).optional(),
+              timezone: zod
+                .string()
+                .optional()
+                .describe("IANA timezone; empty = auto-detect from exit IP"),
+              locale: zod
+                .string()
+                .optional()
+                .describe("BCP-47 locale; empty = auto-detect from exit IP"),
+              autoGeo: zod.boolean().optional(),
+            })
+            .nullish()
+            .describe(
+              "Browser fingerprint spoofing (SeleniumBase\/cf-proxy backend only). Overlays a Windows\/Mac OS profile (UA, UA-CH, platform, WebGL, timezone, locale). Leave os empty\/off for the honest Linux fingerprint.\n",
+            ),
         })
         .describe(
           "Per-task browser backend override. When set, these values are merged over the global browser config (Settings page), letting each task use a different execution backend.\n",

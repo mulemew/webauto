@@ -1,6 +1,6 @@
 import path from "path";
   import fs from "fs";
-  import { db, tasksTable, credentialsTable, savedCredentialsTable, logsTable, eq } from "@workspace/db";
+  import { db, tasksTable, credentialsTable, savedCredentialsTable, logsTable, fingerprintProfilesTable, proxyProfilesTable, eq } from "@workspace/db";
   import { logger } from "../lib/logger";
   import { decrypt } from "../lib/encryption";
   import { createBrowserProvider } from "./browser-provider";
@@ -279,6 +279,44 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
         : globalBrowserConfig;
       if (taskBrowserOverride) {
         logger.info({ taskId, provider: browserConfig.provider }, "Using task-level browser config override");
+      }
+
+      // ── Saved fingerprint / proxy profiles ──────────────────────────────────
+      // Backward-compatible: a profile is applied ONLY when its id is set on the
+      // task; otherwise the task's inline fingerprint/proxy (the existing UC config)
+      // is used unchanged. A deleted/missing profile silently falls back to inline.
+      const _profileIds = (browserConfig ?? {}) as { fingerprintProfileId?: number | null; proxyProfileId?: number | null };
+      if (_profileIds.proxyProfileId) {
+        const [pp] = await db.select().from(proxyProfilesTable).where(eq(proxyProfilesTable.id, _profileIds.proxyProfileId));
+        if (pp) {
+          browserConfig.proxyUrl = pp.url;
+          const scheme = (pp.url.split("://")[0] || "").toLowerCase();
+          const t = scheme === "socks5h" ? "socks5" : scheme;
+          if (["http", "socks5", "vless", "vmess", "trojan", "hy2", "tuic", "ss"].includes(t)) {
+            (browserConfig as { proxyType?: string }).proxyType = t;
+          }
+          logger.info({ taskId, proxyProfile: pp.name }, "Using saved proxy profile");
+        }
+      }
+      if (_profileIds.fingerprintProfileId) {
+        const [fpr] = await db.select().from(fingerprintProfilesTable).where(eq(fingerprintProfilesTable.id, _profileIds.fingerprintProfileId));
+        if (fpr) {
+          const cfg = (fpr.config ?? {}) as { timezone?: string; locale?: string; screen?: string };
+          // os "linux" is honest for cf-proxy (its _apply_fingerprint ignores non
+          // windows/mac) and a real target for camoufox — pass it through either way.
+          browserConfig.fingerprint = {
+            os: fpr.os,
+            timezone: cfg.timezone || "",
+            locale: cfg.locale || "",
+            autoGeo: !cfg.timezone && !cfg.locale,
+          };
+          if (cfg.screen && /^\d+x\d+$/i.test(cfg.screen)) {
+            const [w, h] = cfg.screen.toLowerCase().split("x").map(Number);
+            browserConfig.viewportWidth = w;
+            browserConfig.viewportHeight = h;
+          }
+          logger.info({ taskId, fingerprintProfile: fpr.name, os: fpr.os }, "Using saved fingerprint profile");
+        }
       }
 
       // ── Cookie mode: restore + capture browser session (storage state) ──────
