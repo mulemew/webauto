@@ -12,6 +12,24 @@ from camoufox.server import launch_server
 
 cfg = json.loads(os.environ["CAMOUFOX_CFG"])
 
+# FIXED fingerprint (from a saved profile):
+#  _fp_pickle → a pickled browserforge Fingerprint → launch_server(fingerprint=...),
+#              reproduces the EXACT same fingerprint every launch.
+#  _preset    → a real captured preset dict → launch_server(fingerprint_preset=...).
+# Both funnel into config internally (from_browserforge / from_preset), same as a fresh
+# generation — just fixed. When neither is set, Camoufox generates a fresh one from os.
+_fp_b64 = cfg.pop("_fp_pickle", None)
+_preset = cfg.pop("_preset", None)
+if _fp_b64:
+    import base64
+    import pickle
+    cfg["fingerprint"] = pickle.loads(base64.b64decode(_fp_b64))
+    # A pinned fingerprint carries its own screen — don't also constrain it.
+    cfg.pop("screen", None)
+elif _preset:
+    cfg["fingerprint_preset"] = _preset
+    cfg.pop("screen", None)
+
 scr = cfg.pop("screen", None)
 if isinstance(scr, dict) and scr.get("width") and scr.get("height"):
     try:

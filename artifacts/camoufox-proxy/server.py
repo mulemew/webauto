@@ -80,6 +80,20 @@ def _build_options(body: dict) -> dict:
         if proxy.get("password"):
             p["password"] = proxy["password"]
         opts["proxy"] = p
+    # FIXED fingerprint from a saved profile (from /generate): a pickled browserforge
+    # Fingerprint (exact reproduction) OR a real preset dict. launcher.py turns these
+    # into launch_server's fingerprint= / fingerprint_preset=. If neither is present,
+    # Camoufox generates a fresh consistent one from `os`.
+    fp = body.get("fingerprint") or {}
+    if isinstance(fp, dict):
+        if fp.get("fp"):
+            opts["_fp_pickle"] = fp["fp"]
+        elif fp.get("preset"):
+            opts["_preset"] = fp["preset"]
+        if not opts.get("os") and fp.get("os"):
+            _fos = str(fp["os"]).strip().lower()
+            if _fos in ("windows", "macos", "mac", "linux"):
+                opts["os"] = "macos" if _fos == "mac" else _fos
     return opts
 
 
@@ -88,55 +102,83 @@ def health():
     return jsonify({"ok": True, "sessions": len(_servers)})
 
 
+def _g(obj, *names):
+    for n in names:
+        v = getattr(obj, n, None) if obj is not None else None
+        if v is not None:
+            return v
+    return None
+
+
+def _summ_from_fp(fp, os_name: str) -> dict:
+    nav = getattr(fp, "navigator", None)
+    scr = getattr(fp, "screen", None)
+    vc = getattr(fp, "videoCard", None) or getattr(fp, "video_card", None)
+    w, h = _g(scr, "width"), _g(scr, "height")
+    return {
+        "source": "browserforge",
+        "os": "mac" if os_name == "macos" else os_name,
+        "userAgent": _g(nav, "userAgent", "user_agent") or "",
+        "platform": _g(nav, "platform") or "",
+        "languages": _g(nav, "languages") or [],
+        "screen": f"{w}x{h}" if w and h else "",
+        "webglVendor": (_g(vc, "vendor") or "") if vc is not None else "",
+        "webglRenderer": (_g(vc, "renderer") or "") if vc is not None else "",
+        "hardwareConcurrency": _g(nav, "hardwareConcurrency", "hardware_concurrency"),
+        "deviceMemory": _g(nav, "deviceMemory", "device_memory"),
+    }
+
+
+def _summ_from_preset(preset: dict, os_name: str) -> dict:
+    # Preset dict shape isn't documented; pull common keys best-effort for display only.
+    def pick(*keys):
+        for k in keys:
+            if isinstance(preset, dict) and preset.get(k):
+                return preset[k]
+        return ""
+    return {
+        "source": "preset",
+        "os": "mac" if os_name == "macos" else os_name,
+        "userAgent": pick("navigator.userAgent", "userAgent", "navigator:userAgent"),
+        "screen": pick("screen", "screen.width") and str(pick("screen", "screen.width")) or "",
+        "webglVendor": pick("webGl:vendor", "webGl.vendor", "webglVendor"),
+        "webglRenderer": pick("webGl:renderer", "webGl.renderer", "webglRenderer"),
+    }
+
+
 @app.get("/generate")
 def generate():
-    """Generate ONE concrete, internally-consistent fingerprint via browserforge (the
-    same generator Camoufox uses). The UI calls this when the user clicks "Generate",
-    shows the summary, and saves it as a FIXED profile. Returns:
-      summary     — human-readable fields (os, UA, screen, GPU vendor/renderer, langs…)
-      fingerprint — the full serialized fingerprint, so it can be reproduced EXACTLY.
-    """
+    """Generate ONE concrete, consistent fingerprint the user saves as a FIXED profile.
+    source=browserforge (synthetic, from browserforge's real-world dataset) or
+    source=preset (a REAL captured device preset). Returns { config, summary }: save
+    `config` verbatim into the profile and POST it back as `fingerprint` on /launch;
+    `summary` is human-readable for the UI. Never randomly hand-assign values — both
+    sources are authentic + internally consistent (WAFs hash the WebGL fingerprint)."""
     os_name = (request.args.get("os") or "windows").strip().lower()
     if os_name == "mac":
         os_name = "macos"
     if os_name not in ("windows", "macos", "linux"):
         os_name = "windows"
+    source = (request.args.get("source") or "browserforge").strip().lower()
     try:
+        if source == "preset":
+            from camoufox.fingerprints import get_random_preset
+            preset = get_random_preset(os=os_name)
+            if not preset:
+                return jsonify({"error": f"no bundled preset available for os={os_name}"}), 404
+            summary = _summ_from_preset(preset, os_name)
+            return jsonify({"config": {"source": "preset", "os": os_name, "preset": preset, "summary": summary}, "summary": summary})
+        # default: browserforge synthetic — pickle the Fingerprint so /launch reproduces it EXACTLY
         from browserforge.fingerprints import FingerprintGenerator
-        fg = FingerprintGenerator()
-        fp = fg.generate(os=os_name)
-        nav = getattr(fp, "navigator", None)
-        scr = getattr(fp, "screen", None)
-        vc = getattr(fp, "videoCard", None) or getattr(fp, "video_card", None)
-
-        def g(obj, *names):
-            for n in names:
-                v = getattr(obj, n, None) if obj is not None else None
-                if v is not None:
-                    return v
-            return None
-
-        w, h = g(scr, "width"), g(scr, "height")
-        summary = {
-            "os": "mac" if os_name == "macos" else os_name,
-            "userAgent": g(nav, "userAgent", "user_agent") or "",
-            "platform": g(nav, "platform") or "",
-            "languages": g(nav, "languages") or [],
-            "screen": f"{w}x{h}" if w and h else "",
-            "webglVendor": (g(vc, "vendor") or "") if vc is not None else "",
-            "webglRenderer": (g(vc, "renderer") or "") if vc is not None else "",
-            "hardwareConcurrency": g(nav, "hardwareConcurrency", "hardware_concurrency"),
-            "deviceMemory": g(nav, "deviceMemory", "device_memory"),
-        }
-        import dataclasses
-        try:
-            raw = dataclasses.asdict(fp) if dataclasses.is_dataclass(fp) else None
-        except Exception:
-            raw = None
-        return jsonify({"summary": summary, "fingerprint": raw})
+        import base64
+        import pickle
+        fp = FingerprintGenerator().generate(os=os_name)
+        summary = _summ_from_fp(fp, os_name)
+        fp_b64 = base64.b64encode(pickle.dumps(fp)).decode("ascii")
+        return jsonify({"config": {"source": "browserforge", "os": os_name, "fp": fp_b64, "summary": summary}, "summary": summary})
     except Exception as e:
         import traceback
-        return jsonify({"error": f"browserforge generate failed: {e}\n{traceback.format_exc()}"}), 500
+        return jsonify({"error": f"fingerprint generate failed ({source}): {e}\n{traceback.format_exc()}"}), 500
 
 
 @app.post("/launch")
