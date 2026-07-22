@@ -633,6 +633,21 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
                     }
                   }
                   const msg = `${dryRun ? "[DRY RUN] " : ""}${err.message}${ipNote}\n\nA captcha screenshot has been saved.`;
+                  // The captcha/CF step throws BEFORE executeWorkflowSteps records it, so
+                  // the timeline would otherwise be empty for the very step that decided
+                  // the outcome. Record it explicitly with the real reason + screenshot so
+                  // a needs_attention run is actually debuggable.
+                  collectedStepLogs.push({
+                    stepIndex: collectedStepLogs.length,
+                    type: "captcha",
+                    success: false,
+                    message: err.message,
+                    screenshotPath,
+                  });
+                  emitTaskProgress(taskId, err.message);
+                  if (screenshotPath) {
+                    getTaskEmitter(taskId).emit("event", { type: "screenshot", message: err.message, screenshotPath });
+                  }
                   await writeLog(taskId, false, msg, screenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
                   if (!dryRun) await db.update(tasksTable).set({ status: "needs_attention", lastRunAt: new Date() }).where(eq(tasksTable.id, taskId));
                   emitTaskDone(taskId, false, dryRun ? "[DRY RUN] Captcha encountered" : "Task paused - captcha needs resolution");

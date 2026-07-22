@@ -561,9 +561,24 @@ async function executeStep(
 
           if (hasTurnstile) {
             logger.info("cfVerify — Turnstile widget present; using cf-proxy native clickTurnstile (login-step parity)");
-            const solved = await (page as unknown as { clickTurnstile: (n?: number) => Promise<boolean> })
-              .clickTurnstile(2)
-              .catch(() => false);
+            let solved = false;
+            try {
+              solved = await (page as unknown as { clickTurnstile: (n?: number) => Promise<boolean> }).clickTurnstile(2);
+            } catch (clickErr) {
+              // Do NOT swallow this to `false`: a dead/crashed session here is the REAL
+              // failure (common with the Windows fingerprint on this Chromium build), and
+              // hiding it behind the generic "not solved" message below is exactly what
+              // made these runs impossible to diagnose. Surface the true reason instead.
+              const m = clickErr instanceof Error ? clickErr.message : String(clickErr);
+              if (/invalid session|session (?:deleted|id)|target (?:closed|crashed)|page ?crashed|no such window|disconnected|not reachable|tab crashed/i.test(m)) {
+                throw new CaptchaBlockedError(
+                  `Browser session died while solving the Turnstile — ${m}. ` +
+                    "This is a browser crash (often the Windows fingerprint on this Chromium build), not a Cloudflare wall.",
+                );
+              }
+              logger.warn({ clickErr }, "cfVerify — native clickTurnstile threw (non-fatal); treating as not solved");
+              solved = false;
+            }
             if (solved) {
               return { message: "Cloudflare verification cleared via cf-proxy native Turnstile click." };
             }
@@ -578,10 +593,14 @@ async function executeStep(
             throw new CaptchaBlockedError(
               "Turnstile widget present but not solved by the native clicker (gate still up). " +
                 "Not re-clicking to avoid a 'Verification failed' from mashing. " +
-                "If it used to pass, try FINGERPRINT_OS=windows or a residential/cleaner proxy IP.",
+                "If it used to pass, try a residential/cleaner proxy IP or a different fingerprint.",
             );
           }
         } catch (err) {
+          // The intentional block above — and a detected session crash — MUST propagate.
+          // Downgrading it to a debug log (and falling through to a re-click) is what hid
+          // the real reason AND risked mashing the widget into "Verification failed".
+          if (err instanceof CaptchaBlockedError) throw err;
           logger.debug({ err }, "cfVerify native clickTurnstile fast-path threw — falling back");
         }
       }
