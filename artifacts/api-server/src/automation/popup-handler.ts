@@ -376,12 +376,30 @@ async function dismissPopupsOnce(page: PageAdapter, firstPass = true): Promise<P
         } catch { /* ignore */ }
         return false;
       };
+      // Ad-NETWORK elements. We only ever remove POSITIONED ones (the loop skips
+      // static/inline elements below), so inline ads / anti-adblock "bait" that sit
+      // in the page flow are left untouched — we strip only the floating ad overlay
+      // that sits ON TOP of a real button and steals the click.
+      const AD_SEL =
+        "iframe[src*='googlesyndication'], iframe[src*='doubleclick'], iframe[src*='googleads'], " +
+        "iframe[id*='google_ads'], iframe[src*='adservice'], iframe[src*='/ads/'], " +
+        "iframe[src*='adnxs'], iframe[src*='amazon-adsystem'], [id*='google_ads_iframe']";
+      const isAdOverlay = (el: HTMLElement): boolean => {
+        try { return el.matches(AD_SEL) || !!el.querySelector(AD_SEL); } catch { return false; }
+      };
       const candidates = Array.from(document.querySelectorAll<HTMLElement>("body *"));
       for (const el of candidates) {
         const s = window.getComputedStyle(el);
         if (s.position !== "fixed" && s.position !== "absolute") continue;
         const z = parseInt(s.zIndex || "0", 10);
         const r = el.getBoundingClientRect();
+        // Floating ad overlay covering content — remove regardless of size (an ad
+        // banner over a button need not fill the viewport). Never touch captchas.
+        if (r.width > 0 && r.height > 0 && s.pointerEvents !== "none" && isAdOverlay(el) && !isCaptchaRelated(el)) {
+          el.remove();
+          count++;
+          continue;
+        }
         const coversViewport = r.width >= vw * 0.9 && r.height >= vh * 0.9;
         const cls = (el.className && typeof el.className === "string" ? el.className : "") + " " + (el.id || "");
         const isBackdrop =
