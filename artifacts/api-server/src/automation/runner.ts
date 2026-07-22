@@ -301,17 +301,22 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
       if (_profileIds.fingerprintProfileId) {
         const [fpr] = await db.select().from(fingerprintProfilesTable).where(eq(fingerprintProfilesTable.id, _profileIds.fingerprintProfileId));
         if (fpr) {
-          const cfg = (fpr.config ?? {}) as { timezone?: string; locale?: string; screen?: string };
+          const cfg = (fpr.config ?? {}) as { timezone?: string; locale?: string; screen?: string; fp?: string; preset?: unknown; summary?: { screen?: string } };
           // os "linux" is honest for cf-proxy (its _apply_fingerprint ignores non
           // windows/mac) and a real target for camoufox — pass it through either way.
+          // fp/preset are the browserforge pickle / real preset for camoufox's EXACT
+          // reproduction (ignored by cf-proxy, which uses os/tz/locale only).
           browserConfig.fingerprint = {
             os: fpr.os,
             timezone: cfg.timezone || "",
             locale: cfg.locale || "",
             autoGeo: !cfg.timezone && !cfg.locale,
+            ...(cfg.fp ? { fp: cfg.fp } : {}),
+            ...(cfg.preset !== undefined ? { preset: cfg.preset } : {}),
           };
-          if (cfg.screen && /^\d+x\d+$/i.test(cfg.screen)) {
-            const [w, h] = cfg.screen.toLowerCase().split("x").map(Number);
+          const screen = cfg.screen || cfg.summary?.screen;
+          if (screen && /^\d+x\d+$/i.test(screen)) {
+            const [w, h] = screen.toLowerCase().split("x").map(Number);
             browserConfig.viewportWidth = w;
             browserConfig.viewportHeight = h;
           }

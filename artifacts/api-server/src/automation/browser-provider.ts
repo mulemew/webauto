@@ -121,7 +121,7 @@ export interface BrowserProviderConfig {
      * for the honest (Linux) fingerprint.
      */
     fingerprint?: {
-      /** "windows" | "mac" | "" (off) */
+      /** "windows" | "mac" | "linux" | "" (off) */
       os?: string;
       /** IANA timezone, e.g. "America/New_York". Empty = auto-detect from exit IP. */
       timezone?: string;
@@ -129,6 +129,12 @@ export interface BrowserProviderConfig {
       locale?: string;
       /** Auto-detect timezone/locale from the exit IP when they are not set. Default true. */
       autoGeo?: boolean;
+      /** Camoufox only: base64 pickle of a browserforge Fingerprint for EXACT reproduction. */
+      fp?: string;
+      /** Camoufox only: a real captured preset dict. */
+      preset?: unknown;
+      /** Human-readable summary (UA / GPU / screen) — display only. */
+      summary?: Record<string, unknown>;
     };
   }
 
@@ -726,6 +732,9 @@ class CamoufoxProvider implements BrowserProvider {
         timezone: fp.timezone || "",
         screen: `${vp.width}x${vp.height}`,
         proxy: parseProxyForCamoufox(this.config.proxyUrl),
+        // The saved profile's fixed fingerprint (browserforge pickle or preset); the
+        // sidecar reproduces it exactly via launch_server(fingerprint=/fingerprint_preset=).
+        fingerprint: fp,
       }),
     });
     if (!res.ok) throw new Error(`camoufox-proxy /launch failed: ${res.status} ${await res.text().catch(() => "")}`);
