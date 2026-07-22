@@ -24,6 +24,21 @@ router.get("/fingerprint-profiles", async (_req, res): Promise<void> => {
   res.json(rows);
 });
 
+// Proxy to the camoufox-proxy sidecar's /generate (the browser is internal-only). The UI
+// calls this from the "Generate" button; save the returned `config` into a profile.
+router.get("/fingerprint-profiles/generate", async (req, res): Promise<void> => {
+  const os = String(req.query.os ?? "windows");
+  const source = String(req.query.source ?? "browserforge");
+  const base = (process.env.CAMOUFOX_URL ?? "http://camoufox-proxy:7318").replace(/\/$/, "");
+  try {
+    const r = await fetch(`${base}/generate?os=${encodeURIComponent(os)}&source=${encodeURIComponent(source)}`);
+    const data = await r.json().catch(() => ({}));
+    res.status(r.status).json(data);
+  } catch (err) {
+    res.status(502).json({ error: `camoufox-proxy unreachable: ${err instanceof Error ? err.message : String(err)}` });
+  }
+});
+
 router.post("/fingerprint-profiles", async (req, res): Promise<void> => {
   const body = CreateBody.safeParse(req.body);
   if (!body.success) { res.status(400).json({ error: "Invalid input" }); return; }

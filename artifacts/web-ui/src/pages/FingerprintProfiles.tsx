@@ -43,6 +43,12 @@ export default function FingerprintProfiles() {
   const [form, setForm] = useState<Form>(EMPTY);
   const [submitting, setSubmitting] = useState(false);
   const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [source, setSource] = useState<"browserforge" | "preset">("browserforge");
+  const [generating, setGenerating] = useState(false);
+  // The generated fingerprint config (opaque: {source, os, fp|preset, summary}) that gets
+  // saved verbatim into the profile, plus its human-readable summary for display.
+  const [generated, setGenerated] = useState<Record<string, unknown> | null>(null);
+  const [genSummary, setGenSummary] = useState<Record<string, unknown> | null>(null);
 
   const load = () => {
     setLoading(true);
@@ -54,21 +60,46 @@ export default function FingerprintProfiles() {
   };
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const openCreate = () => { setEditingId(null); setForm(EMPTY); setDialogOpen(true); };
+  const openCreate = () => {
+    setEditingId(null); setForm(EMPTY); setGenerated(null); setGenSummary(null); setSource("browserforge"); setDialogOpen(true);
+  };
   const openEdit = (p: FingerprintProfile) => {
     setEditingId(p.id);
-    setForm({ name: p.name, os: p.os, locale: p.config?.locale ?? "", timezone: p.config?.timezone ?? "", screen: p.config?.screen ?? "" });
+    const cfg = (p.config ?? {}) as Record<string, unknown>;
+    setForm({ name: p.name, os: p.os, locale: (cfg.locale as string) ?? "", timezone: (cfg.timezone as string) ?? "", screen: (cfg.screen as string) ?? "" });
+    // A saved generated fingerprint carries fp/preset/summary — keep it fixed on edit.
+    if (cfg.fp || cfg.preset) { setGenerated(cfg); setGenSummary((cfg.summary as Record<string, unknown>) ?? null); }
+    else { setGenerated(null); setGenSummary(null); }
+    setSource(((cfg.source as string) === "preset") ? "preset" : "browserforge");
     setDialogOpen(true);
+  };
+
+  const doGenerate = async () => {
+    setGenerating(true);
+    try {
+      const r = await fetch(`${BASE}/api/fingerprint-profiles/generate?os=${encodeURIComponent(form.os)}&source=${source}`);
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || "generate failed");
+      setGenerated(data.config);
+      setGenSummary(data.summary);
+      toast({ title: "指纹已生成 — 保存后固定", variant: "success" });
+    } catch (err) {
+      toast({ title: "生成失败", description: err instanceof Error ? err.message : "", variant: "destructive" });
+    } finally {
+      setGenerating(false);
+    }
   };
 
   const handleSubmit = async () => {
     if (!form.name.trim()) { toast({ title: "Name is required", variant: "destructive" }); return; }
     setSubmitting(true);
     try {
-      const config: Record<string, string> = {};
+      // If a fingerprint was generated, save it VERBATIM (fp/preset/summary) so it stays
+      // fixed; otherwise fall back to the manual timezone/locale/screen fields.
+      const config: Record<string, unknown> = generated ? { ...generated } : {};
       if (form.locale.trim()) config.locale = form.locale.trim();
       if (form.timezone.trim()) config.timezone = form.timezone.trim();
-      if (form.screen.trim()) config.screen = form.screen.trim();
+      if (!generated && form.screen.trim()) config.screen = form.screen.trim();
       const url = editingId ? `${BASE}/api/fingerprint-profiles/${editingId}` : `${BASE}/api/fingerprint-profiles`;
       const res = await fetch(url, {
         method: editingId ? "PUT" : "POST",
@@ -162,6 +193,34 @@ export default function FingerprintProfiles() {
                 {OS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
             </div>
+
+            {/* Generate a real, consistent fingerprint and FIX it (Camoufox) */}
+            <div className="space-y-2 rounded-md border border-border p-3">
+              <div className="flex items-center gap-2">
+                <select
+                  value={source}
+                  onChange={(e) => setSource(e.target.value as "browserforge" | "preset")}
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                >
+                  <option value="browserforge">browserforge 合成</option>
+                  <option value="preset">真机预设</option>
+                </select>
+                <Button type="button" variant="outline" size="sm" onClick={doGenerate} disabled={generating} className="gap-2">
+                  {generating && <Loader2 className="h-3.5 w-3.5 animate-spin" />}生成指纹
+                </Button>
+                {generated && <span className="text-[11px] text-emerald-500">已生成 · 保存后固定</span>}
+              </div>
+              {genSummary ? (
+                <div className="text-[11px] font-mono text-muted-foreground space-y-0.5 break-all">
+                  {genSummary.userAgent ? <div>UA: {String(genSummary.userAgent)}</div> : null}
+                  {genSummary.webglRenderer ? <div>GPU: {String(genSummary.webglVendor || "")} — {String(genSummary.webglRenderer)}</div> : null}
+                  {genSummary.screen ? <div>屏幕: {String(genSummary.screen)}</div> : null}
+                </div>
+              ) : (
+                <p className="text-[11px] text-muted-foreground">点「生成指纹」产出一套真实一致的指纹(Camoufox 引擎级),保存后固定。不生成则用下方手填(仅 cf-proxy 简单伪装)。</p>
+              )}
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Timezone <span className="text-muted-foreground">(optional)</span></Label>
