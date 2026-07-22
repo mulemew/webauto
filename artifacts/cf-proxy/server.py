@@ -1015,7 +1015,24 @@ class SessionThread:
                                 result = fn(sb)
                                 self._res_q.put({"ok": True, "result": result, "seq": seq})
                             except Exception as e:
-                                self._res_q.put({"ok": False, "error": str(e), "seq": seq})
+                                # When the session dies mid-command ("invalid session id",
+                                # "chrome not reachable", "no such window"), Chrome itself
+                                # crashed — its stderr says WHY (GPU/renderer crash, OOM…).
+                                # Dump the tail so we stop guessing why Windows-fingerprint
+                                # sessions die during Turnstile.
+                                _es = str(e)
+                                if any(k in _es.lower() for k in (
+                                    "invalid session id", "session deleted", "not reachable",
+                                    "no such window", "disconnected", "target closed",
+                                    "cannot connect to chrome",
+                                )):
+                                    _tail = _tail_file(self._chrome_stderr_path)
+                                    print(
+                                        f"[chrome-crash] session died during a command: {_es}\n"
+                                        f"[chrome-stderr-tail]\n{_tail or '(empty)'}",
+                                        flush=True,
+                                    )
+                                self._res_q.put({"ok": False, "error": _es, "seq": seq})
                         return
                 except Exception as e:
                     last_error = e
