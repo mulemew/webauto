@@ -72,6 +72,12 @@ def _build_options(body: dict) -> dict:
             pass
     if body.get("locale"):
         opts["locale"] = body["locale"]
+    # Manual timezone from the fingerprint profile wins over geoip. geoip=True still
+    # fills geolocation/timezone from the proxy IP when this is left empty. (locale is
+    # forwarded above; timezone was previously dropped, so it silently fell back to the
+    # proxy IP even when the profile set one explicitly.)
+    if body.get("timezone"):
+        opts["timezone"] = body["timezone"]
     proxy = body.get("proxy")
     if isinstance(proxy, dict) and proxy.get("server"):
         p = {"server": proxy["server"]}

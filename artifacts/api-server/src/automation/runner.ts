@@ -310,7 +310,11 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
             os: fpr.os,
             timezone: cfg.timezone || "",
             locale: cfg.locale || "",
-            autoGeo: !cfg.timezone && !cfg.locale,
+            // Always allow IP auto-fill: a fingerprint profile has no "off" switch —
+            // a blank tz/locale means "auto from the exit IP". Downstream resolution is
+            // per-field ("manual wins, else auto"), so filling ONLY one no longer forces
+            // the other to a hard-coded default; the empty one still tracks the proxy IP.
+            autoGeo: true,
             ...(cfg.fp ? { fp: cfg.fp } : {}),
             ...(cfg.preset !== undefined ? { preset: cfg.preset } : {}),
           };
