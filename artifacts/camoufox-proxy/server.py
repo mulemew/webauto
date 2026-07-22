@@ -88,6 +88,57 @@ def health():
     return jsonify({"ok": True, "sessions": len(_servers)})
 
 
+@app.get("/generate")
+def generate():
+    """Generate ONE concrete, internally-consistent fingerprint via browserforge (the
+    same generator Camoufox uses). The UI calls this when the user clicks "Generate",
+    shows the summary, and saves it as a FIXED profile. Returns:
+      summary     — human-readable fields (os, UA, screen, GPU vendor/renderer, langs…)
+      fingerprint — the full serialized fingerprint, so it can be reproduced EXACTLY.
+    """
+    os_name = (request.args.get("os") or "windows").strip().lower()
+    if os_name == "mac":
+        os_name = "macos"
+    if os_name not in ("windows", "macos", "linux"):
+        os_name = "windows"
+    try:
+        from browserforge.fingerprints import FingerprintGenerator
+        fg = FingerprintGenerator()
+        fp = fg.generate(os=os_name)
+        nav = getattr(fp, "navigator", None)
+        scr = getattr(fp, "screen", None)
+        vc = getattr(fp, "videoCard", None) or getattr(fp, "video_card", None)
+
+        def g(obj, *names):
+            for n in names:
+                v = getattr(obj, n, None) if obj is not None else None
+                if v is not None:
+                    return v
+            return None
+
+        w, h = g(scr, "width"), g(scr, "height")
+        summary = {
+            "os": "mac" if os_name == "macos" else os_name,
+            "userAgent": g(nav, "userAgent", "user_agent") or "",
+            "platform": g(nav, "platform") or "",
+            "languages": g(nav, "languages") or [],
+            "screen": f"{w}x{h}" if w and h else "",
+            "webglVendor": (g(vc, "vendor") or "") if vc is not None else "",
+            "webglRenderer": (g(vc, "renderer") or "") if vc is not None else "",
+            "hardwareConcurrency": g(nav, "hardwareConcurrency", "hardware_concurrency"),
+            "deviceMemory": g(nav, "deviceMemory", "device_memory"),
+        }
+        import dataclasses
+        try:
+            raw = dataclasses.asdict(fp) if dataclasses.is_dataclass(fp) else None
+        except Exception:
+            raw = None
+        return jsonify({"summary": summary, "fingerprint": raw})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": f"browserforge generate failed: {e}\n{traceback.format_exc()}"}), 500
+
+
 @app.post("/launch")
 def launch():
     body = request.get_json(silent=True) or {}
