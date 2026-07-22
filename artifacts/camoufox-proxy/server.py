@@ -33,14 +33,10 @@ PORT = int(os.getenv("PORT", "7318"))
 _servers = {}
 _lock = threading.Lock()
 
-# The child runs Camoufox's Playwright server and prints its ws endpoint on stdout.
-# Config is passed as a JSON blob via env so we never have to shell-quote it.
-_LAUNCHER = (
-    "import json,os;"
-    "from camoufox.server import launch_server;"
-    "cfg=json.loads(os.environ['CAMOUFOX_CFG']);"
-    "launch_server(**cfg)"
-)
+# launcher.py runs Camoufox's Playwright server and prints its ws endpoint on stdout.
+# Config is passed as a JSON blob via env so we never have to shell-quote it, and the
+# launcher (which can import camoufox) turns screen dict -> Screen object.
+_LAUNCHER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "launcher.py")
 
 _WS_RE = re.compile(r"(ws://[^\s]+)")
 
@@ -99,7 +95,7 @@ def launch():
     env = dict(os.environ)
     env["CAMOUFOX_CFG"] = json.dumps(opts)
     proc = subprocess.Popen(
-        [sys.executable, "-c", _LAUNCHER],
+        [sys.executable, _LAUNCHER_PATH],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

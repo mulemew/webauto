@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # container has no network dependency at runtime.
 RUN python -m camoufox fetch
 
-COPY server.py .
+COPY server.py launcher.py ./
 
 ENV PYTHONUNBUFFERED=1
 ENV DISPLAY=:99
