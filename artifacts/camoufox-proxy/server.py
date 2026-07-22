@@ -47,9 +47,19 @@ _WS_RE = re.compile(r"(ws://[^\s]+)")
 
 def _build_options(body: dict) -> dict:
     """Map the api-server's fingerprint/proxy config to Camoufox launch options."""
+    # CAMOUFOX_HEADLESS: "virtual" (headful on Camoufox's own Xvfb, default), "false"
+    # (REAL headful — renders on this container's Xvfb via DISPLAY=:99), or "true"
+    # (real headless, detectable). Both "virtual" and "false" are fully-rendered headful
+    # browsers; only "true" is headless.
+    _h = os.getenv("CAMOUFOX_HEADLESS", "virtual").strip().lower()
+    if _h in ("false", "0", "no", "off"):
+        _headless: object = False
+    elif _h in ("true", "1", "yes", "on"):
+        _headless = True
+    else:
+        _headless = "virtual"
     opts: dict = {
-        # "virtual" runs headful on a virtual display (Xvfb) — headless is detectable.
-        "headless": os.getenv("CAMOUFOX_HEADLESS", "virtual"),
+        "headless": _headless,
         # Camoufox rotates a realistic, internally-consistent fingerprint for the OS.
         "geoip": True,
         "humanize": bool(body.get("humanize", True)),
