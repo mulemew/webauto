@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Network, Plus, Trash2, Pencil, Loader2 } from "lucide-react";
+import { Network, Plus, Trash2, Pencil, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,10 +10,16 @@ import { Label } from "@/components/ui/label";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
+interface ExitGeo {
+  configured?: boolean; direct?: boolean; ok?: boolean; error?: string;
+  exitIp?: string; country?: string; countryCode?: string; region?: string; city?: string; isp?: string; timezone?: string; at?: string;
+}
 interface ProxyProfile {
   id: number;
   name: string;
   url: string;
+  exitGeo?: ExitGeo | null;
+  geoUpdatedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -29,6 +35,8 @@ export default function ProxyProfiles() {
   const [form, setForm] = useState(EMPTY);
   const [submitting, setSubmitting] = useState(false);
   const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [refreshingId, setRefreshingId] = useState<number | null>(null);
+  const [refreshingAll, setRefreshingAll] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -79,8 +87,63 @@ export default function ProxyProfiles() {
     }
   };
 
+  const refreshOne = async (id: number) => {
+    setRefreshingId(id);
+    try {
+      const res = await fetch(`${BASE}/api/proxy-profiles/${id}/refresh`, { method: "POST" });
+      if (!res.ok) throw new Error();
+      const updated: ProxyProfile = await res.json();
+      setRows((prev) => prev.map((r) => (r.id === id ? updated : r)));
+    } catch {
+      toast({ title: "Failed to refresh", variant: "destructive" });
+    } finally {
+      setRefreshingId(null);
+    }
+  };
+
+  const refreshAll = async () => {
+    setRefreshingAll(true);
+    try {
+      const res = await fetch(`${BASE}/api/proxy-profiles/refresh-all`, { method: "POST" });
+      if (!res.ok) throw new Error();
+      setRows(await res.json());
+      toast({ title: "All proxies refreshed", variant: "success" });
+    } catch {
+      toast({ title: "Failed to refresh", variant: "destructive" });
+    } finally {
+      setRefreshingAll(false);
+    }
+  };
+
   // Hide the password portion of a proxy URL when displaying it.
   const maskUrl = (u: string) => u.replace(/(:\/\/[^:@/]+:)[^@/]+@/, "$1••••@");
+
+  // Country flag as an <img> (flagcdn) — Windows browsers don't render flag emoji.
+  const GeoLine = ({ geo }: { geo?: ExitGeo | null }) => {
+    if (!geo || (geo.configured === false && !geo.ok && !geo.direct)) {
+      return <span className="text-xs text-muted-foreground">未检测</span>;
+    }
+    if (!geo.ok) {
+      return <span className="text-xs text-destructive truncate">检测失败{geo.error ? `：${geo.error}` : ""}</span>;
+    }
+    const cc = geo.countryCode?.toLowerCase();
+    const place = [geo.city, geo.region, geo.country].filter(Boolean).join(", ");
+    return (
+      <span className="flex items-center gap-1.5 text-xs text-muted-foreground min-w-0">
+        {cc && (
+          <img
+            src={`https://flagcdn.com/20x15/${cc}.png`}
+            srcSet={`https://flagcdn.com/40x30/${cc}.png 2x`}
+            width={20}
+            height={15}
+            alt={geo.countryCode}
+            className="rounded-sm shrink-0"
+          />
+        )}
+        <span className="truncate">{place || geo.countryCode}{geo.exitIp ? ` · ${geo.exitIp}` : ""}</span>
+      </span>
+    );
+  };
 
   return (
     <div className="max-w-3xl mx-auto p-4 md:p-6 space-y-4">
@@ -89,7 +152,14 @@ export default function ProxyProfiles() {
           <Network className="h-5 w-5 text-primary" />
           <h1 className="text-lg font-semibold">Proxies</h1>
         </div>
-        <Button size="sm" className="gap-2" onClick={openCreate}><Plus className="h-4 w-4" />Add proxy</Button>
+        <div className="flex items-center gap-2">
+          {rows.length > 0 && (
+            <Button size="sm" variant="outline" className="gap-2" onClick={refreshAll} disabled={refreshingAll}>
+              <RefreshCw className={`h-4 w-4 ${refreshingAll ? "animate-spin" : ""}`} />刷新全部
+            </Button>
+          )}
+          <Button size="sm" className="gap-2" onClick={openCreate}><Plus className="h-4 w-4" />Add proxy</Button>
+        </div>
       </div>
       <p className="text-sm text-muted-foreground">
         Reusable exit proxies. Add them once, then pick one per task from a dropdown. WARP is configured per task, not here.
@@ -110,11 +180,15 @@ export default function ProxyProfiles() {
           {rows.map((p) => (
             <Card key={p.id} className="border-border shadow-sm">
               <CardHeader className="pb-2 bg-muted/20 border-b border-border flex-row items-center justify-between py-3 px-4">
-                <div className="min-w-0">
+                <div className="min-w-0 space-y-1">
                   <CardTitle className="text-sm font-semibold">{p.name}</CardTitle>
                   <p className="text-xs text-muted-foreground font-mono truncate">{maskUrl(p.url)}</p>
+                  <GeoLine geo={p.exitGeo} />
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
+                  <Button variant="ghost" size="icon" className="h-7 w-7" title="刷新出口信息" onClick={() => refreshOne(p.id)} disabled={refreshingId === p.id || refreshingAll}>
+                    <RefreshCw className={`h-4 w-4 ${refreshingId === p.id ? "animate-spin" : ""}`} />
+                  </Button>
                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
                   <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => setDeleteId(p.id)}><Trash2 className="h-4 w-4" /></Button>
                 </div>

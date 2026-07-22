@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, jsonb, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -15,6 +15,10 @@ export const proxyProfilesTable = pgTable("proxy_profiles", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
   url: text("url").notNull(),
+  // Cached exit-IP geolocation (country/city/ip/isp…) so task pages read it directly
+  // instead of resolving through the proxy every render. Refreshed on demand.
+  exitGeo: jsonb("exit_geo"),
+  geoUpdatedAt: timestamp("geo_updated_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

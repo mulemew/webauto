@@ -1,7 +1,7 @@
 import path from "path";
 import fs from "fs";
 import { Router, type IRouter } from "express";
-import { db, tasksTable, credentialsTable, savedCredentialsTable, logsTable, eq, desc, count, and, gte, sql } from "@workspace/db";
+import { db, tasksTable, credentialsTable, savedCredentialsTable, logsTable, proxyProfilesTable, eq, desc, count, and, gte, sql } from "@workspace/db";
 import {
   ListTasksResponse,
   CreateTaskBody,
@@ -90,8 +90,9 @@ function runGeoCurl(proxyArg?: string): Promise<IpApi> {
     execFile("curl", args, { timeout: 20_000 }, (err, out) => (err ? reject(err) : resolve(JSON.parse(out) as IpApi)));
   });
 }
-/** Resolve exit IP + geo for a task's browserConfig — proxy exit, or host IP when no proxy. */
-async function resolveExitGeo(browserConfig: unknown): Promise<ExitGeo> {
+/** Resolve exit IP + geo for a task's browserConfig — proxy exit, or host IP when no proxy.
+ *  Exported so the proxy-profiles route can resolve a profile's geo the same way. */
+export async function resolveExitGeo(browserConfig: unknown): Promise<ExitGeo> {
   const bc = (browserConfig ?? {}) as { proxyUrl?: string; proxyType?: string };
   const proxyUrl = (bc.proxyUrl ?? "").trim();
   const proxyType = (bc.proxyType ?? "").trim();
@@ -131,6 +132,21 @@ async function persistExitGeo(taskId: number): Promise<ExitGeo | null> {
     logger.warn({ err, taskId }, "persistExitGeo failed");
     return null;
   }
+}
+
+/** Map of proxyProfileId → the profile's cached exit geo. Built once per list/detail
+ *  response so profile-based tasks show the profile's (refreshable) geo, not a copy. */
+async function proxyProfileGeoMap(): Promise<Map<number, unknown>> {
+  const rows = await db.select({ id: proxyProfilesTable.id, exitGeo: proxyProfilesTable.exitGeo }).from(proxyProfilesTable);
+  return new Map(rows.map((r) => [r.id, r.exitGeo]));
+}
+/** A task's exit geo for display: the saved proxy profile's cached geo when the task
+ *  uses one (so a profile refresh updates every task at once), else the task's own
+ *  cached exit_geo (inline proxy / no proxy). */
+function displayExitGeo(task: { exitGeo?: unknown; browserConfig?: unknown } | undefined, geoMap: Map<number, unknown>): unknown {
+  const pid = (task?.browserConfig as { proxyProfileId?: number | null } | null | undefined)?.proxyProfileId;
+  if (pid && geoMap.has(pid)) return geoMap.get(pid) ?? null;
+  return task?.exitGeo ?? null;
 }
 
 /** One-time background fill of exit_geo for tasks that don't have it yet (tasks that
@@ -304,7 +320,8 @@ router.get("/tasks", async (req, res): Promise<void> => {
   // Re-attach the cached exit geo after schema parse (the generated response schema
   // doesn't model it) so the list can render the exit flag without a live lookup.
   const parsed = ListTasksResponse.parse(tasks);
-  res.json(parsed.map((p, i) => ({ ...p, exitGeo: tasks[i]?.exitGeo ?? null })));
+  const geoMap = await proxyProfileGeoMap();
+  res.json(parsed.map((p, i) => ({ ...p, exitGeo: displayExitGeo(tasks[i], geoMap) })));
 });
 
 router.post("/tasks", async (req, res): Promise<void> => {
@@ -579,7 +596,8 @@ router.get("/tasks/:id/logs/history", async (req, res): Promise<void> => {
     credentialsData = { username: loginCredentials[0].username, hasTotpSecret: loginCredentials[0].hasTotpSecret };
   }
 
-  res.json({ ...GetTaskResponse.parse({ ...task, credentials: credentialsData }), loginCredentials, exitGeo: task.exitGeo ?? null });
+  const geoMap = await proxyProfileGeoMap();
+  res.json({ ...GetTaskResponse.parse({ ...task, credentials: credentialsData }), loginCredentials, exitGeo: displayExitGeo(task, geoMap) });
 });
 
   // Resolve the EXIT IP + geolocation of the task's configured proxy, live. The
@@ -602,6 +620,14 @@ router.get("/tasks/:id/logs/history", async (req, res): Promise<void> => {
       return;
     }
     const refresh = req.query.refresh === "1" || req.query.refresh === "true";
+    // Tasks that use a saved proxy profile read (and refresh) the PROFILE's geo, which
+    // is shared across every task on that proxy. Manage it from the proxy page instead
+    // of re-testing per task through a proxyUrl the task no longer stores inline.
+    const pid = (task.browserConfig as { proxyProfileId?: number | null } | null)?.proxyProfileId;
+    if (pid) {
+      const [pp] = await db.select().from(proxyProfilesTable).where(eq(proxyProfilesTable.id, pid));
+      if (pp) { res.json(pp.exitGeo ?? { configured: false }); return; }
+    }
     const stored = (task.exitGeo ?? null) as ExitGeo | null;
     if (!refresh && stored) {
       res.json(stored);
@@ -717,7 +743,8 @@ router.put("/tasks/:id", async (req, res): Promise<void> => {
   rescheduleTask(updated.id, updated.cronExpression);
   // Re-resolve the exit geo in the background — proxy/config may have changed.
   void persistExitGeo(updated.id);
-  res.json({ ...GetTaskResponse.parse(updated), exitGeo: updated.exitGeo ?? null });
+  const geoMapU = await proxyProfileGeoMap();
+  res.json({ ...GetTaskResponse.parse(updated), exitGeo: displayExitGeo(updated, geoMapU) });
 });
 
 router.delete("/tasks/:id", async (req, res): Promise<void> => {

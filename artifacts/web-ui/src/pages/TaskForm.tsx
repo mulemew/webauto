@@ -189,6 +189,11 @@ interface BrowserConfigState {
   // Saved profiles (override the inline fingerprint/proxy above when set)
   fingerprintProfileId: number | null;
   proxyProfileId: number | null;
+  // Unified dropdown selection (single source of truth for the UI):
+  //   proxySel: "none" | "custom" | "warp" | "<profileId>"
+  //   fpSel:    "none" | "custom" | "<profileId>"
+  proxySel: string;
+  fpSel: string;
 }
 
 /** URL-safe random token for the webhook's Authorization header. */
@@ -217,7 +222,19 @@ const defaultBrowserConfig: BrowserConfigState = {
   fpAutoGeo: true,
   fingerprintProfileId: null,
   proxyProfileId: null,
+  proxySel: "none",
+  fpSel: "none",
 };
+
+/** Infer the proxyType from a manual proxy URL's scheme (the node-type dropdown was
+ *  removed — the scheme in the URL already says what it is). Mirrors the api-server. */
+function inferProxyType(url: string): ProxyType {
+  const scheme = (url.split("://")[0] || "").toLowerCase();
+  const norm =
+    scheme === "socks5h" ? "socks5" : scheme === "https" ? "http" : scheme === "hysteria2" ? "hy2" : scheme;
+  const allowed: ProxyType[] = ["http", "socks5", "vless", "vmess", "trojan", "hy2", "tuic", "ss"];
+  return (allowed.includes(norm as ProxyType) ? norm : "http") as ProxyType;
+}
 
 const PROVIDER_LABELS: Record<BrowserProvider, string> = {
   playwright: "Playwright (默认)",
@@ -431,6 +448,23 @@ export default function TaskForm() {
             ((bc.fingerprint as Record<string, unknown> | undefined)?.autoGeo as boolean) ?? true,
           fingerprintProfileId: (bc.fingerprintProfileId as number | null) ?? null,
           proxyProfileId: (bc.proxyProfileId as number | null) ?? null,
+          // Derive the unified dropdown selection from the stored config so existing
+          // tasks round-trip: saved profile → its id; warp → "warp"; a manual proxy
+          // URL → "custom"; likewise a manual fingerprint (fpOs set) → "custom".
+          proxySel:
+            bc.proxyProfileId != null
+              ? String(bc.proxyProfileId)
+              : bc.proxyType === "warp"
+                ? "warp"
+                : (bc.proxyUrl as string)
+                  ? "custom"
+                  : "none",
+          fpSel:
+            bc.fingerprintProfileId != null
+              ? String(bc.fingerprintProfileId)
+              : (bc.fingerprint as Record<string, unknown> | undefined)?.os
+                ? "custom"
+                : "none",
         });
         setBrowserConfigExpanded(true);
       }
@@ -439,34 +473,57 @@ export default function TaskForm() {
 
   const buildBrowserConfigPayload = () => {
     if (!browserConfig.enabled) return null;
-    const proxyUrl = browserConfig.proxyUrl.trim();
-    return {
-      provider: browserConfig.provider,
-      wsEndpoint: browserConfig.wsEndpoint || null,
-      fingerprintProfileId: browserConfig.fingerprintProfileId ?? null,
-      proxyProfileId: browserConfig.proxyProfileId ?? null,
-      proxyUrl: proxyUrl || null,
-      proxyType: proxyUrl || browserConfig.proxyType === "warp" ? browserConfig.proxyType : null,
+
+    // ── Proxy: derive everything from the single dropdown selection ──────────────
+    const psel = browserConfig.proxySel;
+    let proxyProfileId: number | null = null;
+    let proxyUrl: string | null = null;
+    let proxyType: ProxyType | null = null;
+    let warpRotations: number | null = null;
+    if (psel === "custom") {
+      const u = browserConfig.proxyUrl.trim();
+      proxyUrl = u || null;
+      proxyType = u ? inferProxyType(u) : null; // node-type inferred from the URL scheme
+    } else if (psel === "warp") {
+      proxyType = "warp";
       // WARP-only knob; blank means "use the RECAPTCHA_MAX_IP_ROTATIONS default".
-      warpRotations:
-        browserConfig.proxyType === "warp" && browserConfig.warpRotations.trim() !== ""
-          ? Number(browserConfig.warpRotations)
-          : null,
-      headed: browserConfig.headed || null,
-      stealth: browserConfig.stealth || null,
-      blockAds: browserConfig.blockAds || null,
-      ignoreHTTPS: browserConfig.ignoreHTTPS || null,
-      sessionTimeoutMs: browserConfig.sessionTimeoutMs
-        ? parseInt(browserConfig.sessionTimeoutMs, 10)
-        : null,
-      fingerprint: browserConfig.fpOs
+      warpRotations = browserConfig.warpRotations.trim() !== "" ? Number(browserConfig.warpRotations) : null;
+    } else if (psel !== "none") {
+      proxyProfileId = Number(psel); // a saved proxy profile
+    }
+
+    // ── Fingerprint: profile id, manual fields, or nothing ──────────────────────
+    const fsel = browserConfig.fpSel;
+    let fingerprintProfileId: number | null = null;
+    let fingerprint: Record<string, unknown> | null = null;
+    if (fsel === "custom") {
+      fingerprint = browserConfig.fpOs
         ? {
             os: browserConfig.fpOs,
             timezone: browserConfig.fpTimezone.trim(),
             locale: browserConfig.fpLocale.trim(),
             autoGeo: browserConfig.fpAutoGeo,
           }
+        : null;
+    } else if (fsel !== "none") {
+      fingerprintProfileId = Number(fsel); // a saved fingerprint profile
+    }
+
+    return {
+      provider: browserConfig.provider,
+      wsEndpoint: browserConfig.wsEndpoint || null,
+      fingerprintProfileId,
+      proxyProfileId,
+      proxyUrl,
+      proxyType,
+      warpRotations,
+      stealth: browserConfig.stealth || null,
+      blockAds: browserConfig.blockAds || null,
+      ignoreHTTPS: browserConfig.ignoreHTTPS || null,
+      sessionTimeoutMs: browserConfig.sessionTimeoutMs
+        ? parseInt(browserConfig.sessionTimeoutMs, 10)
         : null,
+      fingerprint,
     };
   };
 
@@ -987,45 +1044,142 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                       </p>
                     </div>
 
-                    {/* Saved proxy profile — overrides the manual proxy below when chosen */}
+                    {/* Proxy — one dropdown: none / saved profiles / WARP / custom URL.
+                        Manual fields appear only after choosing 自定义 or WARP自动轮换. */}
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium">代理（已保存）</label>
+                      <label className="text-sm font-medium">代理</label>
                       <Select
-                        value={browserConfig.proxyProfileId != null ? String(browserConfig.proxyProfileId) : "none"}
-                        onValueChange={(v) =>
-                          setBrowserConfig((s) => ({ ...s, proxyProfileId: v === "none" ? null : Number(v) }))
-                        }
+                        value={browserConfig.proxySel}
+                        onValueChange={(v) => setBrowserConfig((s) => ({ ...s, proxySel: v }))}
                       >
                         <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="none">不使用（用下方手填 / WARP）</SelectItem>
+                          <SelectItem value="none">不使用</SelectItem>
                           {proxyProfiles.map((p) => (
                             <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
                           ))}
+                          <SelectItem value="warp">WARP自动轮换</SelectItem>
+                          <SelectItem value="custom">自定义</SelectItem>
                         </SelectContent>
                       </Select>
-                      <p className="text-[11px] text-muted-foreground">选一个「代理」页里保存的出口;选了会覆盖下方手填的代理。</p>
+                      <p className="text-[11px] text-muted-foreground">选「代理」页里保存的出口，或 WARP自动轮换，或自定义手填地址。</p>
+
+                      {/* Custom proxy address — scheme in the URL determines the node type */}
+                      {browserConfig.proxySel === "custom" && (
+                        <div className="pt-1 space-y-1.5">
+                          <Input
+                            placeholder="socks5://user:pass@host:1080 或 http/vless/vmess/trojan/hy2/tuic/ss://…"
+                            value={browserConfig.proxyUrl}
+                            onChange={(e) => setBrowserConfig((s) => ({ ...s, proxyUrl: e.target.value }))}
+                            className="font-mono text-sm"
+                          />
+                          <p className="text-[11px] text-muted-foreground">
+                            直接填代理 URL，协议由前缀识别（http/socks5 原生支持；vless/vmess/trojan/hy2/tuic/ss 会本地起 sing-box 转 SOCKS5）。
+                          </p>
+                        </div>
+                      )}
+
+                      {/* WARP-only: how many exit IPs to try when reCAPTCHA blocks audio */}
+                      {browserConfig.proxySel === "warp" && (
+                        <div className="mt-1 rounded-lg border border-border bg-muted/30 px-4 py-3 space-y-1.5">
+                          <label htmlFor="warpRotations" className="block text-sm font-medium">
+                            换 IP 重试次数
+                          </label>
+                          <Input
+                            id="warpRotations"
+                            type="number"
+                            min={0}
+                            max={50}
+                            placeholder="留空 = 用默认值（RECAPTCHA_MAX_IP_ROTATIONS，默认 5）"
+                            value={browserConfig.warpRotations}
+                            onChange={(e) => setBrowserConfig((s) => ({ ...s, warpRotations: e.target.value }))}
+                            className="font-mono text-sm"
+                          />
+                          <p className="text-[11px] text-muted-foreground">
+                            reCAPTCHA 语音验证被拒（"automated queries"）时，注册新的 WARP 身份换一个出口 IP 再试，最多这么多次。
+                            换 IP 时 sing-box 在同一本地端口重启，浏览器和页面状态不受影响；每次重试也会从新 IP 重新点一次
+                            checkbox（有机会直接通过）。填 0 关闭。
+                          </p>
+                        </div>
+                      )}
                     </div>
 
-                    {/* Saved fingerprint profile — overrides the inline fingerprint below */}
+                    {/* Fingerprint — one dropdown: none / saved profiles / custom.
+                        Manual fields appear only after choosing 自定义. */}
                     {(browserConfig.provider === "seleniumbase" || browserConfig.provider === "camoufox") && (
                       <div className="space-y-1.5">
-                        <label className="text-sm font-medium">浏览器指纹（已保存）</label>
+                        <label className="text-sm font-medium">浏览器指纹</label>
                         <Select
-                          value={browserConfig.fingerprintProfileId != null ? String(browserConfig.fingerprintProfileId) : "none"}
-                          onValueChange={(v) =>
-                            setBrowserConfig((s) => ({ ...s, fingerprintProfileId: v === "none" ? null : Number(v) }))
-                          }
+                          value={browserConfig.fpSel}
+                          onValueChange={(v) => setBrowserConfig((s) => ({ ...s, fpSel: v }))}
                         >
                           <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="none">不使用（用下方手填指纹）</SelectItem>
+                            <SelectItem value="none">不使用（真实 Linux 指纹）</SelectItem>
                             {fingerprintProfiles.map((p) => (
                               <SelectItem key={p.id} value={String(p.id)}>{p.name}（{p.os}）</SelectItem>
                             ))}
+                            <SelectItem value="custom">自定义</SelectItem>
                           </SelectContent>
                         </Select>
-                        <p className="text-[11px] text-muted-foreground">选一个「浏览器指纹」页里保存的;选了会覆盖下方手填的指纹。</p>
+                        <p className="text-[11px] text-muted-foreground">选「浏览器指纹」页里保存的，或自定义手填。</p>
+
+                        {browserConfig.fpSel === "custom" && (
+                          <div className="pt-1 space-y-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
+                            <p className="text-xs text-muted-foreground">
+                              把 Linux 指纹伪装成 Windows/Mac（UA、平台、WebGL、时区、语言）。Windows 伪装度更高；
+                              半吊子伪装可能反而更难过 CF，开启后请实测对比。
+                            </p>
+                            <div className="space-y-1.5">
+                              <label className="text-sm font-medium">操作系统画像</label>
+                              <Select
+                                value={browserConfig.fpOs || "off"}
+                                onValueChange={(v) =>
+                                  setBrowserConfig((s) => ({ ...s, fpOs: v === "off" ? "" : (v as "windows" | "mac") }))
+                                }
+                              >
+                                <SelectTrigger><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="off">关闭（真实 Linux 指纹）</SelectItem>
+                                  <SelectItem value="windows">Windows（推荐）</SelectItem>
+                                  <SelectItem value="mac">Mac</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            {browserConfig.fpOs && (
+                              <>
+                                <div className="flex items-center justify-between rounded-md border border-border px-3 py-2.5">
+                                  <div>
+                                    <p className="text-xs font-medium">按出口 IP 自动设时区/语言</p>
+                                    <p className="text-[10px] text-muted-foreground">开启后忽略下面手填的值，按代理出口 IP 自动对齐</p>
+                                  </div>
+                                  <Switch
+                                    checked={browserConfig.fpAutoGeo}
+                                    onCheckedChange={(v) => setBrowserConfig((s) => ({ ...s, fpAutoGeo: v }))}
+                                  />
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                  <div className="space-y-1.5">
+                                    <label className="text-sm font-medium">时区</label>
+                                    <Input
+                                      placeholder="America/New_York（留空=自动）"
+                                      value={browserConfig.fpTimezone}
+                                      onChange={(e) => setBrowserConfig((s) => ({ ...s, fpTimezone: e.target.value }))}
+                                    />
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    <label className="text-sm font-medium">语言</label>
+                                    <Input
+                                      placeholder="en-US（留空=自动）"
+                                      value={browserConfig.fpLocale}
+                                      onChange={(e) => setBrowserConfig((s) => ({ ...s, fpLocale: e.target.value }))}
+                                    />
+                                  </div>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -1054,200 +1208,6 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                           留空则自动启动本地浏览器进程；填写后连接远程
                           Browserless / cf-proxy
                         </p>
-                      </div>
-                    )}
-
-                    {/* Proxy URL */}
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium">
-                        代理节点{" "}
-                        <span className="text-muted-foreground font-normal">
-                          (可选)
-                        </span>
-                      </label>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                        <Select
-                          value={browserConfig.proxyType}
-                          onValueChange={(v) =>
-                            setBrowserConfig((s) => ({
-                              ...s,
-                              proxyType: v as ProxyType,
-                            }))
-                          }
-                        >
-                          <SelectTrigger className="font-mono text-sm">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="http">HTTP/HTTPS</SelectItem>
-                            <SelectItem value="socks5">SOCKS5</SelectItem>
-                            <SelectItem value="warp">
-                              Cloudflare WARP
-                            </SelectItem>
-                            <SelectItem value="vless">VLESS</SelectItem>
-                            <SelectItem value="vmess">VMess</SelectItem>
-                            <SelectItem value="trojan">Trojan</SelectItem>
-                            <SelectItem value="hy2">Hysteria2</SelectItem>
-                            <SelectItem value="tuic">TUIC</SelectItem>
-                            <SelectItem value="ss">Shadowsocks</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <Input
-                          placeholder={
-                            browserConfig.proxyType === "http"
-                              ? "http://user:pass@host:8080"
-                              : browserConfig.proxyType === "socks5"
-                                ? "socks5://user:pass@host:1080"
-                                : browserConfig.proxyType === "warp"
-                                  ? "留空使用 WARP_CONFIG_PATH"
-                                  : browserConfig.proxyType === "vless"
-                                    ? "vless://uuid@host:443?..."
-                                    : browserConfig.proxyType === "vmess"
-                                      ? "vmess://base64..."
-                                      : browserConfig.proxyType === "trojan"
-                                        ? "trojan://pass@host:443?..."
-                                        : browserConfig.proxyType === "hy2"
-                                          ? "hysteria2://pass@host:443?..."
-                                          : browserConfig.proxyType === "tuic"
-                                            ? "tuic://uuid:pass@host:443?..."
-                                            : "ss://base64(method:pass)@host:port"
-                          }
-                          value={browserConfig.proxyUrl}
-                          onChange={(e) =>
-                            setBrowserConfig((s) => ({
-                              ...s,
-                              proxyUrl: e.target.value,
-                            }))
-                          }
-                          className="font-mono text-sm sm:col-span-2"
-                        />
-                      </div>
-                      <p className="text-[11px] text-muted-foreground">
-                        {browserConfig.proxyType === "http" ||
-                        browserConfig.proxyType === "socks5"
-                          ? "直接填写代理 URL，Chromium 原生支持。"
-                          : browserConfig.proxyType === "warp"
-                            ? "Cloudflare WARP：自动注册 WireGuard 身份（无需 wgcf；挂载 WARP_CONFIG_PATH 时优先使用它）。"
-                            : "填写节点分享链接。系统会本地启动 sing-box 转成 SOCKS5 供浏览器使用（需安装 sing-box）。"}
-                      </p>
-
-                      {/* WARP-only: how many exit IPs to try when reCAPTCHA blocks audio */}
-                      {browserConfig.proxyType === "warp" && (
-                        <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 space-y-1.5">
-                          <label htmlFor="warpRotations" className="block text-sm font-medium">
-                            换 IP 重试次数
-                          </label>
-                          <Input
-                            id="warpRotations"
-                            type="number"
-                            min={0}
-                            max={50}
-                            placeholder="留空 = 用默认值（RECAPTCHA_MAX_IP_ROTATIONS，默认 5）"
-                            value={browserConfig.warpRotations}
-                            onChange={(e) =>
-                              setBrowserConfig((s) => ({ ...s, warpRotations: e.target.value }))
-                            }
-                            className="font-mono text-sm"
-                          />
-                          <p className="text-[11px] text-muted-foreground">
-                            reCAPTCHA 语音验证被拒（"automated queries"）时，注册新的 WARP 身份换一个出口 IP 再试，最多这么多次。
-                            换 IP 时 sing-box 在同一本地端口重启，浏览器和页面状态不受影响；每次重试也会从新 IP 重新点一次
-                            checkbox（有机会直接通过）。填 0 关闭。
-                          </p>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Headed / Headless */}
-                    <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
-                      <div>
-                        <p className="text-sm font-medium">
-                          有头模式（可视化运行）
-                        </p>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          开启后浏览器带界面运行，方便排查问题；关闭则无头运行（默认）。仅对
-                          Local Chrome 生效。
-                        </p>
-                      </div>
-                      <Switch
-                        checked={browserConfig.headed}
-                        onCheckedChange={(v) =>
-                          setBrowserConfig((s) => ({ ...s, headed: v }))
-                        }
-                      />
-                    </div>
-
-                    {/* 浏览器指纹伪装（仅 SeleniumBase / cf-proxy 生效）*/}
-                    {browserConfig.provider === "seleniumbase" && (
-                      <div className="space-y-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
-                        <div>
-                          <p className="text-sm font-medium">浏览器指纹伪装</p>
-                          <p className="text-xs text-muted-foreground mt-0.5">
-                            把 Linux 指纹伪装成 Windows/Mac（UA、平台、WebGL、时区、语言）。
-                            Windows 伪装度更高。半吊子伪装可能反而更难过 CF，开启后请实测对比。
-                          </p>
-                        </div>
-                        <div className="space-y-1.5">
-                          <label className="text-sm font-medium">操作系统画像</label>
-                          <Select
-                            value={browserConfig.fpOs || "off"}
-                            onValueChange={(v) =>
-                              setBrowserConfig((s) => ({
-                                ...s,
-                                fpOs: v === "off" ? "" : (v as "windows" | "mac"),
-                              }))
-                            }
-                          >
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="off">关闭（真实 Linux 指纹）</SelectItem>
-                              <SelectItem value="windows">Windows（推荐）</SelectItem>
-                              <SelectItem value="mac">Mac</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        {browserConfig.fpOs && (
-                          <>
-                            <div className="flex items-center justify-between rounded-md border border-border px-3 py-2.5">
-                              <div>
-                                <p className="text-xs font-medium">按出口 IP 自动设时区/语言</p>
-                                <p className="text-[10px] text-muted-foreground">
-                                  开启后忽略下面手填的值，按代理出口 IP 自动对齐
-                                </p>
-                              </div>
-                              <Switch
-                                checked={browserConfig.fpAutoGeo}
-                                onCheckedChange={(v) =>
-                                  setBrowserConfig((s) => ({ ...s, fpAutoGeo: v }))
-                                }
-                              />
-                            </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                              <div className="space-y-1.5">
-                                <label className="text-sm font-medium">时区</label>
-                                <Input
-                                  placeholder="America/New_York（留空=自动）"
-                                  value={browserConfig.fpTimezone}
-                                  onChange={(e) =>
-                                    setBrowserConfig((s) => ({ ...s, fpTimezone: e.target.value }))
-                                  }
-                                />
-                              </div>
-                              <div className="space-y-1.5">
-                                <label className="text-sm font-medium">语言</label>
-                                <Input
-                                  placeholder="en-US（留空=自动）"
-                                  value={browserConfig.fpLocale}
-                                  onChange={(e) =>
-                                    setBrowserConfig((s) => ({ ...s, fpLocale: e.target.value }))
-                                  }
-                                />
-                              </div>
-                            </div>
-                          </>
-                        )}
                       </div>
                     )}
 
