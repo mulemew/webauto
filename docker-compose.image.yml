@@ -69,6 +69,23 @@
         start_period: 60s
       restart: unless-stopped
 
+    # Camoufox（反检测 Firefox）—— 独立 provider，不影响 cf-proxy。
+    # 在设置页或任务里把浏览器提供商选 "Camoufox" 即可使用。
+    camoufox-proxy:
+      image: ghcr.io/mulemew/webauto-camoufox-proxy:latest
+      environment:
+        PORT: "7318"
+        # virtual=虚拟显示上有头(默认); false=真有头(同一 Xvfb); true=无头(可检测)
+        CAMOUFOX_HEADLESS: "${CAMOUFOX_HEADLESS:-virtual}"
+      shm_size: 2g
+      healthcheck:
+        test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:7318/health')\" || exit 1"]
+        interval: 15s
+        timeout: 10s
+        retries: 5
+        start_period: 60s
+      restart: unless-stopped
+
     app:
       image: ghcr.io/mulemew/webauto:latest
       environment:
@@ -82,6 +99,7 @@
         BROWSERLESS_URL: "ws://browserless:3000"
         BROWSER_PROVIDER: "${BROWSER_PROVIDER:-playwright}"
         CF_PROXY_URL: "http://cf-proxy:7317"
+        CAMOUFOX_URL: "http://camoufox-proxy:7318"
         LOG_LEVEL: "${LOG_LEVEL:-info}"
         WIT_AI_TOKEN: "${WIT_AI_TOKEN:-}"
         RECAPTCHA_STT_ORDER: "${RECAPTCHA_STT_ORDER:-}"

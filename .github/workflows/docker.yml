@@ -113,3 +113,28 @@ jobs:
           labels: ${{ steps.meta-cf-proxy.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # ── Camoufox proxy image (anti-detect Firefox sidecar) ────────
+      - name: Extract metadata (camoufox-proxy)
+        id: meta-camoufox
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/webauto-camoufox-proxy
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build & push camoufox-proxy image
+        uses: docker/build-push-action@v5
+        with:
+          context: artifacts/camoufox-proxy
+          file: artifacts/camoufox-proxy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-camoufox.outputs.tags }}
+          labels: ${{ steps.meta-camoufox.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
