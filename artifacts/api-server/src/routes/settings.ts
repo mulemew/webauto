@@ -22,7 +22,7 @@ import { Router, type IRouter } from "express";
 
   const router: IRouter = Router();
 
-  const VALID_PROVIDERS: BrowserProviderType[] = ["playwright", "puppeteer", "seleniumbase"];
+  const VALID_PROVIDERS: BrowserProviderType[] = ["playwright", "puppeteer", "seleniumbase", "camoufox"];
 
   router.get("/settings/browser", async (_req, res): Promise<void> => {
       try {
@@ -51,7 +51,7 @@ import { Router, type IRouter } from "express";
       const body = req.body as Partial<BrowserProviderConfig>;
       const { provider, wsEndpoint, testUrl } = body;
       const resolvedProvider: BrowserProviderType = provider && VALID_PROVIDERS.includes(provider) ? provider : "playwright";
-      if (resolvedProvider !== "seleniumbase" && !wsEndpoint?.trim()) { res.status(400).json({ error: "WebSocket endpoint URL is required" }); return; }
+      if (resolvedProvider !== "seleniumbase" && resolvedProvider !== "camoufox" && !wsEndpoint?.trim()) { res.status(400).json({ error: "WebSocket endpoint URL is required" }); return; }
       const proxyUrl = typeof body.proxyUrl === "string" ? body.proxyUrl.trim() : "";
       const proxyType =
         typeof body.proxyType === "string" && body.proxyType.trim()

@@ -1,6 +1,6 @@
 import { logger } from "../lib/logger";
 import { SeleniumBaseProvider } from "./seleniumbase-adapter";
-import { wrapPuppeteerPage, wrapPlaywrightPage, puppeteer, chromium } from "./page-adapter";
+import { wrapPuppeteerPage, wrapPlaywrightPage, puppeteer, chromium, firefox } from "./page-adapter";
 import type { PageAdapter } from "./page-adapter";
 import { startLocalProxy, type ProxyType, type ResolvedProxy } from "./proxy-manager";
 
@@ -32,7 +32,8 @@ import { startLocalProxy, type ProxyType, type ResolvedProxy } from "./proxy-man
 export type BrowserProviderType =
   | "playwright"
   | "puppeteer"
-  | "seleniumbase";
+  | "seleniumbase"
+  | "camoufox";
 
 export interface BrowserProviderConfig {
     provider: BrowserProviderType;
@@ -683,6 +684,115 @@ class PlaywrightCDPProvider implements BrowserProvider {
 
 // ── Factory ───────────────────────────────────────────────────────────────────
 
+// ── Camoufox provider (anti-detect Firefox via the camoufox-proxy sidecar) ──────
+// A SEPARATE provider. Does not touch the SeleniumBase cf-proxy path. The sidecar
+// launches a Camoufox Playwright server per session with the requested fingerprint/
+// proxy; here we just firefox.connect() to it and drive it with the existing adapter.
+const CAMOUFOX_URL = (process.env.CAMOUFOX_URL ?? "http://camoufox-proxy:7318").replace(/\/$/, "");
+
+function parseProxyForCamoufox(proxyUrl?: string): { server: string; username?: string; password?: string } | undefined {
+  if (!proxyUrl || !proxyUrl.trim()) return undefined;
+  try {
+    const u = new URL(proxyUrl.trim());
+    const out: { server: string; username?: string; password?: string } = { server: `${u.protocol}//${u.host}` };
+    if (u.username) out.username = decodeURIComponent(u.username);
+    if (u.password) out.password = decodeURIComponent(u.password);
+    return out;
+  } catch { return undefined; }
+}
+
+class CamoufoxProvider implements BrowserProvider {
+  private readonly _browsers = new Set<import("playwright-core").Browser>();
+  private readonly _ids = new Map<import("playwright-core").Browser, string>();
+  constructor(private readonly config: BrowserProviderConfig) {}
+
+  private async release(id: string): Promise<void> {
+    try {
+      await fetch(`${CAMOUFOX_URL}/release`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
+      });
+    } catch { /* ignore */ }
+  }
+
+  async newPage(): Promise<PageAdapter> {
+    const vp = resolveViewport(this.config);
+    const fp = this.config.fingerprint ?? {};
+    const res = await fetch(`${CAMOUFOX_URL}/launch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        os: fp.os || "",
+        locale: fp.locale || "",
+        timezone: fp.timezone || "",
+        screen: `${vp.width}x${vp.height}`,
+        proxy: parseProxyForCamoufox(this.config.proxyUrl),
+      }),
+    });
+    if (!res.ok) throw new Error(`camoufox-proxy /launch failed: ${res.status} ${await res.text().catch(() => "")}`);
+    const { id, ws } = (await res.json()) as { id: string; ws: string };
+
+    let browser: import("playwright-core").Browser;
+    try {
+      browser = (await firefox.connect(ws)) as unknown as import("playwright-core").Browser;
+    } catch (err) {
+      await this.release(id);
+      throw err;
+    }
+    this._browsers.add(browser);
+    this._ids.set(browser, id);
+
+    const context = await browser.newContext({
+      viewport: vp,
+      ...(this.config.storageState ? { storageState: this.config.storageState as never } : {}),
+      ignoreHTTPSErrors: this.config.ignoreHTTPS ?? false,
+    });
+    if (this.config.onContextReady) this.config.onContextReady(async () => context.storageState());
+    context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+    context.setDefaultTimeout(NAV_TIMEOUT_MS);
+    if (this.config.blockAds) {
+      await context.route((url) => AD_BLOCK_RE.test(url.hostname), (route) => route.abort());
+    }
+
+    const page = await context.newPage();
+    page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+    page.setDefaultTimeout(NAV_TIMEOUT_MS);
+
+    const makeAdapter = (p: import("playwright-core").Page): PageAdapter => {
+      p.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+      p.setDefaultTimeout(NAV_TIMEOUT_MS);
+      const a = wrapPlaywrightPage(p);
+      a.close = async () => { await p.close().catch(() => {}); };
+      a.waitForNewPage = async (opts) => {
+        const np = await context.waitForEvent("page", { timeout: opts?.timeout ?? 30000 });
+        try { await np.waitForLoadState("domcontentloaded", { timeout: 5000 }); } catch { /* ignore */ }
+        return makeAdapter(np);
+      };
+      return a;
+    };
+
+    const adapter = makeAdapter(page);
+    adapter.close = async () => {
+      this._browsers.delete(browser);
+      this._ids.delete(browser);
+      await page.close().catch(() => {});
+      await context.close().catch(() => {});
+      await browser.close().catch(() => {});
+      await this.release(id);
+    };
+    return adapter;
+  }
+
+  async close(): Promise<void> {
+    await Promise.allSettled([...this._browsers].map(async (b) => {
+      const id = this._ids.get(b);
+      await b.close().catch(() => {});
+      if (id) await this.release(id);
+    }));
+    this._browsers.clear();
+    this._ids.clear();
+  }
+}
+
 /**
    * Builds the final WebSocket URL by injecting query parameters from the
    * provider config. Existing params are never overwritten, so values
@@ -749,6 +859,10 @@ class PlaywrightCDPProvider implements BrowserProvider {
 
   export function createBrowserProvider(config: BrowserProviderConfig): BrowserProvider {
   const p = config.provider ?? "playwright";
+
+  if (p === "camoufox") {
+    return new CamoufoxProvider(config);
+  }
 
   if (p === "seleniumbase") {
       // ── cf-proxy base URL resolution ──────────────────────────────────────

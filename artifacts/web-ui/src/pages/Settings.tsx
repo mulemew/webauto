@@ -255,7 +255,7 @@ const INTERVAL_LABELS: Record<PollingIntervalMs, string> = {
   5000: "5 seconds — slower, reduced network usage",
 };
 
-type BrowserProviderType = "playwright" | "puppeteer" | "seleniumbase";
+type BrowserProviderType = "playwright" | "puppeteer" | "seleniumbase" | "camoufox";
 
 interface BrowserConfig {
     provider: BrowserProviderType;
@@ -311,6 +311,14 @@ const PROVIDER_OPTIONS: Array<{
     description: "Cloudflare bypass via SeleniumBase Undetected-Chrome. Connects to the bundled cf-proxy service. Best for sites with Cloudflare JS challenge or Turnstile. Enter the cf-proxy HTTP endpoint, not a WebSocket URL.",
     placeholder: "http://cf-proxy:7317",
     hint: "Docker Compose default: http://cf-proxy:7317 — cf-proxy starts automatically with docker compose up -d --build. No extra flags needed.",
+  },
+  {
+    value: "camoufox",
+    label: "Camoufox (anti-detect Firefox)",
+    tag: "cloudflare",
+    description: "Engine-level fingerprint spoofing (canvas/WebGL/screen/UA) via Camoufox, a patched Firefox. Runs in its own camoufox-proxy sidecar. No WebSocket URL needed. Separate from cf-proxy — pick per task.",
+    placeholder: "",
+    hint: "Docker Compose default: camoufox-proxy starts automatically. No endpoint to configure.",
   },
 ];
 
