@@ -123,10 +123,15 @@ export default function TaskDetail() {
 
   // ── Browser config (fingerprint + proxy) for the right-column info cards ──
   const bcfg = (stableTask?.browserConfig ?? null) as
-    | { proxyUrl?: string | null; proxyType?: string | null;
+    | { proxyUrl?: string | null; proxyType?: string | null; proxyProfileId?: number | null; fingerprintProfileId?: number | null;
         fingerprint?: { os?: string | null; timezone?: string | null; locale?: string | null; autoGeo?: boolean | null } | null }
     | null;
-  const hasProxy = !!(bcfg && ((bcfg.proxyUrl && bcfg.proxyUrl.trim()) || bcfg.proxyType === "warp"));
+  // Server-resolved display fields — a saved profile is referenced by id (inline
+  // fingerprint/proxyUrl are null then), so the raw browserConfig can't render it.
+  const proxyLabel = (stableTask as unknown as { proxyLabel?: string | null })?.proxyLabel ?? null;
+  const fingerprintOsResolved = (stableTask as unknown as { fingerprintOs?: string | null })?.fingerprintOs ?? null;
+  const fingerprintLabel = (stableTask as unknown as { fingerprintLabel?: string | null })?.fingerprintLabel ?? null;
+  const hasProxy = !!(bcfg && ((bcfg.proxyUrl && bcfg.proxyUrl.trim()) || bcfg.proxyType === "warp" || bcfg.proxyProfileId));
 
   type ProxyGeo = { configured: boolean; direct?: boolean; ok?: boolean; error?: string; proxyType?: string;
     exitIp?: string; country?: string; countryCode?: string; region?: string; city?: string; isp?: string; timezone?: string };
@@ -1153,6 +1158,12 @@ export default function TaskDetail() {
                   </div>
                 ) : proxyGeo?.ok ? (
                   <>
+                    {proxyLabel && (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-muted-foreground">Proxy</span>
+                        <span className="text-sm font-mono font-semibold text-right">{proxyLabel}</span>
+                      </div>
+                    )}
                     {proxyGeo.direct && (
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs text-muted-foreground">Source</span>
@@ -1214,7 +1225,20 @@ export default function TaskDetail() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="pt-4 space-y-3 text-sm">
-                {bcfg?.fingerprint?.os ? (
+                {fingerprintLabel ? (
+                  // Saved fingerprint profile (e.g. a generated real fingerprint). The
+                  // details live in the profile; here we show which one is bound.
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-muted-foreground">Saved profile</span>
+                      <span className="text-sm font-mono font-semibold">{fingerprintLabel}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-muted-foreground">OS</span>
+                      <span className="text-sm font-mono font-semibold capitalize">{fingerprintOsResolved || "linux"}</span>
+                    </div>
+                  </>
+                ) : bcfg?.fingerprint?.os ? (
                   <>
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs text-muted-foreground">OS spoof</span>

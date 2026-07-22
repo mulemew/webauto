@@ -1,7 +1,7 @@
 import path from "path";
 import fs from "fs";
 import { Router, type IRouter } from "express";
-import { db, tasksTable, credentialsTable, savedCredentialsTable, logsTable, proxyProfilesTable, eq, desc, count, and, gte, sql } from "@workspace/db";
+import { db, tasksTable, credentialsTable, savedCredentialsTable, logsTable, proxyProfilesTable, fingerprintProfilesTable, eq, desc, count, and, gte, sql } from "@workspace/db";
 import {
   ListTasksResponse,
   CreateTaskBody,
@@ -19,7 +19,7 @@ import {
 } from "@workspace/api-zod";
 import { execFile } from "child_process";
 import { encrypt, decrypt } from "../lib/encryption";
-import { startLocalProxy } from "../automation/proxy-manager";
+import { startLocalProxy, resolveProxyType } from "../automation/proxy-manager";
 import { runTask, isTaskRunning, requestCancelTask } from "../automation/runner";
 import { getTaskEmitter, getTaskEventBuffer, type TaskStreamEvent } from "../lib/taskEvents";
 import { rescheduleTask, unscheduleTask } from "../scheduler";
@@ -134,19 +134,51 @@ async function persistExitGeo(taskId: number): Promise<ExitGeo | null> {
   }
 }
 
-/** Map of proxyProfileId → the profile's cached exit geo. Built once per list/detail
- *  response so profile-based tasks show the profile's (refreshable) geo, not a copy. */
-async function proxyProfileGeoMap(): Promise<Map<number, unknown>> {
-  const rows = await db.select({ id: proxyProfilesTable.id, exitGeo: proxyProfilesTable.exitGeo }).from(proxyProfilesTable);
-  return new Map(rows.map((r) => [r.id, r.exitGeo]));
+/** Saved-profile lookups, built once per list/detail response so profile-based tasks
+ *  render the profile's live name/os/geo (a refresh updates every task at once) rather
+ *  than a stale copy baked into the task. */
+type ProfileMaps = {
+  proxy: Map<number, { name: string; exitGeo: unknown }>;
+  fingerprint: Map<number, { name: string; os: string }>;
+};
+async function loadProfileMaps(): Promise<ProfileMaps> {
+  const [pp, fp] = await Promise.all([
+    db.select({ id: proxyProfilesTable.id, name: proxyProfilesTable.name, exitGeo: proxyProfilesTable.exitGeo }).from(proxyProfilesTable),
+    db.select({ id: fingerprintProfilesTable.id, name: fingerprintProfilesTable.name, os: fingerprintProfilesTable.os }).from(fingerprintProfilesTable),
+  ]);
+  return {
+    proxy: new Map(pp.map((r) => [r.id, { name: r.name, exitGeo: r.exitGeo }])),
+    fingerprint: new Map(fp.map((r) => [r.id, { name: r.name, os: r.os }])),
+  };
 }
+type TaskBC = { proxyProfileId?: number | null; fingerprintProfileId?: number | null; fingerprint?: { os?: string | null } | null } | null | undefined;
 /** A task's exit geo for display: the saved proxy profile's cached geo when the task
  *  uses one (so a profile refresh updates every task at once), else the task's own
  *  cached exit_geo (inline proxy / no proxy). */
-function displayExitGeo(task: { exitGeo?: unknown; browserConfig?: unknown } | undefined, geoMap: Map<number, unknown>): unknown {
-  const pid = (task?.browserConfig as { proxyProfileId?: number | null } | null | undefined)?.proxyProfileId;
-  if (pid && geoMap.has(pid)) return geoMap.get(pid) ?? null;
+function displayExitGeo(task: { exitGeo?: unknown; browserConfig?: unknown } | undefined, maps: ProfileMaps): unknown {
+  const pid = (task?.browserConfig as TaskBC)?.proxyProfileId;
+  if (pid && maps.proxy.has(pid)) return maps.proxy.get(pid)!.exitGeo ?? null;
   return task?.exitGeo ?? null;
+}
+/** The saved proxy profile's NAME when the task uses one — the flag tooltip shows this
+ *  instead of raw exit details. Null for inline/no proxy. */
+function proxyLabel(task: { browserConfig?: unknown } | undefined, maps: ProfileMaps): string | null {
+  const pid = (task?.browserConfig as TaskBC)?.proxyProfileId;
+  return pid && maps.proxy.has(pid) ? maps.proxy.get(pid)!.name : null;
+}
+/** The fingerprint OS to show as the platform badge: from the saved fingerprint profile
+ *  when one is selected (referenced by id → inline fingerprint is null), else the inline
+ *  fingerprint's os. Empty string = honest Linux. */
+function fingerprintOs(task: { browserConfig?: unknown } | undefined, maps: ProfileMaps): string | null {
+  const bc = task?.browserConfig as TaskBC;
+  const fid = bc?.fingerprintProfileId;
+  if (fid && maps.fingerprint.has(fid)) return maps.fingerprint.get(fid)!.os;
+  return bc?.fingerprint?.os ?? null;
+}
+/** The saved fingerprint profile's NAME when the task uses one (for the detail card). */
+function fingerprintLabel(task: { browserConfig?: unknown } | undefined, maps: ProfileMaps): string | null {
+  const fid = (task?.browserConfig as TaskBC)?.fingerprintProfileId;
+  return fid && maps.fingerprint.has(fid) ? maps.fingerprint.get(fid)!.name : null;
 }
 
 /** One-time background fill of exit_geo for tasks that don't have it yet (tasks that
@@ -320,8 +352,13 @@ router.get("/tasks", async (req, res): Promise<void> => {
   // Re-attach the cached exit geo after schema parse (the generated response schema
   // doesn't model it) so the list can render the exit flag without a live lookup.
   const parsed = ListTasksResponse.parse(tasks);
-  const geoMap = await proxyProfileGeoMap();
-  res.json(parsed.map((p, i) => ({ ...p, exitGeo: displayExitGeo(tasks[i], geoMap) })));
+  const maps = await loadProfileMaps();
+  res.json(parsed.map((p, i) => ({
+    ...p,
+    exitGeo: displayExitGeo(tasks[i], maps),
+    proxyLabel: proxyLabel(tasks[i], maps),
+    fingerprintOs: fingerprintOs(tasks[i], maps),
+  })));
 });
 
 router.post("/tasks", async (req, res): Promise<void> => {
@@ -596,8 +633,15 @@ router.get("/tasks/:id/logs/history", async (req, res): Promise<void> => {
     credentialsData = { username: loginCredentials[0].username, hasTotpSecret: loginCredentials[0].hasTotpSecret };
   }
 
-  const geoMap = await proxyProfileGeoMap();
-  res.json({ ...GetTaskResponse.parse({ ...task, credentials: credentialsData }), loginCredentials, exitGeo: displayExitGeo(task, geoMap) });
+  const maps = await loadProfileMaps();
+  res.json({
+    ...GetTaskResponse.parse({ ...task, credentials: credentialsData }),
+    loginCredentials,
+    exitGeo: displayExitGeo(task, maps),
+    proxyLabel: proxyLabel(task, maps),
+    fingerprintOs: fingerprintOs(task, maps),
+    fingerprintLabel: fingerprintLabel(task, maps),
+  });
 });
 
   // Resolve the EXIT IP + geolocation of the task's configured proxy, live. The
@@ -620,13 +664,20 @@ router.get("/tasks/:id/logs/history", async (req, res): Promise<void> => {
       return;
     }
     const refresh = req.query.refresh === "1" || req.query.refresh === "true";
-    // Tasks that use a saved proxy profile read (and refresh) the PROFILE's geo, which
-    // is shared across every task on that proxy. Manage it from the proxy page instead
-    // of re-testing per task through a proxyUrl the task no longer stores inline.
+    // Tasks that use a saved proxy profile resolve the PROFILE's geo, shared across every
+    // task on that proxy. Re-detect (?refresh=1) does a LIVE lookup through the profile's
+    // proxy and persists it back to the profile, so all its tasks update at once; a normal
+    // open just returns the profile's cached geo (no proxy started).
     const pid = (task.browserConfig as { proxyProfileId?: number | null } | null)?.proxyProfileId;
     if (pid) {
       const [pp] = await db.select().from(proxyProfilesTable).where(eq(proxyProfilesTable.id, pid));
-      if (pp) { res.json(pp.exitGeo ?? { configured: false }); return; }
+      if (pp) {
+        if (!refresh) { res.json(pp.exitGeo ?? { configured: false }); return; }
+        const geo = await resolveExitGeo({ proxyUrl: pp.url, proxyType: resolveProxyType({ proxyUrl: pp.url }) ?? undefined });
+        await db.update(proxyProfilesTable).set({ exitGeo: geo, geoUpdatedAt: new Date() }).where(eq(proxyProfilesTable.id, pid)).catch(() => {});
+        res.json(geo);
+        return;
+      }
     }
     const stored = (task.exitGeo ?? null) as ExitGeo | null;
     if (!refresh && stored) {
@@ -743,8 +794,14 @@ router.put("/tasks/:id", async (req, res): Promise<void> => {
   rescheduleTask(updated.id, updated.cronExpression);
   // Re-resolve the exit geo in the background — proxy/config may have changed.
   void persistExitGeo(updated.id);
-  const geoMapU = await proxyProfileGeoMap();
-  res.json({ ...GetTaskResponse.parse(updated), exitGeo: displayExitGeo(updated, geoMapU) });
+  const mapsU = await loadProfileMaps();
+  res.json({
+    ...GetTaskResponse.parse(updated),
+    exitGeo: displayExitGeo(updated, mapsU),
+    proxyLabel: proxyLabel(updated, mapsU),
+    fingerprintOs: fingerprintOs(updated, mapsU),
+    fingerprintLabel: fingerprintLabel(updated, mapsU),
+  });
 });
 
 router.delete("/tasks/:id", async (req, res): Promise<void> => {

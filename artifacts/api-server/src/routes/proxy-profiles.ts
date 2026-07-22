@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, proxyProfilesTable, tasksTable, eq } from "@workspace/db";
 import { logger } from "../lib/logger";
 import { resolveExitGeo } from "./tasks";
+import { resolveProxyType } from "../automation/proxy-manager";
 import { z } from "zod";
 
 const router: IRouter = Router();
@@ -16,16 +17,14 @@ const ProxyUrl = z.string().min(1).refine(
 const CreateBody = z.object({ name: z.string().min(1), url: ProxyUrl });
 const UpdateBody = z.object({ name: z.string().min(1).optional(), url: ProxyUrl.optional() });
 
-/** Map a proxy URL's scheme to the proxyType that resolveExitGeo/startLocalProxy expect. */
-function inferProxyType(url: string): string {
-  const scheme = (url.split("://")[0] || "").toLowerCase();
-  return scheme === "socks5h" ? "socks5" : scheme;
-}
-
 /** Resolve a profile's exit geo through its own proxy URL (best-effort, never throws). */
 async function resolveProfileGeo(url: string): Promise<unknown> {
   try {
-    return await resolveExitGeo({ proxyUrl: url, proxyType: inferProxyType(url) });
+    // Canonicalise the scheme the same way the runner does — e.g. hysteria2:// → "hy2",
+    // socks5h → "socks5" — so sing-box's buildOutbound recognises it. A raw scheme like
+    // "hysteria2" is NOT a valid sing-box proxy type and would fail the geo check.
+    const proxyType = resolveProxyType({ proxyUrl: url }) ?? undefined;
+    return await resolveExitGeo({ proxyUrl: url, proxyType });
   } catch (err) {
     return { configured: true, ok: false, error: err instanceof Error ? err.message : String(err), at: new Date().toISOString() };
   }

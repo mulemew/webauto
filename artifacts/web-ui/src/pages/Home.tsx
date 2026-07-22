@@ -173,12 +173,17 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
   // (resolved in the background on create/update). No live query on render.
   // Rendered as an <img> (flagcdn) rather than a flag emoji — Windows browsers
   // don't render regional-indicator flag emoji, they show the letters instead.
-  function TaskExitFlag({ geo }: { geo?: TaskGeo | null }) {
+  function TaskExitFlag({ geo, label }: { geo?: TaskGeo | null; label?: string | null }) {
     const cc = geo?.countryCode?.toLowerCase();
     if (!geo?.ok || !cc || cc.length !== 2) return null;
     const loc = [geo.city, geo.region, geo.country].filter(Boolean).join(", ");
+    // When the task uses a saved proxy profile, show the profile NAME (from the proxy
+    // page) rather than the raw exit IP/geo details.
+    const tip = label
+      ? label
+      : `${geo.direct ? "Host exit IP" : "Proxy exit IP"}: ${geo.exitIp ?? ""}${loc ? " · " + loc : ""}`;
     return (
-      <span className="flex items-center border-l border-border pl-3" title={`${geo.direct ? "Host exit IP" : "Proxy exit IP"}: ${geo.exitIp ?? ""}${loc ? " · " + loc : ""}`}>
+      <span className="flex items-center border-l border-border pl-3" title={tip}>
         <img
           src={`https://flagcdn.com/20x15/${cc}.png`}
           srcSet={`https://flagcdn.com/40x30/${cc}.png 2x`}
@@ -726,14 +731,19 @@ export default function Home() {
                           })()}
                       </span>
                       {(() => {
-                        const { Icon, label } = osMeta((task as unknown as { browserConfig?: { fingerprint?: { os?: string | null } | null } }).browserConfig?.fingerprint?.os);
+                        // Resolved server-side: from the saved fingerprint profile when the
+                        // task uses one (inline fingerprint is null then), else inline os.
+                        const { Icon, label } = osMeta((task as unknown as { fingerprintOs?: string | null }).fingerprintOs);
                         return (
                           <span className="flex items-center border-l border-border pl-3" title={`Fingerprint: ${label}`}>
                             <Icon className="h-3.5 w-3.5 text-muted-foreground" />
                           </span>
                         );
                       })()}
-                      <TaskExitFlag geo={(task as unknown as { exitGeo?: TaskGeo | null }).exitGeo} />
+                      <TaskExitFlag
+                        geo={(task as unknown as { exitGeo?: TaskGeo | null }).exitGeo}
+                        label={(task as unknown as { proxyLabel?: string | null }).proxyLabel}
+                      />
                       <span className="flex items-center gap-1 border-l border-border pl-3">
                         <LastRunBadge lastRun={lastRunMap.get(task.id)} />
                       </span>
