@@ -327,21 +327,31 @@ router.get("/tasks/next-runs", async (_req, res): Promise<void> => {
 
     const now = new Date();
     const result = taskRows
-      .filter((t) => t.cronExpression)
+      // Include tasks with a schedule OR a pending nextRunAt (e.g. a manual task that
+      // failed and booked a retry) so the retry time is visible.
+      .filter((t) => t.cronExpression || t.nextRunAt)
       .map((t) => {
+        // A pending retry (or one-shot) nextRunAt in the future — this is what will
+        // actually run next when it is sooner than the regular schedule.
+        const retryNext = t.nextRunAt && new Date(t.nextRunAt) > now ? new Date(t.nextRunAt) : null;
+        // Manual task (no schedule): the only next run is the pending retry, if any.
+        if (!t.cronExpression) {
+          return { taskId: t.id, nextRunAt: retryNext ? retryNext.toISOString() : null };
+        }
         // @after_completion tasks: nextRunAt is written to DB by runner after each run;
         // getNextCronRun does not understand this format.
-        if (t.cronExpression?.startsWith("@after_completion:")) {
+        if (t.cronExpression.startsWith("@after_completion:")) {
           return { taskId: t.id, nextRunAt: t.nextRunAt ? new Date(t.nextRunAt).toISOString() : null };
         }
         // @random: tasks: next run time is written to DB by scheduleWindow in scheduler.
-        if (t.cronExpression?.startsWith("@random:")) {
+        if (t.cronExpression.startsWith("@random:")) {
           return { taskId: t.id, nextRunAt: t.nextRunAt ? new Date(t.nextRunAt).toISOString() : null };
         }
-        return {
-          taskId: t.id,
-          nextRunAt: getNextCronRun(t.cronExpression!, now)?.toISOString() ?? null,
-        };
+        // Standard cron: show the SOONER of the pending retry and the cron's next run,
+        // so a booked retry surfaces instead of the further-off scheduled time.
+        const cronNext = getNextCronRun(t.cronExpression, now) ?? null;
+        const next = retryNext && cronNext ? (retryNext < cronNext ? retryNext : cronNext) : (retryNext ?? cronNext);
+        return { taskId: t.id, nextRunAt: next ? next.toISOString() : null };
       });
 
     res.json(result);
