@@ -92,6 +92,19 @@ import { pool } from "@workspace/db";
   ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "proxy_profile_id" integer;
   ALTER TABLE "proxy_profiles" ADD COLUMN IF NOT EXISTS "exit_geo" jsonb;
   ALTER TABLE "proxy_profiles" ADD COLUMN IF NOT EXISTS "geo_updated_at" timestamptz;
+  CREATE TABLE IF NOT EXISTS "provider_instances" (
+    "id"              serial      PRIMARY KEY,
+    "name"            text        NOT NULL,
+    "family"          text        NOT NULL,
+    "subtype"         text        NOT NULL DEFAULT '',
+    "url"             text        NOT NULL,
+    "enabled"         boolean     NOT NULL DEFAULT true,
+    "healthy"         boolean,
+    "last_error"      text,
+    "last_checked_at" timestamptz,
+    "created_at"      timestamptz NOT NULL DEFAULT now(),
+    "updated_at"      timestamptz NOT NULL DEFAULT now()
+  );
   `;
 
   export async function runMigrations(): Promise<void> {

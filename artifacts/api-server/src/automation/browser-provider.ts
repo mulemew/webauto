@@ -39,6 +39,13 @@ export interface BrowserProviderConfig {
     provider: BrowserProviderType;
     /** WebSocket endpoint — required for all providers */
     wsEndpoint?: string;
+    /**
+     * Per-task backend URL chosen by the provider-instance auto-distributor (the runner
+     * picks the least-busy healthy instance of the task's family). Overrides the family's
+     * env default: ws(s):// for browserless, http(s):// for sb (cf-proxy) / fox (camoufox).
+     * Unset → fall back to the env default (single-instance behaviour, unchanged).
+     */
+    instanceUrl?: string;
     /** URL used for the connection test in the Settings page */
     testUrl?: string;
     /**
@@ -700,10 +707,10 @@ const CAMOUFOX_URL = (process.env.CAMOUFOX_URL ?? "http://camoufox-proxy:7318").
  *  127.0.0.1, or 0.0.0.0) that is only valid inside the camoufox-proxy container. This
  *  api-server runs in a separate container, so point the ws at the reachable service
  *  host from CAMOUFOX_URL (camoufox-proxy), keeping the port + path launchServer chose. */
-function reachableCamoufoxWs(ws: string): string {
+function reachableCamoufoxWs(ws: string, baseUrl: string): string {
   try {
     const u = new URL(ws);
-    u.hostname = new URL(CAMOUFOX_URL).hostname;
+    u.hostname = new URL(baseUrl).hostname;
     return u.toString();
   } catch {
     return ws;
@@ -724,11 +731,15 @@ function parseProxyForCamoufox(proxyUrl?: string): { server: string; username?: 
 class CamoufoxProvider implements BrowserProvider {
   private readonly _browsers = new Set<import("playwright-core").Browser>();
   private readonly _ids = new Map<import("playwright-core").Browser, string>();
-  constructor(private readonly config: BrowserProviderConfig) {}
+  // A registered fox instance (auto-distributed) wins over the env default.
+  private readonly baseUrl: string;
+  constructor(private readonly config: BrowserProviderConfig) {
+    this.baseUrl = config.instanceUrl?.trim().replace(/\/$/, "") || CAMOUFOX_URL;
+  }
 
   private async release(id: string): Promise<void> {
     try {
-      await fetch(`${CAMOUFOX_URL}/release`, {
+      await fetch(`${this.baseUrl}/release`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
       });
     } catch { /* ignore */ }
@@ -737,7 +748,7 @@ class CamoufoxProvider implements BrowserProvider {
   async newPage(): Promise<PageAdapter> {
     const vp = resolveViewport(this.config);
     const fp = this.config.fingerprint ?? {};
-    const res = await fetch(`${CAMOUFOX_URL}/launch`, {
+    const res = await fetch(`${this.baseUrl}/launch`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -753,7 +764,7 @@ class CamoufoxProvider implements BrowserProvider {
     });
     if (!res.ok) throw new Error(`camoufox-proxy /launch failed: ${res.status} ${await res.text().catch(() => "")}`);
     const { id, ws } = (await res.json()) as { id: string; ws: string };
-    const wsUrl = reachableCamoufoxWs(ws);
+    const wsUrl = reachableCamoufoxWs(ws, this.baseUrl);
 
     let browser: import("playwright-core").Browser;
     try {
@@ -898,13 +909,20 @@ class CamoufoxProvider implements BrowserProvider {
       // settings (e.g. a leftover browserless ws:// / http:// endpoint) from
       // pointing every session at a non-cf-proxy host and failing the whole
       // batch with "fetch failed".
-      const envBaseUrl = (process.env.CF_PROXY_URL ?? "http://cf-proxy:7317").replace(/\/$/, "");
+      // A registered sb instance (auto-distributed) wins over the env default so
+      // concurrent tasks fan out across separate cf-proxy containers.
+      const envBaseUrl = (config.instanceUrl?.trim().replace(/\/$/, "")) || (process.env.CF_PROXY_URL ?? "http://cf-proxy:7317").replace(/\/$/, "");
       const endpoint = config.wsEndpoint?.trim();
       const overrideCandidate =
         endpoint && /^https?:\/\//i.test(endpoint) ? endpoint.replace(/\/$/, "") : undefined;
       return new SeleniumBaseProvider(envBaseUrl, config, overrideCandidate);
     }
 
+    // browserless (playwright/puppeteer): a registered instance's CDP ws wins over the
+    // task's inline wsEndpoint / the env default.
+    if (config.instanceUrl?.trim()) {
+      config = { ...config, wsEndpoint: config.instanceUrl.trim() };
+    }
     if (!config.wsEndpoint) {
       throw new Error(
         `BROWSER_PROVIDER="${p}" requires a WebSocket endpoint. ` +

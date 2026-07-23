@@ -4,6 +4,7 @@ import path from "path";
   import { logger } from "../lib/logger";
   import { decrypt } from "../lib/encryption";
   import { createBrowserProvider } from "./browser-provider";
+  import { pickInstance, releaseInstance, providerToFamily } from "./provider-instances";
   import { createCaptchaSolverFromConfig } from "./captcha-solver";
   import { loadBrowserConfig, loadCaptchaConfig, loadTaskTimeoutConfig, loadConcurrencyConfig } from "../lib/appSettings";
   import { emitTaskProgress, emitTaskDone, getTaskEmitter, clearTaskEventBuffer } from "../lib/taskEvents";
@@ -247,6 +248,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
     let outerScreenshotPath: string | undefined;
     emitTaskProgress(taskId, "Task started - fetching configuration-¦");
     let semaphoreAcquired = false;
+    let assignedInstanceId: number | null = null;
     const collectedStepLogs: Array<{ stepIndex: number; type: string; success: boolean; message: string; screenshotPath?: string; durationMs?: number }> = [];
 
     try {
@@ -370,6 +372,21 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
           }
         }
         browserConfig.onContextReady = (dumper) => { dumpStorageState = dumper; };
+      }
+
+      // ── Provider-instance auto-distribution ─────────────────────────────────
+      // Spread concurrent tasks across registered backend instances of this provider's
+      // family (least-busy healthy one) so they don't share one backend's resources
+      // (e.g. cf-proxy's single Xvfb mouse). No instances registered → env default.
+      const _fam = providerToFamily(browserConfig.provider);
+      if (_fam) {
+        const inst = await pickInstance(_fam.family, _fam.subtype);
+        if (inst) {
+          assignedInstanceId = inst.id;
+          browserConfig.instanceUrl = inst.url;
+          emitTaskProgress(taskId, `Using provider instance: ${inst.name}`);
+          logger.info({ taskId, instance: inst.name, url: inst.url }, "Task assigned to provider instance");
+        }
       }
 
       const browserProvider = createBrowserProvider(browserConfig);
@@ -828,6 +845,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
       runningTasks.delete(taskId);
       cancelRequested.delete(taskId);
       if (semaphoreAcquired) releaseSemaphore();
+      if (assignedInstanceId !== null) releaseInstance(assignedInstanceId);
     }
   }
 
