@@ -1,5 +1,6 @@
-import { db, providersTable, eq } from "@workspace/db";
+import { db, providersTable, settingsTable, tasksTable, eq } from "@workspace/db";
 import { logger } from "../lib/logger";
+import { loadBrowserConfig, loadConcurrencyConfig } from "../lib/appSettings";
 
 /**
  * Named browser backends (the "Providers" page). A task picks one by id
@@ -54,6 +55,49 @@ export async function refreshProviderHealth(id: number) {
     .where(eq(providersTable.id, id))
     .returning();
   return updated ?? null;
+}
+
+const SEED_FLAG_KEY = "providersSeeded";
+
+/** One-time migration: turn the CURRENT Settings backend into a named provider so the
+ *  Providers page isn't empty after the config moved out of Settings. Runs once ever
+ *  (a settings flag guards it), so later manual deletions aren't undone. */
+export async function seedProvidersFromSettings(): Promise<void> {
+  try {
+    const [flag] = await db.select().from(settingsTable).where(eq(settingsTable.key, SEED_FLAG_KEY));
+    if (flag) return;
+
+    const existing = await db.select({ id: providersTable.id }).from(providersTable).limit(1);
+    if (existing.length === 0) {
+      const cfg = await loadBrowserConfig();
+      // Every backend TYPE actually in use = the Settings default + each task's override.
+      const types = new Set<string>([cfg.provider ?? "playwright"]);
+      const tasks = await db.select({ bc: tasksTable.browserConfig }).from(tasksTable);
+      for (const t of tasks) {
+        const p = (t.bc as { provider?: string } | null)?.provider;
+        if (p) types.add(p);
+      }
+      // Resolve each type's backend URL: sb/camoufox behind their sidecar env URLs;
+      // playwright/puppeteer use the Settings wsEndpoint (or BROWSERLESS_URL).
+      const urlFor = (type: string): string => {
+        if (type === "seleniumbase") return (process.env.CF_PROXY_URL ?? "http://cf-proxy:7317").replace(/\/$/, "");
+        if (type === "camoufox") return (process.env.CAMOUFOX_URL ?? "http://camoufox-proxy:7318").replace(/\/$/, "");
+        return ((cfg.wsEndpoint || process.env.BROWSERLESS_URL) ?? "").replace(/\/$/, "");
+      };
+      const conc = Math.max(1, (await loadConcurrencyConfig()).maxConcurrent);
+      for (const type of types) {
+        const url = urlFor(type);
+        if (!url) continue;
+        const { healthy, error } = await checkProviderHealth({ type, url });
+        await db.insert(providersTable).values({ name: `Settings（${type}）`, type, url, concurrency: conc, enabled: true, healthy, lastError: error, lastCheckedAt: new Date() });
+        logger.info({ type, url, concurrency: conc }, "Seeded provider from an in-use backend");
+      }
+    }
+    await db.insert(settingsTable).values({ key: SEED_FLAG_KEY, value: "1" })
+      .onConflictDoUpdate({ target: settingsTable.key, set: { value: "1" } });
+  } catch (err) {
+    logger.warn({ err }, "seedProvidersFromSettings failed");
+  }
 }
 
 /** Poll every enabled provider's health so the page + selection reflect reachability. */

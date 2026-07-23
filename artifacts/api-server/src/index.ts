@@ -6,7 +6,7 @@
   import { logger } from "./lib/logger";
   import { initScheduler } from "./scheduler";
   import { backfillExitGeo } from "./routes/tasks";
-  import { startProviderHealthPolling } from "./automation/providers";
+  import { startProviderHealthPolling, seedProvidersFromSettings } from "./automation/providers";
   import { installSignalHandlers } from "./lib/child-registry";
   import { runMigrations } from "./lib/migrations";
   import { hasStoredPassword, initPassword } from "./lib/passwordStore";
@@ -70,7 +70,9 @@
     await initScheduler();
     // Fill exit-geo for pre-existing tasks in the background (non-blocking).
     void backfillExitGeo();
-    // Keep provider health fresh so the Providers page reflects reachability.
+    // One-time: seed a provider from the current Settings backend so the page isn't empty
+    // after the config moved out of Settings; then keep provider health fresh.
+    await seedProvidersFromSettings();
     startProviderHealthPolling();
   });
   
