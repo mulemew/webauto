@@ -12,6 +12,7 @@ export type ResolvedProvider = {
   id: number; name: string; type: string; url: string; concurrency: number;
   stealth: boolean | null; blockAds: boolean | null; ignoreHttps: boolean | null;
   sessionTimeoutMs: number | null; viewportWidth: number | null; viewportHeight: number | null;
+  humanize: boolean | null; blockWebrtc: boolean | null;
 };
 
 /** Load a provider by id (only if enabled). Null when missing/disabled → caller falls
@@ -24,6 +25,7 @@ export async function resolveProvider(providerId: number | null | undefined): Pr
     id: p.id, name: p.name, type: p.type, url: p.url, concurrency: Math.max(1, p.concurrency),
     stealth: p.stealth, blockAds: p.blockAds, ignoreHttps: p.ignoreHttps,
     sessionTimeoutMs: p.sessionTimeoutMs, viewportWidth: p.viewportWidth, viewportHeight: p.viewportHeight,
+    humanize: p.humanize, blockWebrtc: p.blockWebrtc,
   };
 }
 

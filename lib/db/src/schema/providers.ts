@@ -4,11 +4,11 @@ import { z } from "zod/v4";
 
 // Which backend params each provider TYPE actually honours — drives both the form (show
 // only the relevant fields) and the runner (only apply what the type supports).
-export const PROVIDER_TYPE_PARAMS: Record<string, { stealth: boolean; blockAds: boolean; ignoreHttps: boolean; sessionTimeout: boolean; viewport: boolean }> = {
-  playwright:   { stealth: true,  blockAds: true,  ignoreHttps: true,  sessionTimeout: true,  viewport: true },
-  puppeteer:    { stealth: true,  blockAds: true,  ignoreHttps: true,  sessionTimeout: true,  viewport: true },
-  camoufox:     { stealth: false, blockAds: true,  ignoreHttps: true,  sessionTimeout: false, viewport: true },
-  seleniumbase: { stealth: false, blockAds: false, ignoreHttps: false, sessionTimeout: false, viewport: true },
+export const PROVIDER_TYPE_PARAMS: Record<string, { stealth: boolean; blockAds: boolean; ignoreHttps: boolean; sessionTimeout: boolean; viewport: boolean; humanize: boolean; blockWebrtc: boolean }> = {
+  playwright:   { stealth: true,  blockAds: true,  ignoreHttps: true,  sessionTimeout: true,  viewport: true,  humanize: false, blockWebrtc: false },
+  puppeteer:    { stealth: true,  blockAds: true,  ignoreHttps: true,  sessionTimeout: true,  viewport: true,  humanize: false, blockWebrtc: false },
+  camoufox:     { stealth: false, blockAds: true,  ignoreHttps: true,  sessionTimeout: false, viewport: true,  humanize: true,  blockWebrtc: true },
+  seleniumbase: { stealth: false, blockAds: false, ignoreHttps: false, sessionTimeout: false, viewport: true,  humanize: false, blockWebrtc: false },
 };
 
 /**
@@ -37,6 +37,9 @@ export const providersTable = pgTable("providers", {
   sessionTimeoutMs: integer("session_timeout_ms"),
   viewportWidth: integer("viewport_width"),
   viewportHeight: integer("viewport_height"),
+  // camoufox-only knobs (null = the sidecar default: humanize off, WebRTC blocked).
+  humanize: boolean("humanize"),
+  blockWebrtc: boolean("block_webrtc"),
   enabled: boolean("enabled").notNull().default(true),
   healthy: boolean("healthy"),
   lastError: text("last_error"),

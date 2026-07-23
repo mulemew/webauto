@@ -420,6 +420,8 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
           browserConfig.viewportWidth = _selProvider.viewportWidth;
           browserConfig.viewportHeight = _selProvider.viewportHeight;
         }
+        if (caps.humanize && _selProvider.humanize != null) browserConfig.humanize = _selProvider.humanize;
+        if (caps.blockWebrtc && _selProvider.blockWebrtc != null) browserConfig.blockWebrtc = _selProvider.blockWebrtc;
         emitTaskProgress(taskId, `Using provider: ${_selProvider.name}`);
         logger.info({ taskId, provider: _selProvider.name, type: _selProvider.type }, "Task using selected provider");
       }

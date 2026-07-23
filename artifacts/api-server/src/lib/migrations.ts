@@ -113,6 +113,8 @@ import { pool } from "@workspace/db";
   ALTER TABLE "providers" ADD COLUMN IF NOT EXISTS "session_timeout_ms" integer;
   ALTER TABLE "providers" ADD COLUMN IF NOT EXISTS "viewport_width" integer;
   ALTER TABLE "providers" ADD COLUMN IF NOT EXISTS "viewport_height" integer;
+  ALTER TABLE "providers" ADD COLUMN IF NOT EXISTS "humanize" boolean;
+  ALTER TABLE "providers" ADD COLUMN IF NOT EXISTS "block_webrtc" boolean;
   `;
 
   export async function runMigrations(): Promise<void> {

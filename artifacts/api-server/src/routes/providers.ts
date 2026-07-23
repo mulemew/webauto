@@ -15,6 +15,8 @@ const Params = {
   sessionTimeoutMs: z.number().int().min(0).nullish(),
   viewportWidth: z.number().int().min(0).nullish(),
   viewportHeight: z.number().int().min(0).nullish(),
+  humanize: z.boolean().nullish(),
+  blockWebrtc: z.boolean().nullish(),
 };
 
 const CreateBody = z
@@ -41,7 +43,7 @@ const UpdateBody = z.object({
 // Only the columns that exist; undefined keys are skipped so a partial update is safe.
 function paramCols(d: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const k of ["stealth", "blockAds", "ignoreHttps", "sessionTimeoutMs", "viewportWidth", "viewportHeight"]) {
+  for (const k of ["stealth", "blockAds", "ignoreHttps", "sessionTimeoutMs", "viewportWidth", "viewportHeight", "humanize", "blockWebrtc"]) {
     if (k in d && d[k] !== undefined) out[k] = d[k];
   }
   return out;

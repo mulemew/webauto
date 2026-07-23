@@ -46,6 +46,10 @@ export interface BrowserProviderConfig {
      * Unset → fall back to the env default (single-instance behaviour, unchanged).
      */
     instanceUrl?: string;
+    /** camoufox-only: human-like cursor (default off) and WebRTC blocking (default on).
+     *  Set from the provider; undefined = the sidecar default. */
+    humanize?: boolean;
+    blockWebrtc?: boolean;
     /** URL used for the connection test in the Settings page */
     testUrl?: string;
     /**
@@ -767,6 +771,9 @@ class CamoufoxProvider implements BrowserProvider {
           locale: fp.locale || "",
           timezone: fp.timezone || "",
           screen: `${vp.width}x${vp.height}`,
+          // camoufox knobs from the provider (undefined = sidecar default).
+          ...(this.config.humanize != null ? { humanize: this.config.humanize } : {}),
+          ...(this.config.blockWebrtc != null ? { blockWebrtc: this.config.blockWebrtc } : {}),
           proxy: parseProxyForCamoufox(proxyServerUrl),
           // The saved profile's fixed fingerprint (browserforge pickle or preset); the
           // sidecar reproduces it exactly via launch_server(fingerprint=/fingerprint_preset=).

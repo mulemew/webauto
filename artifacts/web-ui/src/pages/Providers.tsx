@@ -26,19 +26,21 @@ interface Provider {
   sessionTimeoutMs: number | null;
   viewportWidth: number | null;
   viewportHeight: number | null;
+  humanize: boolean | null;
+  blockWebrtc: boolean | null;
   healthy: boolean | null;
   lastError: string | null;
   lastCheckedAt: string | null;
 }
 
 // Which params each type honours (mirrors PROVIDER_TYPE_PARAMS on the server).
-const CAPS: Record<PType, { stealth: boolean; blockAds: boolean; ignoreHttps: boolean; sessionTimeout: boolean; viewport: boolean }> = {
-  playwright:   { stealth: true,  blockAds: true,  ignoreHttps: true,  sessionTimeout: true,  viewport: true },
-  puppeteer:    { stealth: true,  blockAds: true,  ignoreHttps: true,  sessionTimeout: true,  viewport: true },
-  camoufox:     { stealth: false, blockAds: true,  ignoreHttps: true,  sessionTimeout: false, viewport: true },
-  seleniumbase: { stealth: false, blockAds: false, ignoreHttps: false, sessionTimeout: false, viewport: true },
+const CAPS: Record<PType, { stealth: boolean; blockAds: boolean; ignoreHttps: boolean; sessionTimeout: boolean; viewport: boolean; humanize: boolean; blockWebrtc: boolean }> = {
+  playwright:   { stealth: true,  blockAds: true,  ignoreHttps: true,  sessionTimeout: true,  viewport: true,  humanize: false, blockWebrtc: false },
+  puppeteer:    { stealth: true,  blockAds: true,  ignoreHttps: true,  sessionTimeout: true,  viewport: true,  humanize: false, blockWebrtc: false },
+  camoufox:     { stealth: false, blockAds: true,  ignoreHttps: true,  sessionTimeout: false, viewport: true,  humanize: true,  blockWebrtc: true },
+  seleniumbase: { stealth: false, blockAds: false, ignoreHttps: false, sessionTimeout: false, viewport: true,  humanize: false, blockWebrtc: false },
 };
-const EMPTY = { name: "", type: "seleniumbase" as PType, url: "", concurrency: 1, enabled: true, stealth: false, blockAds: false, ignoreHttps: false, timeoutMin: "", resolution: "" };
+const EMPTY = { name: "", type: "seleniumbase" as PType, url: "", concurrency: 1, enabled: true, stealth: false, blockAds: false, ignoreHttps: false, timeoutMin: "", resolution: "", humanize: false, blockWebrtc: true };
 const isBrowserless = (t: PType) => t === "playwright" || t === "puppeteer";
 
 export default function Providers() {
@@ -71,6 +73,7 @@ export default function Providers() {
       stealth: p.stealth ?? false, blockAds: p.blockAds ?? false, ignoreHttps: p.ignoreHttps ?? false,
       timeoutMin: p.sessionTimeoutMs != null ? String(Math.round(p.sessionTimeoutMs / 60000)) : "",
       resolution: p.viewportWidth && p.viewportHeight ? `${p.viewportWidth}x${p.viewportHeight}` : "",
+      humanize: p.humanize ?? false, blockWebrtc: p.blockWebrtc ?? true,
     });
     setDialogOpen(true);
   };
@@ -86,6 +89,8 @@ export default function Providers() {
       sessionTimeoutMs: c.sessionTimeout && form.timeoutMin.trim() ? Math.max(0, Math.round(Number(form.timeoutMin) * 60000)) : null,
       viewportWidth: c.viewport && res ? Number(res[1]) : null,
       viewportHeight: c.viewport && res ? Number(res[2]) : null,
+      humanize: c.humanize ? form.humanize : null,
+      blockWebrtc: c.blockWebrtc ? form.blockWebrtc : null,
     };
   };
 
@@ -260,6 +265,24 @@ export default function Providers() {
                 <div className="flex items-center justify-between px-3 py-2">
                   <Label className="text-sm">忽略 HTTPS 错误</Label>
                   <Switch checked={form.ignoreHttps} onCheckedChange={(v) => setForm({ ...form, ignoreHttps: v })} />
+                </div>
+              )}
+              {CAPS[form.type].blockWebrtc && (
+                <div className="flex items-center justify-between px-3 py-2 gap-3">
+                  <div>
+                    <Label className="text-sm">屏蔽 WebRTC</Label>
+                    <p className="text-[10px] text-muted-foreground">建议开;关掉会让 WebRTC 泄露一个可能不一致的 IP</p>
+                  </div>
+                  <Switch checked={form.blockWebrtc} onCheckedChange={(v) => setForm({ ...form, blockWebrtc: v })} />
+                </div>
+              )}
+              {CAPS[form.type].humanize && (
+                <div className="flex items-center justify-between px-3 py-2 gap-3">
+                  <div>
+                    <Label className="text-sm">Humanize（拟人光标）</Label>
+                    <p className="text-[10px] text-muted-foreground">更像真人但更慢(camoufox 默认关)</p>
+                  </div>
+                  <Switch checked={form.humanize} onCheckedChange={(v) => setForm({ ...form, humanize: v })} />
                 </div>
               )}
               {CAPS[form.type].sessionTimeout && (
