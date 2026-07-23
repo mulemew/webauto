@@ -696,6 +696,20 @@ class PlaywrightCDPProvider implements BrowserProvider {
 // proxy; here we just firefox.connect() to it and drive it with the existing adapter.
 const CAMOUFOX_URL = (process.env.CAMOUFOX_URL ?? "http://camoufox-proxy:7318").replace(/\/$/, "");
 
+/** launchServer reports its ws endpoint with a LOOPBACK host (ws://[::1]:PORT,
+ *  127.0.0.1, or 0.0.0.0) that is only valid inside the camoufox-proxy container. This
+ *  api-server runs in a separate container, so point the ws at the reachable service
+ *  host from CAMOUFOX_URL (camoufox-proxy), keeping the port + path launchServer chose. */
+function reachableCamoufoxWs(ws: string): string {
+  try {
+    const u = new URL(ws);
+    u.hostname = new URL(CAMOUFOX_URL).hostname;
+    return u.toString();
+  } catch {
+    return ws;
+  }
+}
+
 function parseProxyForCamoufox(proxyUrl?: string): { server: string; username?: string; password?: string } | undefined {
   if (!proxyUrl || !proxyUrl.trim()) return undefined;
   try {
@@ -739,10 +753,11 @@ class CamoufoxProvider implements BrowserProvider {
     });
     if (!res.ok) throw new Error(`camoufox-proxy /launch failed: ${res.status} ${await res.text().catch(() => "")}`);
     const { id, ws } = (await res.json()) as { id: string; ws: string };
+    const wsUrl = reachableCamoufoxWs(ws);
 
     let browser: import("playwright-core").Browser;
     try {
-      browser = (await firefox.connect(ws)) as unknown as import("playwright-core").Browser;
+      browser = (await firefox.connect(wsUrl)) as unknown as import("playwright-core").Browser;
     } catch (err) {
       await this.release(id);
       throw err;

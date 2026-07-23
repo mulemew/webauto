@@ -40,4 +40,12 @@ if isinstance(scr, dict) and scr.get("width") and scr.get("height"):
     except Exception:
         pass  # fall back to Camoufox's own random screen
 
+# Bind the Playwright ws server to ALL interfaces, not just loopback. The api-server
+# runs in a SEPARATE container and connects across the docker network; the default bind
+# only reports a loopback host (ws://[::1]:PORT), which the api-server can't reach
+# (ECONNREFUSED). This key falls through launch_options' **kwargs into Playwright's
+# launchServer({host}). The api-server rewrites the reported host to the camoufox-proxy
+# service name, so the actual reachable address is host=camoufox-proxy:PORT.
+cfg["host"] = "0.0.0.0"
+
 launch_server(**cfg)
