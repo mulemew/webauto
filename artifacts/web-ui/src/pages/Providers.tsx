@@ -111,8 +111,9 @@ export default function Providers() {
   const handleDelete = async () => {
     if (!deleteId) return;
     try {
-      await fetch(`${BASE}/api/providers/${deleteId}`, { method: "DELETE" });
-      toast({ title: "Provider deleted", variant: "success" });
+      const res = await fetch(`${BASE}/api/providers/${deleteId}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({} as { affectedTasks?: number }));
+      toast({ title: "Provider deleted", description: data.affectedTasks ? `${data.affectedTasks} 个任务已回落到默认后端` : undefined, variant: "success" });
       setDeleteId(null);
       load();
     } catch { toast({ title: "Failed to delete", variant: "destructive" }); }

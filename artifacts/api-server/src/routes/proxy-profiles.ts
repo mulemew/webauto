@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, proxyProfilesTable, tasksTable, eq } from "@workspace/db";
+import { db, proxyProfilesTable, tasksTable, eq, sql } from "@workspace/db";
 import { logger } from "../lib/logger";
 import { resolveExitGeo } from "./tasks";
 import { resolveProxyType } from "../automation/proxy-manager";
@@ -103,9 +103,14 @@ router.post("/proxy-profiles/refresh-all", async (_req, res): Promise<void> => {
 router.delete("/proxy-profiles/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
-  await db.update(tasksTable).set({ proxyProfileId: null }).where(eq(tasksTable.proxyProfileId, id));
+  // Clear the reference from every task's browserConfig (jsonb — the real ref) so they
+  // fall back to no/inline proxy. The runner already guards a dangling id, so nothing
+  // breaks either way; this just avoids a stale id lingering in the edit form.
+  const match = sql`${tasksTable.browserConfig}->>'proxyProfileId' = ${String(id)}`;
+  const affected = await db.select({ id: tasksTable.id }).from(tasksTable).where(match);
+  await db.update(tasksTable).set({ browserConfig: sql`${tasksTable.browserConfig} - 'proxyProfileId'`, proxyProfileId: null }).where(match);
   await db.delete(proxyProfilesTable).where(eq(proxyProfilesTable.id, id));
-  res.status(204).end();
+  res.json({ deleted: true, affectedTasks: affected.length });
 });
 
 export default router;

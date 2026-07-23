@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, fingerprintProfilesTable, tasksTable, eq } from "@workspace/db";
+import { db, fingerprintProfilesTable, tasksTable, eq, sql } from "@workspace/db";
 import { logger } from "../lib/logger";
 import { z } from "zod";
 
@@ -66,10 +66,13 @@ router.put("/fingerprint-profiles/:id", async (req, res): Promise<void> => {
 router.delete("/fingerprint-profiles/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
-  // Null out any task that referenced it so a deleted profile doesn't dangle.
-  await db.update(tasksTable).set({ fingerprintProfileId: null }).where(eq(tasksTable.fingerprintProfileId, id));
+  // Clear the reference from every task's browserConfig (jsonb — the real ref) so they
+  // fall back to the inline/honest fingerprint. The runner guards a dangling id anyway.
+  const match = sql`${tasksTable.browserConfig}->>'fingerprintProfileId' = ${String(id)}`;
+  const affected = await db.select({ id: tasksTable.id }).from(tasksTable).where(match);
+  await db.update(tasksTable).set({ browserConfig: sql`${tasksTable.browserConfig} - 'fingerprintProfileId'`, fingerprintProfileId: null }).where(match);
   await db.delete(fingerprintProfilesTable).where(eq(fingerprintProfilesTable.id, id));
-  res.status(204).end();
+  res.json({ deleted: true, affectedTasks: affected.length });
 });
 
 export default router;

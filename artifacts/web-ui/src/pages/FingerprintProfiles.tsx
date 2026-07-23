@@ -120,8 +120,9 @@ export default function FingerprintProfiles() {
   const handleDelete = async () => {
     if (!deleteId) return;
     try {
-      await fetch(`${BASE}/api/fingerprint-profiles/${deleteId}`, { method: "DELETE" });
-      toast({ title: "Fingerprint deleted", variant: "success" });
+      const res = await fetch(`${BASE}/api/fingerprint-profiles/${deleteId}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({} as { affectedTasks?: number }));
+      toast({ title: "Fingerprint deleted", description: data.affectedTasks ? `${data.affectedTasks} 个任务已回落到默认指纹` : undefined, variant: "success" });
       setDeleteId(null);
       load();
     } catch {

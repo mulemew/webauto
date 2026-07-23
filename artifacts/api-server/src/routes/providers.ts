@@ -99,12 +99,13 @@ router.post("/providers/health-all", async (_req, res): Promise<void> => {
 router.delete("/providers/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
-  // Clear the reference from any task's browserConfig so it falls back to the default.
-  await db.update(tasksTable)
-    .set({ browserConfig: sql`${tasksTable.browserConfig} - 'providerId'` })
-    .where(sql`${tasksTable.browserConfig}->>'providerId' = ${String(id)}`);
+  // Clear the reference from any task's browserConfig so it falls back to the Settings
+  // default. The runner guards a dangling providerId anyway, so nothing breaks.
+  const match = sql`${tasksTable.browserConfig}->>'providerId' = ${String(id)}`;
+  const affected = await db.select({ id: tasksTable.id }).from(tasksTable).where(match);
+  await db.update(tasksTable).set({ browserConfig: sql`${tasksTable.browserConfig} - 'providerId'` }).where(match);
   await db.delete(providersTable).where(eq(providersTable.id, id));
-  res.status(204).end();
+  res.json({ deleted: true, affectedTasks: affected.length });
 });
 
 export default router;

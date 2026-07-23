@@ -1013,7 +1013,7 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                     <div className="space-y-1.5">
                       <label className="text-sm font-medium">Provider</label>
                       <Select
-                        value={browserConfig.providerId != null ? String(browserConfig.providerId) : "default"}
+                        value={browserConfig.providerId != null && providers.some((p) => p.id === browserConfig.providerId) ? String(browserConfig.providerId) : "default"}
                         onValueChange={(v) =>
                           setBrowserConfig((s) => {
                             if (v === "default") return { ...s, providerId: null };

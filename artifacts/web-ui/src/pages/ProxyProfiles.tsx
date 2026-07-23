@@ -78,8 +78,9 @@ export default function ProxyProfiles() {
   const handleDelete = async () => {
     if (!deleteId) return;
     try {
-      await fetch(`${BASE}/api/proxy-profiles/${deleteId}`, { method: "DELETE" });
-      toast({ title: "Proxy deleted", variant: "success" });
+      const res = await fetch(`${BASE}/api/proxy-profiles/${deleteId}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({} as { affectedTasks?: number }));
+      toast({ title: "Proxy deleted", description: data.affectedTasks ? `${data.affectedTasks} 个任务已回落到无代理` : undefined, variant: "success" });
       setDeleteId(null);
       load();
     } catch {
