@@ -8,6 +8,15 @@ const router: IRouter = Router();
 
 const Type = z.enum(["playwright", "puppeteer", "seleniumbase", "camoufox"]);
 
+const Params = {
+  stealth: z.boolean().nullish(),
+  blockAds: z.boolean().nullish(),
+  ignoreHttps: z.boolean().nullish(),
+  sessionTimeoutMs: z.number().int().min(0).nullish(),
+  viewportWidth: z.number().int().min(0).nullish(),
+  viewportHeight: z.number().int().min(0).nullish(),
+};
+
 const CreateBody = z
   .object({
     name: z.string().min(1),
@@ -15,6 +24,7 @@ const CreateBody = z
     url: z.string().min(1),
     concurrency: z.number().int().min(1).max(64).optional().default(1),
     enabled: z.boolean().optional().default(true),
+    ...Params,
   })
   .refine((b) => (b.type === "playwright" || b.type === "puppeteer" ? /^wss?:\/\//i.test(b.url) : /^https?:\/\//i.test(b.url)), {
     message: "playwright/puppeteer URL must be ws(s)://; seleniumbase/camoufox URL must be http(s)://",
@@ -25,7 +35,17 @@ const UpdateBody = z.object({
   url: z.string().min(1).optional(),
   concurrency: z.number().int().min(1).max(64).optional(),
   enabled: z.boolean().optional(),
+  ...Params,
 });
+
+// Only the columns that exist; undefined keys are skipped so a partial update is safe.
+function paramCols(d: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of ["stealth", "blockAds", "ignoreHttps", "sessionTimeoutMs", "viewportWidth", "viewportHeight"]) {
+    if (k in d && d[k] !== undefined) out[k] = d[k];
+  }
+  return out;
+}
 
 router.get("/providers", async (_req, res): Promise<void> => {
   const rows = await db.select().from(providersTable).orderBy(providersTable.type, providersTable.name);
@@ -39,7 +59,7 @@ router.post("/providers", async (req, res): Promise<void> => {
   const { healthy, error } = await checkProviderHealth({ type: d.type, url: d.url.trim() });
   const [row] = await db
     .insert(providersTable)
-    .values({ name: d.name, type: d.type, url: d.url.trim(), concurrency: d.concurrency, enabled: d.enabled, healthy, lastError: error, lastCheckedAt: new Date() })
+    .values({ name: d.name, type: d.type, url: d.url.trim(), concurrency: d.concurrency, enabled: d.enabled, ...paramCols(d), healthy, lastError: error, lastCheckedAt: new Date() })
     .returning();
   logger.info({ id: row.id, name: row.name, type: row.type }, "Provider created");
   res.status(201).json(row);
@@ -50,7 +70,7 @@ router.put("/providers/:id", async (req, res): Promise<void> => {
   if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
   const body = UpdateBody.safeParse(req.body);
   if (!body.success) { res.status(400).json({ error: body.error.issues[0]?.message ?? "Invalid input" }); return; }
-  const update: Partial<{ name: string; url: string; concurrency: number; enabled: boolean }> = {};
+  const update: Record<string, unknown> = { ...paramCols(body.data) };
   if (body.data.name !== undefined) update.name = body.data.name;
   if (body.data.url !== undefined) update.url = body.data.url.trim();
   if (body.data.concurrency !== undefined) update.concurrency = body.data.concurrency;

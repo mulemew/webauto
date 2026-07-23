@@ -2,6 +2,15 @@ import { pgTable, text, serial, integer, boolean, timestamp } from "drizzle-orm/
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
+// Which backend params each provider TYPE actually honours — drives both the form (show
+// only the relevant fields) and the runner (only apply what the type supports).
+export const PROVIDER_TYPE_PARAMS: Record<string, { stealth: boolean; blockAds: boolean; ignoreHttps: boolean; sessionTimeout: boolean; viewport: boolean }> = {
+  playwright:   { stealth: true,  blockAds: true,  ignoreHttps: true,  sessionTimeout: true,  viewport: true },
+  puppeteer:    { stealth: true,  blockAds: true,  ignoreHttps: true,  sessionTimeout: true,  viewport: true },
+  camoufox:     { stealth: false, blockAds: true,  ignoreHttps: true,  sessionTimeout: false, viewport: true },
+  seleniumbase: { stealth: false, blockAds: false, ignoreHttps: false, sessionTimeout: false, viewport: true },
+};
+
 /**
  * A named, reusable browser backend. Moved out of Settings so you can register several
  * (e.g. two remote browserless endpoints) and pick one per task from a dropdown.
@@ -20,6 +29,14 @@ export const providersTable = pgTable("providers", {
   type: text("type").notNull(),
   url: text("url").notNull().default(""),
   concurrency: integer("concurrency").notNull().default(1),
+  // Backend defaults, moved out of Settings. null = leave the app default (only applied
+  // for types that support the param — see PROVIDER_TYPE_PARAMS).
+  stealth: boolean("stealth"),
+  blockAds: boolean("block_ads"),
+  ignoreHttps: boolean("ignore_https"),
+  sessionTimeoutMs: integer("session_timeout_ms"),
+  viewportWidth: integer("viewport_width"),
+  viewportHeight: integer("viewport_height"),
   enabled: boolean("enabled").notNull().default(true),
   healthy: boolean("healthy"),
   lastError: text("last_error"),

@@ -5,6 +5,7 @@ import path from "path";
   import { decrypt } from "../lib/encryption";
   import { createBrowserProvider } from "./browser-provider";
   import { resolveProvider } from "./providers";
+  import { PROVIDER_TYPE_PARAMS } from "@workspace/db";
   import { createCaptchaSolverFromConfig } from "./captcha-solver";
   import { loadBrowserConfig, loadCaptchaConfig, loadTaskTimeoutConfig, loadConcurrencyConfig } from "../lib/appSettings";
   import { emitTaskProgress, emitTaskDone, getTaskEmitter, clearTaskEventBuffer } from "../lib/taskEvents";
@@ -406,6 +407,19 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
       if (_selProvider) {
         browserConfig.provider = _selProvider.type as typeof browserConfig.provider;
         browserConfig.instanceUrl = _selProvider.url;
+        // The provider carries the backend params (moved out of Settings). Apply the ones
+        // this TYPE actually honours; a null means "leave the default".
+        const caps = PROVIDER_TYPE_PARAMS[_selProvider.type] ?? { stealth: false, blockAds: false, ignoreHttps: false, sessionTimeout: false, viewport: false };
+        if (caps.stealth && _selProvider.stealth != null) browserConfig.stealth = _selProvider.stealth;
+        if (caps.blockAds && _selProvider.blockAds != null) browserConfig.blockAds = _selProvider.blockAds;
+        if (caps.ignoreHttps && _selProvider.ignoreHttps != null) browserConfig.ignoreHTTPS = _selProvider.ignoreHttps;
+        if (caps.sessionTimeout && _selProvider.sessionTimeoutMs != null) browserConfig.sessionTimeoutMs = _selProvider.sessionTimeoutMs;
+        // Viewport is only a DEFAULT: a selected fingerprint profile owns the resolution
+        // (that's where it belongs), so don't override it here.
+        if (caps.viewport && !_profileIds.fingerprintProfileId && _selProvider.viewportWidth && _selProvider.viewportHeight) {
+          browserConfig.viewportWidth = _selProvider.viewportWidth;
+          browserConfig.viewportHeight = _selProvider.viewportHeight;
+        }
         emitTaskProgress(taskId, `Using provider: ${_selProvider.name}`);
         logger.info({ taskId, provider: _selProvider.name, type: _selProvider.type }, "Task using selected provider");
       }

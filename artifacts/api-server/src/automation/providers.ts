@@ -1,4 +1,4 @@
-import { db, providersTable, settingsTable, tasksTable, eq } from "@workspace/db";
+import { db, providersTable, settingsTable, tasksTable, eq, PROVIDER_TYPE_PARAMS } from "@workspace/db";
 import { logger } from "../lib/logger";
 import { loadBrowserConfig, loadConcurrencyConfig } from "../lib/appSettings";
 
@@ -8,7 +8,11 @@ import { loadBrowserConfig, loadConcurrencyConfig } from "../lib/appSettings";
  * the provider's OWN concurrency limit. No provider selected → the Settings default
  * backend is used (backward compatible).
  */
-export type ResolvedProvider = { id: number; name: string; type: string; url: string; concurrency: number };
+export type ResolvedProvider = {
+  id: number; name: string; type: string; url: string; concurrency: number;
+  stealth: boolean | null; blockAds: boolean | null; ignoreHttps: boolean | null;
+  sessionTimeoutMs: number | null; viewportWidth: number | null; viewportHeight: number | null;
+};
 
 /** Load a provider by id (only if enabled). Null when missing/disabled → caller falls
  *  back to the Settings default backend. */
@@ -16,7 +20,11 @@ export async function resolveProvider(providerId: number | null | undefined): Pr
   if (!providerId) return null;
   const [p] = await db.select().from(providersTable).where(eq(providersTable.id, providerId));
   if (!p || !p.enabled) return null;
-  return { id: p.id, name: p.name, type: p.type, url: p.url, concurrency: Math.max(1, p.concurrency) };
+  return {
+    id: p.id, name: p.name, type: p.type, url: p.url, concurrency: Math.max(1, p.concurrency),
+    stealth: p.stealth, blockAds: p.blockAds, ignoreHttps: p.ignoreHttps,
+    sessionTimeoutMs: p.sessionTimeoutMs, viewportWidth: p.viewportWidth, viewportHeight: p.viewportHeight,
+  };
 }
 
 /** Probe one provider. playwright/puppeteer are CDP ws endpoints (reachable = healthy,
@@ -85,11 +93,23 @@ export async function seedProvidersFromSettings(): Promise<void> {
         return ((cfg.wsEndpoint || process.env.BROWSERLESS_URL) ?? "").replace(/\/$/, "");
       };
       const conc = Math.max(1, (await loadConcurrencyConfig()).maxConcurrent);
+      // Carry the Settings backend params so the seeded provider matches today's behaviour.
+      const sc = cfg as { stealth?: boolean; blockAds?: boolean; ignoreHTTPS?: boolean; sessionTimeoutMs?: number; viewportWidth?: number; viewportHeight?: number };
       for (const type of types) {
         const url = urlFor(type);
         if (!url) continue;
+        const caps = PROVIDER_TYPE_PARAMS[type] ?? { stealth: false, blockAds: false, ignoreHttps: false, sessionTimeout: false, viewport: false };
         const { healthy, error } = await checkProviderHealth({ type, url });
-        await db.insert(providersTable).values({ name: `Settings（${type}）`, type, url, concurrency: conc, enabled: true, healthy, lastError: error, lastCheckedAt: new Date() });
+        await db.insert(providersTable).values({
+          name: `Settings（${type}）`, type, url, concurrency: conc, enabled: true,
+          stealth: caps.stealth ? (sc.stealth ?? null) : null,
+          blockAds: caps.blockAds ? (sc.blockAds ?? null) : null,
+          ignoreHttps: caps.ignoreHttps ? (sc.ignoreHTTPS ?? null) : null,
+          sessionTimeoutMs: caps.sessionTimeout ? (sc.sessionTimeoutMs ?? null) : null,
+          viewportWidth: caps.viewport ? (sc.viewportWidth ?? null) : null,
+          viewportHeight: caps.viewport ? (sc.viewportHeight ?? null) : null,
+          healthy, lastError: error, lastCheckedAt: new Date(),
+        });
         logger.info({ type, url, concurrency: conc }, "Seeded provider from an in-use backend");
       }
     }

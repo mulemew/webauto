@@ -107,6 +107,12 @@ import { pool } from "@workspace/db";
     "created_at"      timestamptz NOT NULL DEFAULT now(),
     "updated_at"      timestamptz NOT NULL DEFAULT now()
   );
+  ALTER TABLE "providers" ADD COLUMN IF NOT EXISTS "stealth" boolean;
+  ALTER TABLE "providers" ADD COLUMN IF NOT EXISTS "block_ads" boolean;
+  ALTER TABLE "providers" ADD COLUMN IF NOT EXISTS "ignore_https" boolean;
+  ALTER TABLE "providers" ADD COLUMN IF NOT EXISTS "session_timeout_ms" integer;
+  ALTER TABLE "providers" ADD COLUMN IF NOT EXISTS "viewport_width" integer;
+  ALTER TABLE "providers" ADD COLUMN IF NOT EXISTS "viewport_height" integer;
   `;
 
   export async function runMigrations(): Promise<void> {

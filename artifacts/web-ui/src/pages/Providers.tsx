@@ -20,18 +20,25 @@ interface Provider {
   url: string;
   concurrency: number;
   enabled: boolean;
+  stealth: boolean | null;
+  blockAds: boolean | null;
+  ignoreHttps: boolean | null;
+  sessionTimeoutMs: number | null;
+  viewportWidth: number | null;
+  viewportHeight: number | null;
   healthy: boolean | null;
   lastError: string | null;
   lastCheckedAt: string | null;
 }
 
-const TYPE_LABEL: Record<PType, string> = {
-  playwright: "Playwright (CDP)",
-  puppeteer: "Puppeteer (CDP)",
-  seleniumbase: "SeleniumBase (cf-proxy)",
-  camoufox: "Camoufox",
+// Which params each type honours (mirrors PROVIDER_TYPE_PARAMS on the server).
+const CAPS: Record<PType, { stealth: boolean; blockAds: boolean; ignoreHttps: boolean; sessionTimeout: boolean; viewport: boolean }> = {
+  playwright:   { stealth: true,  blockAds: true,  ignoreHttps: true,  sessionTimeout: true,  viewport: true },
+  puppeteer:    { stealth: true,  blockAds: true,  ignoreHttps: true,  sessionTimeout: true,  viewport: true },
+  camoufox:     { stealth: false, blockAds: true,  ignoreHttps: true,  sessionTimeout: false, viewport: true },
+  seleniumbase: { stealth: false, blockAds: false, ignoreHttps: false, sessionTimeout: false, viewport: true },
 };
-const EMPTY = { name: "", type: "seleniumbase" as PType, url: "", concurrency: 1, enabled: true };
+const EMPTY = { name: "", type: "seleniumbase" as PType, url: "", concurrency: 1, enabled: true, stealth: false, blockAds: false, ignoreHttps: false, timeoutMin: "", resolution: "" };
 const isBrowserless = (t: PType) => t === "playwright" || t === "puppeteer";
 
 export default function Providers() {
@@ -57,7 +64,30 @@ export default function Providers() {
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openCreate = () => { setEditingId(null); setForm(EMPTY); setDialogOpen(true); };
-  const openEdit = (p: Provider) => { setEditingId(p.id); setForm({ name: p.name, type: p.type, url: p.url, concurrency: p.concurrency, enabled: p.enabled }); setDialogOpen(true); };
+  const openEdit = (p: Provider) => {
+    setEditingId(p.id);
+    setForm({
+      name: p.name, type: p.type, url: p.url, concurrency: p.concurrency, enabled: p.enabled,
+      stealth: p.stealth ?? false, blockAds: p.blockAds ?? false, ignoreHttps: p.ignoreHttps ?? false,
+      timeoutMin: p.sessionTimeoutMs != null ? String(Math.round(p.sessionTimeoutMs / 60000)) : "",
+      resolution: p.viewportWidth && p.viewportHeight ? `${p.viewportWidth}x${p.viewportHeight}` : "",
+    });
+    setDialogOpen(true);
+  };
+
+  // Build the type-appropriate param payload (null for params this type doesn't honour).
+  const paramPayload = () => {
+    const c = CAPS[form.type];
+    const res = /^(\d+)\s*[x×]\s*(\d+)$/.exec(form.resolution.trim());
+    return {
+      stealth: c.stealth ? form.stealth : null,
+      blockAds: c.blockAds ? form.blockAds : null,
+      ignoreHttps: c.ignoreHttps ? form.ignoreHttps : null,
+      sessionTimeoutMs: c.sessionTimeout && form.timeoutMin.trim() ? Math.max(0, Math.round(Number(form.timeoutMin) * 60000)) : null,
+      viewportWidth: c.viewport && res ? Number(res[1]) : null,
+      viewportHeight: c.viewport && res ? Number(res[2]) : null,
+    };
+  };
 
   const handleSubmit = async () => {
     if (!form.name.trim() || !form.url.trim()) { toast({ title: "Name and URL are required", variant: "destructive" }); return; }
@@ -66,8 +96,8 @@ export default function Providers() {
       const url = editingId ? `${BASE}/api/providers/${editingId}` : `${BASE}/api/providers`;
       // Type is fixed once created; edit only name/url/concurrency/enabled.
       const body = editingId
-        ? { name: form.name.trim(), url: form.url.trim(), concurrency: form.concurrency, enabled: form.enabled }
-        : { name: form.name.trim(), type: form.type, url: form.url.trim(), concurrency: form.concurrency, enabled: form.enabled };
+        ? { name: form.name.trim(), url: form.url.trim(), concurrency: form.concurrency, enabled: form.enabled, ...paramPayload() }
+        : { name: form.name.trim(), type: form.type, url: form.url.trim(), concurrency: form.concurrency, enabled: form.enabled, ...paramPayload() };
       const res = await fetch(url, { method: editingId ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || (await res.text()));
       toast({ title: editingId ? "Provider updated" : "Provider saved", variant: "success" });
@@ -210,6 +240,46 @@ export default function Providers() {
                 {isBrowserless(form.type) ? "CDP WebSocket 端点 (ws:// / wss://)" : "sidecar HTTP 地址 (http:// / https://),健康检查 GET /health"}
               </p>
             </div>
+
+            {/* Backend defaults — only the params this type honours */}
+            <div className="rounded-md border border-border divide-y divide-border">
+              {CAPS[form.type].stealth && (
+                <div className="flex items-center justify-between px-3 py-2">
+                  <Label className="text-sm">Stealth 模式</Label>
+                  <Switch checked={form.stealth} onCheckedChange={(v) => setForm({ ...form, stealth: v })} />
+                </div>
+              )}
+              {CAPS[form.type].blockAds && (
+                <div className="flex items-center justify-between px-3 py-2">
+                  <Label className="text-sm">屏蔽广告</Label>
+                  <Switch checked={form.blockAds} onCheckedChange={(v) => setForm({ ...form, blockAds: v })} />
+                </div>
+              )}
+              {CAPS[form.type].ignoreHttps && (
+                <div className="flex items-center justify-between px-3 py-2">
+                  <Label className="text-sm">忽略 HTTPS 错误</Label>
+                  <Switch checked={form.ignoreHttps} onCheckedChange={(v) => setForm({ ...form, ignoreHttps: v })} />
+                </div>
+              )}
+              {CAPS[form.type].sessionTimeout && (
+                <div className="flex items-center justify-between px-3 py-2 gap-3">
+                  <Label className="text-sm shrink-0">会话超时（分钟）</Label>
+                  <Input type="number" min={1} value={form.timeoutMin} placeholder="30"
+                    onChange={(e) => setForm({ ...form, timeoutMin: e.target.value })} className="w-28 text-sm" />
+                </div>
+              )}
+              {CAPS[form.type].viewport && (
+                <div className="flex items-center justify-between px-3 py-2 gap-3">
+                  <Label className="text-sm shrink-0">默认分辨率</Label>
+                  <Input value={form.resolution} placeholder="留空 / 1920x1080"
+                    onChange={(e) => setForm({ ...form, resolution: e.target.value })} className="w-36 text-sm font-mono" />
+                </div>
+              )}
+            </div>
+            {CAPS[form.type].viewport && (
+              <p className="text-[11px] text-muted-foreground -mt-1">分辨率只是默认值;选了指纹档案时以指纹的屏幕为准。</p>
+            )}
+
             <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
               <Label className="text-sm">Enabled</Label>
               <Switch checked={form.enabled} onCheckedChange={(v) => setForm({ ...form, enabled: v })} />

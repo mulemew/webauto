@@ -525,12 +525,8 @@ export default function TaskForm() {
       proxyUrl,
       proxyType,
       warpRotations,
-      stealth: browserConfig.stealth || null,
-      blockAds: browserConfig.blockAds || null,
-      ignoreHTTPS: browserConfig.ignoreHTTPS || null,
-      sessionTimeoutMs: browserConfig.sessionTimeoutMs
-        ? parseInt(browserConfig.sessionTimeoutMs, 10)
-        : null,
+      // stealth / blockAds / ignoreHTTPS / sessionTimeoutMs now live on the Provider
+      // (Providers page); not sent per-task anymore.
       fingerprint,
     };
   };
@@ -1251,82 +1247,8 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                       </div>
                     )}
 
-                    {/* Toggles */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div className="flex items-center justify-between rounded-md border border-border px-3 py-2.5">
-                        <div>
-                          <p className="text-xs font-medium">Stealth 模式</p>
-                          <p className="text-[10px] text-muted-foreground">
-                            反检测脚本注入
-                          </p>
-                        </div>
-                        <Switch
-                          checked={browserConfig.stealth}
-                          onCheckedChange={(v) =>
-                            setBrowserConfig((s) => ({ ...s, stealth: v }))
-                          }
-                        />
-                      </div>
-                      <div className="flex items-center justify-between rounded-md border border-border px-3 py-2.5">
-                        <div>
-                          <p className="text-xs font-medium">屏蔽广告</p>
-                          <p className="text-[10px] text-muted-foreground">
-                            过滤广告请求
-                          </p>
-                        </div>
-                        <Switch
-                          checked={browserConfig.blockAds}
-                          onCheckedChange={(v) =>
-                            setBrowserConfig((s) => ({ ...s, blockAds: v }))
-                          }
-                        />
-                      </div>
-                      <div className="flex items-center justify-between rounded-md border border-border px-3 py-2.5">
-                        <div>
-                          <p className="text-xs font-medium">忽略 HTTPS 错误</p>
-                          <p className="text-[10px] text-muted-foreground">
-                            跳过证书验证
-                          </p>
-                        </div>
-                        <Switch
-                          checked={browserConfig.ignoreHTTPS}
-                          onCheckedChange={(v) =>
-                            setBrowserConfig((s) => ({ ...s, ignoreHTTPS: v }))
-                          }
-                        />
-                      </div>
-                    </div>
-
-                    {/* Session timeout */}
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium">
-                        会话超时{" "}
-                        <span className="text-muted-foreground font-normal">
-                          (可选)
-                        </span>
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <Input
-                          type="number"
-                          placeholder="60000"
-                          min={1000}
-                          value={browserConfig.sessionTimeoutMs}
-                          onChange={(e) =>
-                            setBrowserConfig((s) => ({
-                              ...s,
-                              sessionTimeoutMs: e.target.value,
-                            }))
-                          }
-                          className="font-mono text-sm w-40"
-                        />
-                        <span className="text-sm text-muted-foreground">
-                          毫秒
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-muted-foreground">
-                        单次任务最长执行时间，留空使用全局默认值
-                      </p>
-                    </div>
+                    {/* Stealth / 屏蔽广告 / 忽略HTTPS / 会话超时 / 分辨率 moved to the
+                        Provider (Providers page) — configured per backend there. */}
                   </div>
                 )}
               </CardContent>
