@@ -273,7 +273,7 @@ export default function LogDetail() {
                       navigate: "→", click: "↖", fill: "✎", wait: "⏱", waitFor: "👁",
                       screenshot: "📷", login: "🔐", keypress: "⌨", hover: "◈", scroll: "↕",
                       select: "▾", switchToNewPage: "⧉", condition: "⑂",
-                      precheck: "⚡", postcheck: "📋"
+                      precheck: "⚡", postcheck: "📋", captcha: "🛡", error: "✕"
                     };
                     const dotColor = isPrecheck
                       ? "rgb(168,85,247)"

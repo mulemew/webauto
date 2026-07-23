@@ -803,6 +803,20 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
           outerScreenshotPath = await saveScreenshot(taskId, eBuf);
         } catch { /* ignore */ }
       }
+      // Make the failure visible on the Run Timeline, not only in the top card: when the
+      // run blew up before (or outside) any step recorded itself — a browser launch /
+      // connect failure, an early throw — collectedStepLogs is empty and the timeline
+      // shows nothing but the final screenshot. Add a terminal error node with the reason
+      // + screenshot so the timeline always shows WHERE it failed.
+      if (!isCancelled) {
+        collectedStepLogs.push({
+          stepIndex: collectedStepLogs.length,
+          type: "error",
+          success: false,
+          message,
+          screenshotPath: outerScreenshotPath,
+        });
+      }
       // Book a retry BEFORE writing the log so the message can say when it'll run.
       // Cancellations are deliberate — never retry those.
       const retryNote = !dryRun && !isCancelled ? await scheduleRetryIfConfigured(taskId) : "";
