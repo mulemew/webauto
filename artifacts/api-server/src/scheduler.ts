@@ -88,13 +88,11 @@ export async function initScheduler(): Promise<void> {
     const overdueTasks = await db.select().from(tasksTable)
       .where(and(eq(tasksTable.enabled, true), isNotNull(tasksTable.nextRunAt)));
     for (const task of overdueTasks) {
-      // Same rule as the poller: recover overdue @after_completion runs AND pending
-      // retries (standard-cron / manual). Skip @random — it re-seeds its own window.
-      if (task.cronExpression && parseRandomSchedule(task.cronExpression) !== null) continue;
+      if (!task.cronExpression || parseAfterCompletionSchedule(task.cronExpression) === null) continue;
       if (!task.nextRunAt || task.nextRunAt > new Date()) continue;
-      logger.info({ taskId: task.id }, "Triggering overdue nextRunAt task on startup (post-completion or retry)");
+      logger.info({ taskId: task.id }, "Triggering overdue post-completion task on startup");
       await db.update(tasksTable).set({ nextRunAt: null }).where(eq(tasksTable.id, task.id));
-      runTask(task.id, false, "cron").catch((err: unknown) => logger.error({ taskId: task.id, err }, "Overdue nextRunAt task failed"));
+      runTask(task.id, false, "cron").catch((err: unknown) => logger.error({ taskId: task.id, err }, "Overdue post-completion task failed"));
     }
   } catch (err) {
     logger.warn({ err }, "Failed to check overdue post-completion tasks on startup");
@@ -107,14 +105,10 @@ export async function initScheduler(): Promise<void> {
       const due = await db.select().from(tasksTable)
         .where(and(eq(tasksTable.enabled, true), isNotNull(tasksTable.nextRunAt), lte(tasksTable.nextRunAt, now)));
       for (const task of due) {
-        // Fire due nextRunAt runs: @after_completion (their normal trigger) AND failure
-        // RETRIES on standard-cron / manual tasks — whose nextRunAt is ONLY ever set by
-        // scheduleRetryIfConfigured, so a due one is always a pending retry. @random tasks
-        // drive their own nextRunAt via setTimeout, so skip them to avoid a double run.
-        if (task.cronExpression && parseRandomSchedule(task.cronExpression) !== null) continue;
+        if (!task.cronExpression || parseAfterCompletionSchedule(task.cronExpression) === null) continue;
         await db.update(tasksTable).set({ nextRunAt: null }).where(eq(tasksTable.id, task.id));
-        logger.info({ taskId: task.id, cron: task.cronExpression }, "Due nextRunAt task triggered (post-completion or retry)");
-        runTask(task.id, false, "cron").catch((err: unknown) => logger.error({ taskId: task.id, err }, "Due nextRunAt task run failed"));
+        logger.info({ taskId: task.id }, "Post-completion interval task triggered");
+        runTask(task.id, false, "cron").catch((err: unknown) => logger.error({ taskId: task.id, err }, "Post-completion task run failed"));
       }
     } catch (err) {
       logger.error({ err }, "Post-completion scheduler poll error");
