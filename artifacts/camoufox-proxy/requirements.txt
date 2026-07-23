@@ -4,5 +4,9 @@
 # Playwright at <1.61, so both sides are pinned to 1.60.x.
 camoufox[geoip]
 playwright>=1.60,<1.61
+# camoufox's geoip probes the exit IP THROUGH the task's proxy via requests. Advanced
+# protocols (vless/vmess/…) are converted to a local SOCKS5 by the api-server's sing-box,
+# and requests needs PySocks to speak SOCKS5 — without it geoip aborts the launch.
+PySocks
 flask
 waitress

@@ -731,6 +731,8 @@ function parseProxyForCamoufox(proxyUrl?: string): { server: string; username?: 
 class CamoufoxProvider implements BrowserProvider {
   private readonly _browsers = new Set<import("playwright-core").Browser>();
   private readonly _ids = new Map<import("playwright-core").Browser, string>();
+  // Per-browser sing-box helper (for advanced proxy protocols) to tear down on close.
+  private readonly _proxies = new Map<import("playwright-core").Browser, ResolvedProxy>();
   // A registered fox instance (auto-distributed) wins over the env default.
   private readonly baseUrl: string;
   constructor(private readonly config: BrowserProviderConfig) {
@@ -748,21 +750,37 @@ class CamoufoxProvider implements BrowserProvider {
   async newPage(): Promise<PageAdapter> {
     const vp = resolveViewport(this.config);
     const fp = this.config.fingerprint ?? {};
-    const res = await fetch(`${this.baseUrl}/launch`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        os: fp.os || "",
-        locale: fp.locale || "",
-        timezone: fp.timezone || "",
-        screen: `${vp.width}x${vp.height}`,
-        proxy: parseProxyForCamoufox(this.config.proxyUrl),
-        // The saved profile's fixed fingerprint (browserforge pickle or preset); the
-        // sidecar reproduces it exactly via launch_server(fingerprint=/fingerprint_preset=).
-        fingerprint: fp,
-      }),
-    });
-    if (!res.ok) throw new Error(`camoufox-proxy /launch failed: ${res.status} ${await res.text().catch(() => "")}`);
+
+    // Firefox (camoufox) can only speak http/socks proxies — a vless/vmess/… URL must
+    // first be turned into a local sing-box SOCKS5. remoteConsumer=true so the helper is
+    // reachable from the camoufox-proxy container. Plain http/socks5 pass straight through.
+    const resolvedProxy = await resolveProxyForConfig(this.config, true);
+    const proxyServerUrl = resolvedProxy?.serverUrl ?? undefined;
+
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/launch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          os: fp.os || "",
+          locale: fp.locale || "",
+          timezone: fp.timezone || "",
+          screen: `${vp.width}x${vp.height}`,
+          proxy: parseProxyForCamoufox(proxyServerUrl),
+          // The saved profile's fixed fingerprint (browserforge pickle or preset); the
+          // sidecar reproduces it exactly via launch_server(fingerprint=/fingerprint_preset=).
+          fingerprint: fp,
+        }),
+      });
+    } catch (err) {
+      if (resolvedProxy) await resolvedProxy.stop().catch(() => {});
+      throw err;
+    }
+    if (!res.ok) {
+      if (resolvedProxy) await resolvedProxy.stop().catch(() => {});
+      throw new Error(`camoufox-proxy /launch failed: ${res.status} ${await res.text().catch(() => "")}`);
+    }
     const { id, ws } = (await res.json()) as { id: string; ws: string };
     const wsUrl = reachableCamoufoxWs(ws, this.baseUrl);
 
@@ -771,10 +789,12 @@ class CamoufoxProvider implements BrowserProvider {
       browser = (await firefox.connect(wsUrl)) as unknown as import("playwright-core").Browser;
     } catch (err) {
       await this.release(id);
+      if (resolvedProxy) await resolvedProxy.stop().catch(() => {});
       throw err;
     }
     this._browsers.add(browser);
     this._ids.set(browser, id);
+    if (resolvedProxy) this._proxies.set(browser, resolvedProxy);
 
     const context = await browser.newContext({
       viewport: vp,
@@ -813,6 +833,8 @@ class CamoufoxProvider implements BrowserProvider {
       await context.close().catch(() => {});
       await browser.close().catch(() => {});
       await this.release(id);
+      const rp = this._proxies.get(browser);
+      if (rp) { this._proxies.delete(browser); await rp.stop().catch(() => {}); }
     };
     return adapter;
   }
@@ -822,9 +844,12 @@ class CamoufoxProvider implements BrowserProvider {
       const id = this._ids.get(b);
       await b.close().catch(() => {});
       if (id) await this.release(id);
+      const rp = this._proxies.get(b);
+      if (rp) await rp.stop().catch(() => {});
     }));
     this._browsers.clear();
     this._ids.clear();
+    this._proxies.clear();
   }
 }
 
