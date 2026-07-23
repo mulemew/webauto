@@ -65,7 +65,9 @@ def _build_options(body: dict) -> dict:
         "headless": _headless,
         # Camoufox rotates a realistic, internally-consistent fingerprint for the OS.
         "geoip": True,
-        "humanize": bool(body.get("humanize", True)),
+        # Human-like cursor movement. On = more realistic but slower; CAMOUFOX_HUMANIZE=false
+        # for speed. (A body-level override still wins if the api-server ever sends one.)
+        "humanize": bool(body["humanize"]) if body.get("humanize") is not None else _envflag("CAMOUFOX_HUMANIZE", True),
         # Block WebRTC entirely by default. Otherwise geoip spoofs a WebRTC IPv4 (the exit
         # IP) which fingerprint checkers flag as inconsistent with the page's IPv6 — a
         # STUN leak that LOWERS the score. Blocking it = no leak, no mismatch. Toggle with
