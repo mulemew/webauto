@@ -21,17 +21,17 @@ import path from "path";
  *
  * Returns a short suffix for the run's log message, or "" when retries are off.
  */
-async function scheduleRetryIfConfigured(taskId: number): Promise<string> {
+async function scheduleRetryIfConfigured(taskId: number): Promise<{ note: string; scheduled: boolean }> {
   try {
     const [t] = await db.select().from(tasksTable).where(eq(tasksTable.id, taskId));
-    if (!t) return "";
+    if (!t) return { note: "", scheduled: false };
     const max = Number(t.retryCount ?? 0);
-    if (!max || max <= 0) return "";
+    if (!max || max <= 0) return { note: "", scheduled: false };
     const used = Number(t.retryAttempt ?? 0);
     if (used >= max) {
       await db.update(tasksTable).set({ retryAttempt: 0 }).where(eq(tasksTable.id, taskId));
       logger.info({ taskId, used, max }, "Retry budget exhausted — waiting for the normal schedule");
-      return ` (retries exhausted: ${used}/${max})`;
+      return { note: ` (retries exhausted: ${used}/${max})`, scheduled: false };
     }
     const mins = Math.max(1, Number(t.retryIntervalMinutes ?? 5));
     const nextRunAt = new Date(Date.now() + mins * 60_000);
@@ -40,10 +40,10 @@ async function scheduleRetryIfConfigured(taskId: number): Promise<string> {
       .set({ retryAttempt: used + 1, nextRunAt })
       .where(eq(tasksTable.id, taskId));
     logger.info({ taskId, attempt: used + 1, max, mins }, "Retry scheduled after failure");
-    return ` (retry ${used + 1}/${max} in ${mins}m)`;
+    return { note: ` (retry ${used + 1}/${max} in ${mins}m)`, scheduled: true };
   } catch (err) {
     logger.warn({ taskId, err }, "Failed to schedule retry");
-    return "";
+    return { note: "", scheduled: false };
   }
 }
 
@@ -636,7 +636,13 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
                       ipNote = "\n\nThis task's proxy cannot rotate its exit IP (set the proxy type to WARP to enable rotation).";
                     }
                   }
-                  const msg = `${dryRun ? "[DRY RUN] " : ""}${err.message}${ipNote}\n\nA captcha screenshot has been saved.`;
+                  // A captcha/CF block is still a failure, so honour the task's retry
+                  // config like any other failure — a later attempt (fresh session, the
+                  // CF state may have eased) can pass. Only after the retry budget is
+                  // spent does it sit as needs_attention for a human. Book it BEFORE the
+                  // log so the message can say when it will retry.
+                  const retry = !dryRun ? await scheduleRetryIfConfigured(taskId) : { note: "", scheduled: false };
+                  const msg = `${dryRun ? "[DRY RUN] " : ""}${err.message}${ipNote}${retry.note}\n\nA captcha screenshot has been saved.`;
                   // The captcha/CF step throws BEFORE executeWorkflowSteps records it, so
                   // the timeline would otherwise be empty for the very step that decided
                   // the outcome. Record it explicitly with the real reason + screenshot so
@@ -653,9 +659,12 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
                     getTaskEmitter(taskId).emit("event", { type: "screenshot", message: err.message, screenshotPath });
                   }
                   await writeLog(taskId, false, msg, screenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
-                  if (!dryRun) await db.update(tasksTable).set({ status: "needs_attention", lastRunAt: new Date() }).where(eq(tasksTable.id, taskId));
-                  emitTaskDone(taskId, false, dryRun ? "[DRY RUN] Captcha encountered" : "Task paused - captcha needs resolution");
-                  logger.warn({ taskId, dryRun }, "Captcha encountered");
+                  // A scheduled retry keeps the task in the normal failed/retrying flow
+                  // (the scheduler's nextRunAt poller will re-run it); otherwise it waits
+                  // for human resolution. Don't clobber the retry's nextRunAt here.
+                  if (!dryRun) await db.update(tasksTable).set({ status: retry.scheduled ? "failed" : "needs_attention", lastRunAt: new Date() }).where(eq(tasksTable.id, taskId));
+                  emitTaskDone(taskId, false, dryRun ? "[DRY RUN] Captcha encountered" : retry.scheduled ? `Captcha block — retrying${retry.note}` : "Task paused - captcha needs resolution");
+                  logger.warn({ taskId, dryRun, willRetry: retry.scheduled }, "Captcha encountered");
                   return;
                 }
                 try {
@@ -704,7 +713,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
             // A run that finished but FAILED gets a retry too — otherwise only
             // exceptions would, and a task that merely reports failure would sit idle
             // until its next schedule.
-            const _retryNote = !dryRun && !overallSuccess ? await scheduleRetryIfConfigured(taskId) : "";
+            const _retryNote = !dryRun && !overallSuccess ? (await scheduleRetryIfConfigured(taskId)).note : "";
             if (dryRun) fullMessage = `[DRY RUN] ${fullMessage}`;
             await writeLog(taskId, overallSuccess, fullMessage + _retryNote, screenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
             if (!dryRun) {
@@ -799,7 +808,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
       }
       // Book a retry BEFORE writing the log so the message can say when it'll run.
       // Cancellations are deliberate — never retry those.
-      const retryNote = !dryRun && !isCancelled ? await scheduleRetryIfConfigured(taskId) : "";
+      const retryNote = !dryRun && !isCancelled ? (await scheduleRetryIfConfigured(taskId)).note : "";
       await writeLog(taskId, false, errMsg + retryNote, outerScreenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
       if (!dryRun) {
         await db.update(tasksTable).set({ status: isCancelled ? "idle" : "failed", lastRunAt: new Date() }).where(eq(tasksTable.id, taskId));
