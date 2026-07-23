@@ -123,7 +123,7 @@ export default function TaskDetail() {
 
   // ── Browser config (fingerprint + proxy) for the right-column info cards ──
   const bcfg = (stableTask?.browserConfig ?? null) as
-    | { proxyUrl?: string | null; proxyType?: string | null; proxyProfileId?: number | null; fingerprintProfileId?: number | null;
+    | { proxyUrl?: string | null; proxyType?: string | null; proxyProfileId?: number | null; fingerprintProfileId?: number | null; providerId?: number | null;
         fingerprint?: { os?: string | null; timezone?: string | null; locale?: string | null; autoGeo?: boolean | null } | null }
     | null;
   // Server-resolved display fields — a saved profile is referenced by id (inline
@@ -131,6 +131,19 @@ export default function TaskDetail() {
   const proxyLabel = (stableTask as unknown as { proxyLabel?: string | null })?.proxyLabel ?? null;
   const fingerprintOsResolved = (stableTask as unknown as { fingerprintOs?: string | null })?.fingerprintOs ?? null;
   const fingerprintLabel = (stableTask as unknown as { fingerprintLabel?: string | null })?.fingerprintLabel ?? null;
+
+  // Fetch the saved fingerprint profile + providers so the cards can show full detail
+  // (WebGL/GPU, UA, tz/locale) and the bound provider name.
+  type FpSummary = { userAgent?: string; platform?: string; languages?: string[]; screen?: string; webglVendor?: string; webglRenderer?: string; hardwareConcurrency?: number };
+  type FpProfile = { id: number; name: string; os: string; config?: { timezone?: string; locale?: string; screen?: string; summary?: FpSummary } | null };
+  const [fpProfiles, setFpProfiles] = useState<FpProfile[]>([]);
+  const [providersList, setProvidersList] = useState<Array<{ id: number; name: string; type: string }>>([]);
+  useEffect(() => {
+    fetch("/api/fingerprint-profiles").then((r) => r.json()).then(setFpProfiles).catch(() => {});
+    fetch("/api/providers").then((r) => r.json()).then(setProvidersList).catch(() => {});
+  }, []);
+  const boundFp = bcfg?.fingerprintProfileId ? fpProfiles.find((p) => p.id === bcfg.fingerprintProfileId) : undefined;
+  const boundProvider = bcfg?.providerId ? providersList.find((p) => p.id === bcfg.providerId) : undefined;
   const hasProxy = !!(bcfg && ((bcfg.proxyUrl && bcfg.proxyUrl.trim()) || bcfg.proxyType === "warp" || bcfg.proxyProfileId));
 
   type ProxyGeo = { configured: boolean; direct?: boolean; ok?: boolean; error?: string; proxyType?: string;
@@ -700,6 +713,16 @@ export default function TaskDetail() {
                   </dd>
                 </div>
 
+                <div className="space-y-1">
+                  <dt className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Provider</dt>
+                  <dd className="text-sm font-mono flex items-center gap-2">
+                    <Settings2 className="h-3 w-3 text-muted-foreground" />
+                    {boundProvider
+                      ? <span>{boundProvider.name} <span className="text-xs text-muted-foreground">({boundProvider.type})</span></span>
+                      : <span className="text-muted-foreground">默认（Settings）</span>}
+                  </dd>
+                </div>
+
                 {scheduleInfo?.runsPerWindow != null && (
                   <div className="space-y-1 col-span-2">
                     <dt className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Window Progress</dt>
@@ -1226,18 +1249,39 @@ export default function TaskDetail() {
               </CardHeader>
               <CardContent className="pt-4 space-y-3 text-sm">
                 {fingerprintLabel ? (
-                  // Saved fingerprint profile (e.g. a generated real fingerprint). The
-                  // details live in the profile; here we show which one is bound.
-                  <>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-muted-foreground">Saved profile</span>
-                      <span className="text-sm font-mono font-semibold">{fingerprintLabel}</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-muted-foreground">OS</span>
-                      <span className="text-sm font-mono font-semibold capitalize">{fingerprintOsResolved || "linux"}</span>
-                    </div>
-                  </>
+                  // Saved fingerprint profile (e.g. a generated real fingerprint). Show the
+                  // full detail from the profile: OS, GPU/WebGL, screen, UA, tz/locale.
+                  (() => {
+                    const cfg = boundFp?.config ?? null;
+                    const sm = cfg?.summary ?? {};
+                    const autoTz = !cfg?.timezone;
+                    const autoLoc = !cfg?.locale;
+                    const gpu = [sm.webglVendor, sm.webglRenderer].filter(Boolean).join(" · ");
+                    const row = (k: string, v: import("react").ReactNode) => (
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="text-xs text-muted-foreground shrink-0">{k}</span>
+                        <span className="text-sm font-mono text-right break-all">{v}</span>
+                      </div>
+                    );
+                    return (
+                      <>
+                        {row("Saved profile", <span className="font-semibold">{fingerprintLabel}</span>)}
+                        {row("OS", <span className="font-semibold capitalize">{fingerprintOsResolved || boundFp?.os || "linux"}</span>)}
+                        {gpu && row("GPU (WebGL)", gpu)}
+                        {sm.screen && row("Screen", sm.screen)}
+                        {sm.hardwareConcurrency != null && row("CPU cores", String(sm.hardwareConcurrency))}
+                        {row("Timezone", cfg?.timezone?.trim() || "auto (from exit IP)")}
+                        {row("Locale", cfg?.locale?.trim() || (sm.languages && sm.languages.length ? sm.languages.join(", ") : "auto (from exit IP)"))}
+                        {(autoTz || autoLoc) && (
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs text-muted-foreground">Auto geo</span>
+                            <Badge variant="default" className="font-mono text-[10px]">ON{autoTz && autoLoc ? "" : autoTz ? " (tz)" : " (locale)"}</Badge>
+                          </div>
+                        )}
+                        {sm.userAgent && row("User-Agent", <span className="text-[11px] text-muted-foreground">{sm.userAgent}</span>)}
+                      </>
+                    );
+                  })()
                 ) : bcfg?.fingerprint?.os ? (
                   <>
                     <div className="flex items-center justify-between gap-2">
