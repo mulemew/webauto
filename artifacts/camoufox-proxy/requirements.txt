@@ -1,3 +1,8 @@
+# IMPORTANT: keep this Playwright minor in lockstep with the api-server's playwright-core
+# (artifacts/api-server/package.json). firefox.connect() rejects a major.minor mismatch
+# with "428 Precondition Required — Playwright version mismatch". camoufox 0.5.4 caps
+# Playwright at <1.61, so both sides are pinned to 1.60.x.
 camoufox[geoip]
+playwright>=1.60,<1.61
 flask
 waitress
