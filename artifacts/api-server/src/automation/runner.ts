@@ -654,6 +654,12 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
                   }
                   await writeLog(taskId, false, msg, screenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
                   if (!dryRun) await db.update(tasksTable).set({ status: "needs_attention", lastRunAt: new Date() }).where(eq(tasksTable.id, taskId));
+                  // This branch returns early instead of falling through to the normal
+                  // completion path, so it must re-schedule @after_completion tasks itself
+                  // — otherwise a CF/captcha block leaves them with no next run and they
+                  // silently stop repeating (they re-ran fine when this used to fall
+                  // through to the normal path).
+                  await schedulePostCompletionIfNeeded(taskId, dryRun);
                   emitTaskDone(taskId, false, dryRun ? "[DRY RUN] Captcha encountered" : "Task paused - captcha needs resolution");
                   logger.warn({ taskId, dryRun }, "Captcha encountered");
                   return;
