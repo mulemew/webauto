@@ -6,7 +6,7 @@
   import { logger } from "./lib/logger";
   import { initScheduler } from "./scheduler";
   import { backfillExitGeo } from "./routes/tasks";
-  import { startProviderHealthPolling, seedProvidersFromSettings } from "./automation/providers";
+  import { startProviderHealthPolling, seedProvidersFromSettings, autoBindTasksToProviders } from "./automation/providers";
   import { installSignalHandlers } from "./lib/child-registry";
   import { runMigrations } from "./lib/migrations";
   import { hasStoredPassword, initPassword } from "./lib/passwordStore";
@@ -73,6 +73,9 @@
     // One-time: seed a provider from the current Settings backend so the page isn't empty
     // after the config moved out of Settings; then keep provider health fresh.
     await seedProvidersFromSettings();
+    // One-time: bind existing tasks to the matching-type provider so you don't have to
+    // open each task and pick one. Runs after the seed so seeded providers count too.
+    await autoBindTasksToProviders();
     startProviderHealthPolling();
   });
   

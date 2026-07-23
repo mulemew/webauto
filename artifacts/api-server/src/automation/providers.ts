@@ -120,6 +120,48 @@ export async function seedProvidersFromSettings(): Promise<void> {
   }
 }
 
+const BIND_FLAG_KEY = "tasksBoundToProviders";
+
+/** One-time migration: bind existing tasks to the provider matching their current engine
+ *  type, so you don't have to open each task and pick one. Only binds when there is
+ *  EXACTLY ONE enabled provider of that type (no ambiguity) and the task isn't already
+ *  bound. Runs once ever (its own flag), independent of the seed. */
+export async function autoBindTasksToProviders(): Promise<void> {
+  try {
+    const [flag] = await db.select().from(settingsTable).where(eq(settingsTable.key, BIND_FLAG_KEY));
+    if (flag) return;
+
+    const provs = await db.select().from(providersTable).where(eq(providersTable.enabled, true));
+    // type → the single provider of that type (skip types with 0 or >1 to avoid guessing).
+    const byType = new Map<string, number>();
+    const seenTwice = new Set<string>();
+    for (const p of provs) {
+      if (byType.has(p.type)) { seenTwice.add(p.type); continue; }
+      byType.set(p.type, p.id);
+    }
+    for (const t of seenTwice) byType.delete(t);
+
+    if (byType.size > 0) {
+      const tasks = await db.select().from(tasksTable);
+      let bound = 0;
+      for (const t of tasks) {
+        const bc = (t.browserConfig ?? null) as { provider?: string; providerId?: number | null } | null;
+        if (!bc || bc.providerId != null) continue;
+        const pid = bc.provider ? byType.get(bc.provider) : undefined;
+        if (pid) {
+          await db.update(tasksTable).set({ browserConfig: { ...bc, providerId: pid } }).where(eq(tasksTable.id, t.id));
+          bound++;
+        }
+      }
+      if (bound) logger.info({ bound }, "Auto-bound existing tasks to matching providers");
+    }
+    await db.insert(settingsTable).values({ key: BIND_FLAG_KEY, value: "1" })
+      .onConflictDoUpdate({ target: settingsTable.key, set: { value: "1" } });
+  } catch (err) {
+    logger.warn({ err }, "autoBindTasksToProviders failed");
+  }
+}
+
 /** Poll every enabled provider's health so the page + selection reflect reachability. */
 export function startProviderHealthPolling(): void {
   const tick = async () => {
