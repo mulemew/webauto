@@ -676,15 +676,18 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
                     getTaskEmitter(taskId).emit("event", { type: "screenshot", message: err.message, screenshotPath });
                   }
                   await writeLog(taskId, false, msg, screenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
-                  // A booked retry keeps the task in the normal failed/retrying flow; only
-                  // once retries are spent (or none configured) does it sit needs_attention.
-                  if (!dryRun) await db.update(tasksTable).set({ status: capRetry.scheduled ? "failed" : "needs_attention", lastRunAt: new Date() }).where(eq(tasksTable.id, taskId));
+                  // Status reflects the ACTUAL outcome — a genuinely unsolved captcha needs
+                  // human attention — INDEPENDENT of whether a retry is queued. Retry is a
+                  // separate concern (retry_at) and must not mask this as a plain "failed".
+                  // (Crashes / non-captcha failures never reach here — they throw a plain
+                  // Error and land in the normal failed path.)
+                  if (!dryRun) await db.update(tasksTable).set({ status: "needs_attention", lastRunAt: new Date() }).where(eq(tasksTable.id, taskId));
                   // This branch returns early instead of falling through to the normal
                   // completion path, so it must re-schedule @after_completion tasks itself
                   // — but a pending retry already owns the next run, so only reschedule
                   // when no retry was booked (otherwise the task would run twice).
                   if (!capRetry.scheduled) await schedulePostCompletionIfNeeded(taskId, dryRun);
-                  emitTaskDone(taskId, false, dryRun ? "[DRY RUN] Captcha encountered" : capRetry.scheduled ? `Captcha block — retrying${capRetry.note}` : "Task paused - captcha needs resolution");
+                  emitTaskDone(taskId, false, dryRun ? "[DRY RUN] Captcha encountered" : `Task paused - captcha needs resolution${capRetry.note}`);
                   logger.warn({ taskId, dryRun, willRetry: capRetry.scheduled }, "Captcha encountered");
                   return;
                 }
