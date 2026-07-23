@@ -827,8 +827,14 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
       } finally {
         if (timeoutHandle) clearTimeout(timeoutHandle);
         if (cancelCheckInterval) clearInterval(cancelCheckInterval);
-        if (finalPage !== page) await finalPage.close().catch(() => {});
-        await page.close().catch(() => {});
+        // Bound the close: a dead/hung browser connection (e.g. camoufox with a broken ws)
+        // must NOT make this await block forever and strand the concurrency slot. The
+        // provider still tears down its backend session, and the sidecar reaper is the
+        // final safety net.
+        const _boundedClose = (pg: import("./page-adapter").PageAdapter) =>
+          Promise.race([pg.close().catch(() => {}), new Promise<void>((r) => setTimeout(r, 25_000))]);
+        if (finalPage !== page) await _boundedClose(finalPage);
+        await _boundedClose(page);
       }
     } catch (err) {
       // Never let the failure log come out blank OR be a useless bare "Error":

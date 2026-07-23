@@ -225,7 +225,7 @@ def launch():
         return jsonify({"error": "Camoufox server did not report a ws endpoint\n" + "\n".join(tail)}), 500
     sid = str(uuid.uuid4())
     with _lock:
-        _servers[sid] = {"proc": proc, "ws": ws}
+        _servers[sid] = {"proc": proc, "ws": ws, "started": time.time()}
     # Drain the child's remaining stdout in the background so it never blocks on a full pipe.
     threading.Thread(target=_drain, args=(proc,), daemon=True).start()
     print(f"[camoufox] launched {sid} ws={ws} os={opts.get('os')}", flush=True)
@@ -240,6 +240,50 @@ def _drain(proc):
         pass
 
 
+def _kill(proc):
+    try:
+        proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=8)
+        except Exception:
+            proc.kill()
+    except Exception:
+        pass
+
+
+# Background reaper: without it a session whose task hung (never called /release) would
+# leave its launcher+firefox subprocess running forever, and a crashed launcher would sit
+# as a zombie (nobody wait()s it). Every 20s we (a) reap dead procs — Popen.poll() collects
+# the zombie and sets returncode — and (b) SIGTERM/kill sessions older than the TTL.
+_SESSION_TTL = int(os.getenv("CAMOUFOX_SESSION_TTL", "1800"))
+
+
+def _reaper():
+    while True:
+        time.sleep(20)
+        try:
+            now = time.time()
+            with _lock:
+                items = list(_servers.items())
+            for sid, e in items:
+                proc = e["proc"]
+                if proc.poll() is not None:  # already exited — poll() reaps the zombie
+                    with _lock:
+                        _servers.pop(sid, None)
+                    print(f"[camoufox] reaped dead session {sid} (exit={proc.returncode})", flush=True)
+                    continue
+                if now - e.get("started", now) > _SESSION_TTL:  # hung / orphaned
+                    _kill(proc)
+                    with _lock:
+                        _servers.pop(sid, None)
+                    print(f"[camoufox] killed over-age session {sid} (>{_SESSION_TTL}s)", flush=True)
+        except Exception as ex:  # never let the reaper die
+            print(f"[camoufox] reaper error: {ex}", flush=True)
+
+
+threading.Thread(target=_reaper, daemon=True).start()
+
+
 @app.post("/release")
 def release():
     body = request.get_json(silent=True) or {}
@@ -247,14 +291,7 @@ def release():
     with _lock:
         entry = _servers.pop(sid, None)
     if entry:
-        try:
-            entry["proc"].send_signal(signal.SIGTERM)
-            try:
-                entry["proc"].wait(timeout=8)
-            except Exception:
-                entry["proc"].kill()
-        except Exception:
-            pass
+        _kill(entry["proc"])
         print(f"[camoufox] released {sid}", flush=True)
     return jsonify({"ok": True})
 

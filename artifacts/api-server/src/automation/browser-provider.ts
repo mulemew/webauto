@@ -829,12 +829,21 @@ class CamoufoxProvider implements BrowserProvider {
     adapter.close = async () => {
       this._browsers.delete(browser);
       this._ids.delete(browser);
-      await page.close().catch(() => {});
-      await context.close().catch(() => {});
-      await browser.close().catch(() => {});
+      // Release the sidecar session FIRST — it's a plain HTTP call that kills the launcher
+      // subprocess and does NOT depend on the (possibly dead/hung) ws. Then stop the proxy.
+      // Only after that do we best-effort close the playwright objects, bounded so a dead
+      // connection can't hang the caller forever. The sidecar reaper is the final net.
       await this.release(id);
       const rp = this._proxies.get(browser);
       if (rp) { this._proxies.delete(browser); await rp.stop().catch(() => {}); }
+      await Promise.race([
+        (async () => {
+          await page.close().catch(() => {});
+          await context.close().catch(() => {});
+          await browser.close().catch(() => {});
+        })(),
+        new Promise<void>((r) => setTimeout(r, 8000)),
+      ]);
     };
     return adapter;
   }
