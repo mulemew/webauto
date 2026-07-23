@@ -54,12 +54,29 @@ def _build_options(body: dict) -> dict:
     #    incl. "false"/"virtual")
     _h = os.getenv("CAMOUFOX_HEADLESS", "false").strip().lower()
     _headless: bool = _h in ("true", "1", "yes", "on")
+
+    def _envflag(name: str, default: bool) -> bool:
+        v = os.getenv(name)
+        if v is None:
+            return default
+        return v.strip().lower() in ("true", "1", "yes", "on")
+
     opts: dict = {
         "headless": _headless,
         # Camoufox rotates a realistic, internally-consistent fingerprint for the OS.
         "geoip": True,
         "humanize": bool(body.get("humanize", True)),
+        # Block WebRTC entirely by default. Otherwise geoip spoofs a WebRTC IPv4 (the exit
+        # IP) which fingerprint checkers flag as inconsistent with the page's IPv6 — a
+        # STUN leak that LOWERS the score. Blocking it = no leak, no mismatch. Toggle with
+        # CAMOUFOX_BLOCK_WEBRTC=false to let camoufox spoof the WebRTC IP instead.
+        "block_webrtc": _envflag("CAMOUFOX_BLOCK_WEBRTC", True),
     }
+    # Extra camoufox knobs, opt-in via env (all off by default):
+    if _envflag("CAMOUFOX_BLOCK_IMAGES", False):
+        opts["block_images"] = True
+    if _envflag("CAMOUFOX_DISABLE_COOP", False):
+        opts["disable_coop"] = True
     _os = (body.get("os") or "").strip().lower()
     if _os in ("windows", "macos", "mac", "linux"):
         opts["os"] = "macos" if _os == "mac" else _os
@@ -183,7 +200,10 @@ def generate():
         from browserforge.fingerprints import FingerprintGenerator
         import base64
         import pickle
-        fp = FingerprintGenerator().generate(os=os_name)
+        # MUST be a Firefox fingerprint — Camoufox is patched Firefox and rejects Chrome/
+        # other-browser fingerprints (NonFirefoxFingerprint). browser= flows through to the
+        # header generator, forcing a Firefox UA the rest of the fingerprint is built around.
+        fp = FingerprintGenerator().generate(os=os_name, browser="firefox")
         summary = _summ_from_fp(fp, os_name)
         fp_b64 = base64.b64encode(pickle.dumps(fp)).decode("ascii")
         return jsonify({"config": {"source": "browserforge", "os": os_name, "fp": fp_b64, "summary": summary}, "summary": summary})

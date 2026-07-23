@@ -66,7 +66,11 @@ export default function FingerprintProfiles() {
   const openEdit = (p: FingerprintProfile) => {
     setEditingId(p.id);
     const cfg = (p.config ?? {}) as Record<string, unknown>;
-    setForm({ name: p.name, os: p.os, locale: (cfg.locale as string) ?? "", timezone: (cfg.timezone as string) ?? "", screen: (cfg.screen as string) ?? "" });
+    // A generated fingerprint carries its own screen (in summary) — show it so the field
+    // isn't blank on edit. (For generated profiles it's fixed; the manual field only
+    // applies to the non-generated cf-proxy fallback.)
+    const summaryScreen = ((cfg.summary as { screen?: string } | undefined)?.screen) ?? "";
+    setForm({ name: p.name, os: p.os, locale: (cfg.locale as string) ?? "", timezone: (cfg.timezone as string) ?? "", screen: (cfg.screen as string) || summaryScreen || "" });
     // A saved generated fingerprint carries fp/preset/summary — keep it fixed on edit.
     if (cfg.fp || cfg.preset) { setGenerated(cfg); setGenSummary((cfg.summary as Record<string, unknown>) ?? null); }
     else { setGenerated(null); setGenSummary(null); }

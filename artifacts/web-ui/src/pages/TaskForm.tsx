@@ -1013,7 +1013,7 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                     <div className="space-y-1.5">
                       <label className="text-sm font-medium">Provider</label>
                       <Select
-                        value={browserConfig.providerId != null && providers.some((p) => p.id === browserConfig.providerId) ? String(browserConfig.providerId) : "default"}
+                        value={browserConfig.providerId != null ? String(browserConfig.providerId) : "default"}
                         onValueChange={(v) =>
                           setBrowserConfig((s) => {
                             if (v === "default") return { ...s, providerId: null };
@@ -1027,9 +1027,9 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                         <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="default">默认（Settings 后端）</SelectItem>
-                          {providers.filter((p) => p.enabled).map((p) => (
+                          {providers.filter((p) => p.enabled || p.id === browserConfig.providerId).map((p) => (
                             <SelectItem key={p.id} value={String(p.id)}>
-                              {p.name}（{p.type}，并发 {p.concurrency}）{p.healthy === false ? " ⚠" : ""}
+                              {p.name}（{p.type}，并发 {p.concurrency}）{!p.enabled ? " (disabled)" : p.healthy === false ? " ⚠" : ""}
                             </SelectItem>
                           ))}
                         </SelectContent>
