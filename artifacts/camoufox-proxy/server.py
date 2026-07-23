@@ -136,19 +136,24 @@ def _summ_from_fp(fp, os_name: str) -> dict:
 
 
 def _summ_from_preset(preset: dict, os_name: str) -> dict:
-    # Preset dict shape isn't documented; pull common keys best-effort for display only.
-    def pick(*keys):
-        for k in keys:
-            if isinstance(preset, dict) and preset.get(k):
-                return preset[k]
-        return ""
+    # A preset is a NESTED dict: navigator{userAgent,platform,hardwareConcurrency},
+    # screen{width,height,...}, webgl{unmaskedVendor,unmaskedRenderer}.
+    nav = preset.get("navigator") if isinstance(preset, dict) else None
+    scr = preset.get("screen") if isinstance(preset, dict) else None
+    wg = preset.get("webgl") if isinstance(preset, dict) else None
+    nav = nav if isinstance(nav, dict) else {}
+    scr = scr if isinstance(scr, dict) else {}
+    wg = wg if isinstance(wg, dict) else {}
+    w, h = scr.get("width"), scr.get("height")
     return {
         "source": "preset",
         "os": "mac" if os_name == "macos" else os_name,
-        "userAgent": pick("navigator.userAgent", "userAgent", "navigator:userAgent"),
-        "screen": pick("screen", "screen.width") and str(pick("screen", "screen.width")) or "",
-        "webglVendor": pick("webGl:vendor", "webGl.vendor", "webglVendor"),
-        "webglRenderer": pick("webGl:renderer", "webGl.renderer", "webglRenderer"),
+        "userAgent": nav.get("userAgent") or "",
+        "platform": nav.get("platform") or "",
+        "screen": f"{w}x{h}" if w and h else "",
+        "webglVendor": wg.get("unmaskedVendor") or "",
+        "webglRenderer": wg.get("unmaskedRenderer") or "",
+        "hardwareConcurrency": nav.get("hardwareConcurrency"),
     }
 
 

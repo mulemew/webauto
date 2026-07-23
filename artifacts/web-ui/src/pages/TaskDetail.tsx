@@ -135,7 +135,10 @@ export default function TaskDetail() {
   // Fetch the saved fingerprint profile + providers so the cards can show full detail
   // (WebGL/GPU, UA, tz/locale) and the bound provider name.
   type FpSummary = { userAgent?: string; platform?: string; languages?: string[]; screen?: string; webglVendor?: string; webglRenderer?: string; hardwareConcurrency?: number };
-  type FpProfile = { id: number; name: string; os: string; config?: { timezone?: string; locale?: string; screen?: string; summary?: FpSummary } | null };
+  // A "preset" profile stores the raw captured device (nested navigator/screen/webgl);
+  // read from it directly so existing profiles render correctly regardless of summary.
+  type FpPreset = { navigator?: { userAgent?: string; platform?: string; hardwareConcurrency?: number }; screen?: { width?: number; height?: number }; webgl?: { unmaskedVendor?: string; unmaskedRenderer?: string } };
+  type FpProfile = { id: number; name: string; os: string; config?: { timezone?: string; locale?: string; screen?: string; summary?: FpSummary; preset?: FpPreset } | null };
   const [fpProfiles, setFpProfiles] = useState<FpProfile[]>([]);
   const [providersList, setProvidersList] = useState<Array<{ id: number; name: string; type: string }>>([]);
   useEffect(() => {
@@ -1254,9 +1257,15 @@ export default function TaskDetail() {
                   (() => {
                     const cfg = boundFp?.config ?? null;
                     const sm = cfg?.summary ?? {};
-                    const autoTz = !cfg?.timezone;
-                    const autoLoc = !cfg?.locale;
-                    const gpu = [sm.webglVendor, sm.webglRenderer].filter(Boolean).join(" · ");
+                    const pre = cfg?.preset ?? null;
+                    // Prefer the raw preset (correct + complete); fall back to the summary.
+                    const gpu = pre?.webgl
+                      ? [pre.webgl.unmaskedVendor, pre.webgl.unmaskedRenderer].filter(Boolean).join(" · ")
+                      : [sm.webglVendor, sm.webglRenderer].filter(Boolean).join(" · ");
+                    const screen = pre?.screen?.width && pre?.screen?.height ? `${pre.screen.width}×${pre.screen.height}` : (sm.screen || "");
+                    const ua = pre?.navigator?.userAgent || sm.userAgent || "";
+                    const cores = pre?.navigator?.hardwareConcurrency ?? sm.hardwareConcurrency;
+                    const platform = pre?.navigator?.platform || sm.platform || "";
                     const row = (k: string, v: import("react").ReactNode) => (
                       <div className="flex items-start justify-between gap-2">
                         <span className="text-xs text-muted-foreground shrink-0">{k}</span>
@@ -1267,18 +1276,13 @@ export default function TaskDetail() {
                       <>
                         {row("Saved profile", <span className="font-semibold">{fingerprintLabel}</span>)}
                         {row("OS", <span className="font-semibold capitalize">{fingerprintOsResolved || boundFp?.os || "linux"}</span>)}
-                        {gpu && row("GPU (WebGL)", gpu)}
-                        {sm.screen && row("Screen", sm.screen)}
-                        {sm.hardwareConcurrency != null && row("CPU cores", String(sm.hardwareConcurrency))}
-                        {row("Timezone", cfg?.timezone?.trim() || "auto (from exit IP)")}
-                        {row("Locale", cfg?.locale?.trim() || (sm.languages && sm.languages.length ? sm.languages.join(", ") : "auto (from exit IP)"))}
-                        {(autoTz || autoLoc) && (
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-xs text-muted-foreground">Auto geo</span>
-                            <Badge variant="default" className="font-mono text-[10px]">ON{autoTz && autoLoc ? "" : autoTz ? " (tz)" : " (locale)"}</Badge>
-                          </div>
-                        )}
-                        {sm.userAgent && row("User-Agent", <span className="text-[11px] text-muted-foreground">{sm.userAgent}</span>)}
+                        {gpu && row("GPU", <span className="text-[11px]">{gpu}</span>)}
+                        {screen && row("Screen", screen)}
+                        {platform && row("Platform", platform)}
+                        {cores != null && row("CPU cores", String(cores))}
+                        {row("Timezone", cfg?.timezone?.trim() || "auto（跟随出口 IP）")}
+                        {row("Locale", cfg?.locale?.trim() || (sm.languages && sm.languages.length ? sm.languages.join(", ") : "auto（跟随出口 IP）"))}
+                        {ua && row("User-Agent", <span className="text-[11px] text-muted-foreground">{ua}</span>)}
                       </>
                     );
                   })()
