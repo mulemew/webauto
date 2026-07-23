@@ -90,6 +90,7 @@ import { pool } from "@workspace/db";
   );
   ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "fingerprint_profile_id" integer;
   ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "proxy_profile_id" integer;
+  ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "retry_at" timestamptz;
   ALTER TABLE "proxy_profiles" ADD COLUMN IF NOT EXISTS "exit_geo" jsonb;
   ALTER TABLE "proxy_profiles" ADD COLUMN IF NOT EXISTS "geo_updated_at" timestamptz;
   CREATE TABLE IF NOT EXISTS "provider_instances" (

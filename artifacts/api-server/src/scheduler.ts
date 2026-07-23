@@ -98,10 +98,25 @@ export async function initScheduler(): Promise<void> {
     logger.warn({ err }, "Failed to check overdue post-completion tasks on startup");
   }
 
-  // Polling loop: every 30 s fire any post-completion tasks whose nextRunAt has arrived
+  // Fire any auto-retries whose retry_at was missed during downtime (all schedule types).
+  try {
+    const now = new Date();
+    const overdueRetries = await db.select().from(tasksTable)
+      .where(and(eq(tasksTable.enabled, true), isNotNull(tasksTable.retryAt), lte(tasksTable.retryAt, now)));
+    for (const task of overdueRetries) {
+      logger.info({ taskId: task.id }, "Triggering overdue auto-retry on startup");
+      await db.update(tasksTable).set({ retryAt: null }).where(eq(tasksTable.id, task.id));
+      runTask(task.id, false, "cron").catch((err: unknown) => logger.error({ taskId: task.id, err }, "Overdue retry run failed"));
+    }
+  } catch (err) {
+    logger.warn({ err }, "Failed to check overdue retries on startup");
+  }
+
+  // Polling loop: every 30 s fire (a) @after_completion next runs and (b) auto-retries.
   setInterval(async () => {
     try {
       const now = new Date();
+      // (a) @after_completion interval runs — driven by next_run_at.
       const due = await db.select().from(tasksTable)
         .where(and(eq(tasksTable.enabled, true), isNotNull(tasksTable.nextRunAt), lte(tasksTable.nextRunAt, now)));
       for (const task of due) {
@@ -110,8 +125,18 @@ export async function initScheduler(): Promise<void> {
         logger.info({ taskId: task.id }, "Post-completion interval task triggered");
         runTask(task.id, false, "cron").catch((err: unknown) => logger.error({ taskId: task.id, err }, "Post-completion task run failed"));
       }
+      // (b) Auto-retries — a DEDICATED channel (retry_at) so retry fires for EVERY schedule
+      // type identically (cron, @random, @after_completion, manual), without colliding with
+      // that type's own next_run_at scheduling.
+      const retries = await db.select().from(tasksTable)
+        .where(and(eq(tasksTable.enabled, true), isNotNull(tasksTable.retryAt), lte(tasksTable.retryAt, now)));
+      for (const task of retries) {
+        await db.update(tasksTable).set({ retryAt: null }).where(eq(tasksTable.id, task.id));
+        logger.info({ taskId: task.id }, "Auto-retry fired");
+        runTask(task.id, false, "cron").catch((err: unknown) => logger.error({ taskId: task.id, err }, "Retry run failed"));
+      }
     } catch (err) {
-      logger.error({ err }, "Post-completion scheduler poll error");
+      logger.error({ err }, "Scheduler poll error");
     }
   }, 30_000).unref();
 

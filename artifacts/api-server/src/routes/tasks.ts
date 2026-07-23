@@ -321,27 +321,30 @@ router.get("/tasks/stats/history", async (_req, res): Promise<void> => {
 
 router.get("/tasks/next-runs", async (_req, res): Promise<void> => {
     const taskRows = await db
-      .select({ id: tasksTable.id, cronExpression: tasksTable.cronExpression, nextRunAt: tasksTable.nextRunAt })
+      .select({ id: tasksTable.id, cronExpression: tasksTable.cronExpression, nextRunAt: tasksTable.nextRunAt, retryAt: tasksTable.retryAt })
       .from(tasksTable)
       .where(eq(tasksTable.enabled, true));
 
     const now = new Date();
+    // A pending auto-retry runs before the normal schedule, so it's the true next run when
+    // it's sooner — surfaced consistently for every schedule type (incl. manual tasks with
+    // no cron, which is why the filter also lets a retry-only task through).
+    const soonest = (retryAt: Date | null, normal: Date | null): string | null => {
+      const r = retryAt && new Date(retryAt) > now ? new Date(retryAt) : null;
+      const n = normal && normal > now ? normal : null;
+      const pick = r && n ? (r < n ? r : n) : (r ?? n);
+      return pick ? pick.toISOString() : null;
+    };
     const result = taskRows
-      .filter((t) => t.cronExpression)
+      .filter((t) => t.cronExpression || t.retryAt)
       .map((t) => {
-        // @after_completion tasks: nextRunAt is written to DB by runner after each run;
-        // getNextCronRun does not understand this format.
-        if (t.cronExpression?.startsWith("@after_completion:")) {
-          return { taskId: t.id, nextRunAt: t.nextRunAt ? new Date(t.nextRunAt).toISOString() : null };
-        }
-        // @random: tasks: next run time is written to DB by scheduleWindow in scheduler.
-        if (t.cronExpression?.startsWith("@random:")) {
-          return { taskId: t.id, nextRunAt: t.nextRunAt ? new Date(t.nextRunAt).toISOString() : null };
-        }
-        return {
-          taskId: t.id,
-          nextRunAt: getNextCronRun(t.cronExpression!, now)?.toISOString() ?? null,
-        };
+        // @after_completion / @random: nextRunAt is written to DB by the runner/scheduler;
+        // getNextCronRun doesn't understand those formats. Manual tasks have no cron at all.
+        const normal =
+          !t.cronExpression || t.cronExpression.startsWith("@after_completion:") || t.cronExpression.startsWith("@random:")
+            ? (t.nextRunAt ? new Date(t.nextRunAt) : null)
+            : (getNextCronRun(t.cronExpression, now) ?? null);
+        return { taskId: t.id, nextRunAt: soonest(t.retryAt, normal) };
       });
 
     res.json(result);

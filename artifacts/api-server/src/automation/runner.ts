@@ -14,37 +14,39 @@ import path from "path";
 /**
  * After a failed run, book the next attempt if the task has retries configured.
  *
- * Reuses the scheduler's existing one-shot mechanism: setting nextRunAt makes its
- * 30s polling loop fire the task when the time arrives — no extra timer to leak or
- * lose across restarts. retryAttempt tracks the CURRENT failure streak and is reset
- * on success (or once the budget is spent), so a task that fails next week starts
- * over with a full allowance rather than being permanently out of retries.
+ * Sets a DEDICATED `retry_at` (not next_run_at) which the scheduler's poll fires for
+ * ANY task type — so retry behaves identically for cron, @random, @after_completion and
+ * manual tasks, without colliding with each type's own next_run_at scheduling.
+ * retryAttempt tracks the CURRENT failure streak and is reset on success (or once the
+ * budget is spent), so a task that fails next week starts over with a full allowance.
  *
- * Returns a short suffix for the run's log message, or "" when retries are off.
+ * Returns { note } (a suffix for the run's log message) and { scheduled } (true only
+ * when a retry was actually booked — callers use it to suppress the normal reschedule
+ * so the retry wins, e.g. @after_completion).
  */
-async function scheduleRetryIfConfigured(taskId: number): Promise<string> {
+async function scheduleRetryIfConfigured(taskId: number): Promise<{ note: string; scheduled: boolean }> {
   try {
     const [t] = await db.select().from(tasksTable).where(eq(tasksTable.id, taskId));
-    if (!t) return "";
+    if (!t) return { note: "", scheduled: false };
     const max = Number(t.retryCount ?? 0);
-    if (!max || max <= 0) return "";
+    if (!max || max <= 0) return { note: "", scheduled: false };
     const used = Number(t.retryAttempt ?? 0);
     if (used >= max) {
-      await db.update(tasksTable).set({ retryAttempt: 0 }).where(eq(tasksTable.id, taskId));
+      await db.update(tasksTable).set({ retryAttempt: 0, retryAt: null }).where(eq(tasksTable.id, taskId));
       logger.info({ taskId, used, max }, "Retry budget exhausted — waiting for the normal schedule");
-      return ` (retries exhausted: ${used}/${max})`;
+      return { note: ` (retries exhausted: ${used}/${max})`, scheduled: false };
     }
     const mins = Math.max(1, Number(t.retryIntervalMinutes ?? 5));
-    const nextRunAt = new Date(Date.now() + mins * 60_000);
+    const retryAt = new Date(Date.now() + mins * 60_000);
     await db
       .update(tasksTable)
-      .set({ retryAttempt: used + 1, nextRunAt })
+      .set({ retryAttempt: used + 1, retryAt })
       .where(eq(tasksTable.id, taskId));
     logger.info({ taskId, attempt: used + 1, max, mins }, "Retry scheduled after failure");
-    return ` (retry ${used + 1}/${max} in ${mins}m)`;
+    return { note: ` (retry ${used + 1}/${max} in ${mins}m)`, scheduled: true };
   } catch (err) {
     logger.warn({ taskId, err }, "Failed to schedule retry");
-    return "";
+    return { note: "", scheduled: false };
   }
 }
 
@@ -653,7 +655,11 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
                       ipNote = "\n\nThis task's proxy cannot rotate its exit IP (set the proxy type to WARP to enable rotation).";
                     }
                   }
-                  const msg = `${dryRun ? "[DRY RUN] " : ""}${err.message}${ipNote}\n\nA captcha screenshot has been saved.`;
+                  // A captcha/CF block is a failure like any other — honour the retry
+                  // config so it behaves consistently with every schedule type. Book it
+                  // BEFORE the log so the message can say when it will retry.
+                  const capRetry = !dryRun ? await scheduleRetryIfConfigured(taskId) : { note: "", scheduled: false };
+                  const msg = `${dryRun ? "[DRY RUN] " : ""}${err.message}${ipNote}${capRetry.note}\n\nA captcha screenshot has been saved.`;
                   // The captcha/CF step throws BEFORE executeWorkflowSteps records it, so
                   // the timeline would otherwise be empty for the very step that decided
                   // the outcome. Record it explicitly with the real reason + screenshot so
@@ -670,15 +676,16 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
                     getTaskEmitter(taskId).emit("event", { type: "screenshot", message: err.message, screenshotPath });
                   }
                   await writeLog(taskId, false, msg, screenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
-                  if (!dryRun) await db.update(tasksTable).set({ status: "needs_attention", lastRunAt: new Date() }).where(eq(tasksTable.id, taskId));
+                  // A booked retry keeps the task in the normal failed/retrying flow; only
+                  // once retries are spent (or none configured) does it sit needs_attention.
+                  if (!dryRun) await db.update(tasksTable).set({ status: capRetry.scheduled ? "failed" : "needs_attention", lastRunAt: new Date() }).where(eq(tasksTable.id, taskId));
                   // This branch returns early instead of falling through to the normal
                   // completion path, so it must re-schedule @after_completion tasks itself
-                  // — otherwise a CF/captcha block leaves them with no next run and they
-                  // silently stop repeating (they re-ran fine when this used to fall
-                  // through to the normal path).
-                  await schedulePostCompletionIfNeeded(taskId, dryRun);
-                  emitTaskDone(taskId, false, dryRun ? "[DRY RUN] Captcha encountered" : "Task paused - captcha needs resolution");
-                  logger.warn({ taskId, dryRun }, "Captcha encountered");
+                  // — but a pending retry already owns the next run, so only reschedule
+                  // when no retry was booked (otherwise the task would run twice).
+                  if (!capRetry.scheduled) await schedulePostCompletionIfNeeded(taskId, dryRun);
+                  emitTaskDone(taskId, false, dryRun ? "[DRY RUN] Captcha encountered" : capRetry.scheduled ? `Captcha block — retrying${capRetry.note}` : "Task paused - captcha needs resolution");
+                  logger.warn({ taskId, dryRun, willRetry: capRetry.scheduled }, "Captcha encountered");
                   return;
                 }
                 try {
@@ -727,15 +734,15 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
             // A run that finished but FAILED gets a retry too — otherwise only
             // exceptions would, and a task that merely reports failure would sit idle
             // until its next schedule.
-            const _retryNote = !dryRun && !overallSuccess ? await scheduleRetryIfConfigured(taskId) : "";
+            const _retry = !dryRun && !overallSuccess ? await scheduleRetryIfConfigured(taskId) : { note: "", scheduled: false };
             if (dryRun) fullMessage = `[DRY RUN] ${fullMessage}`;
-            await writeLog(taskId, overallSuccess, fullMessage + _retryNote, screenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
+            await writeLog(taskId, overallSuccess, fullMessage + _retry.note, screenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
             if (!dryRun) {
               await db.update(tasksTable).set({ status: overallSuccess ? "success" : "failed", lastRunAt: new Date() }).where(eq(tasksTable.id, taskId));
-              // Success clears the failure streak so a future failure gets a full
-              // retry allowance again.
+              // Success clears the failure streak (and any pending retry) so a future
+              // failure gets a full retry allowance again.
               if (overallSuccess) {
-                await db.update(tasksTable).set({ retryAttempt: 0 }).where(eq(tasksTable.id, taskId)).catch(() => {});
+                await db.update(tasksTable).set({ retryAttempt: 0, retryAt: null }).where(eq(tasksTable.id, taskId)).catch(() => {});
               }
             }
             // Cookie mode: persist the (possibly refreshed) session after a successful run.
@@ -769,8 +776,10 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
             }
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
             emitTaskDone(taskId, overallSuccess, overallSuccess ? `Task completed in ${elapsed}s` : `Task failed after ${elapsed}s`);
-            await schedulePostCompletionIfNeeded(taskId, dryRun);
-            logger.info({ taskId, dryRun, success: overallSuccess }, "Task run completed");
+            // A pending retry (retry_at) already owns the next run — don't ALSO book the
+            // @after_completion interval, or the task would run twice.
+            if (!_retry.scheduled) await schedulePostCompletionIfNeeded(taskId, dryRun);
+            logger.info({ taskId, dryRun, success: overallSuccess, willRetry: _retry.scheduled }, "Task run completed");
           })(),
           timeoutPromise,
           cancelPromise,
@@ -836,10 +845,13 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
       }
       // Book a retry BEFORE writing the log so the message can say when it'll run.
       // Cancellations are deliberate — never retry those.
-      const retryNote = !dryRun && !isCancelled ? await scheduleRetryIfConfigured(taskId) : "";
-      await writeLog(taskId, false, errMsg + retryNote, outerScreenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
+      const outerRetry = !dryRun && !isCancelled ? await scheduleRetryIfConfigured(taskId) : { note: "", scheduled: false };
+      await writeLog(taskId, false, errMsg + outerRetry.note, outerScreenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
       if (!dryRun) {
         await db.update(tasksTable).set({ status: isCancelled ? "idle" : "failed", lastRunAt: new Date() }).where(eq(tasksTable.id, taskId));
+        // A failed exception also needs to keep @after_completion tasks repeating — but a
+        // booked retry already owns the next run, so only reschedule when none was booked.
+        if (!isCancelled && !outerRetry.scheduled) await schedulePostCompletionIfNeeded(taskId, dryRun);
       }
     } finally {
       runningTasks.delete(taskId);
