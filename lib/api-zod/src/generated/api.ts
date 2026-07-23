@@ -356,6 +356,12 @@ export const ListTasksResponseItem = zod.object({
             .describe(
               "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nseleniumbase=CF Proxy bypass mode, camoufox=anti-detect Firefox\n",
             ),
+          providerId: zod
+            .number()
+            .nullish()
+            .describe(
+              "Named provider (Providers page) to run this task on. When set, its type + URL drive the backend (overriding `provider`\/`wsEndpoint`) and its own concurrency limit applies. Null = use the Settings default backend.\n",
+            ),
           fingerprintProfileId: zod
             .number()
             .nullish()
@@ -728,6 +734,12 @@ export const CreateTaskBody = zod.object({
             .optional()
             .describe(
               "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nseleniumbase=CF Proxy bypass mode, camoufox=anti-detect Firefox\n",
+            ),
+          providerId: zod
+            .number()
+            .nullish()
+            .describe(
+              "Named provider (Providers page) to run this task on. When set, its type + URL drive the backend (overriding `provider`\/`wsEndpoint`) and its own concurrency limit applies. Null = use the Settings default backend.\n",
             ),
           fingerprintProfileId: zod
             .number()
@@ -1134,6 +1146,12 @@ export const GetTaskResponse = zod
               .describe(
                 "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nseleniumbase=CF Proxy bypass mode, camoufox=anti-detect Firefox\n",
               ),
+            providerId: zod
+              .number()
+              .nullish()
+              .describe(
+                "Named provider (Providers page) to run this task on. When set, its type + URL drive the backend (overriding `provider`\/`wsEndpoint`) and its own concurrency limit applies. Null = use the Settings default backend.\n",
+              ),
             fingerprintProfileId: zod
               .number()
               .nullish()
@@ -1524,6 +1542,12 @@ export const UpdateTaskBody = zod.object({
             .describe(
               "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nseleniumbase=CF Proxy bypass mode, camoufox=anti-detect Firefox\n",
             ),
+          providerId: zod
+            .number()
+            .nullish()
+            .describe(
+              "Named provider (Providers page) to run this task on. When set, its type + URL drive the backend (overriding `provider`\/`wsEndpoint`) and its own concurrency limit applies. Null = use the Settings default backend.\n",
+            ),
           fingerprintProfileId: zod
             .number()
             .nullish()
@@ -1909,6 +1933,12 @@ export const UpdateTaskResponse = zod.object({
             .optional()
             .describe(
               "Browser backend for this task:\nplaywright=Playwright CDP (default), puppeteer=Puppeteer CDP,\nseleniumbase=CF Proxy bypass mode, camoufox=anti-detect Firefox\n",
+            ),
+          providerId: zod
+            .number()
+            .nullish()
+            .describe(
+              "Named provider (Providers page) to run this task on. When set, its type + URL drive the backend (overriding `provider`\/`wsEndpoint`) and its own concurrency limit applies. Null = use the Settings default backend.\n",
             ),
           fingerprintProfileId: zod
             .number()

@@ -6,7 +6,7 @@
   import { logger } from "./lib/logger";
   import { initScheduler } from "./scheduler";
   import { backfillExitGeo } from "./routes/tasks";
-  import { startInstanceHealthPolling } from "./automation/provider-instances";
+  import { startProviderHealthPolling } from "./automation/providers";
   import { installSignalHandlers } from "./lib/child-registry";
   import { runMigrations } from "./lib/migrations";
   import { hasStoredPassword, initPassword } from "./lib/passwordStore";
@@ -70,7 +70,7 @@
     await initScheduler();
     // Fill exit-geo for pre-existing tasks in the background (non-blocking).
     void backfillExitGeo();
-    // Keep provider-instance health fresh so auto-distribution only hands out reachable ones.
-    startInstanceHealthPolling();
+    // Keep provider health fresh so the Providers page reflects reachability.
+    startProviderHealthPolling();
   });
   

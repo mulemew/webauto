@@ -791,6 +791,12 @@ components:
             Browser backend for this task:
             playwright=Playwright CDP (default), puppeteer=Puppeteer CDP,
             seleniumbase=CF Proxy bypass mode, camoufox=anti-detect Firefox
+        providerId:
+          type: ["integer", "null"]
+          description: >
+            Named provider (Providers page) to run this task on. When set, its type + URL
+            drive the backend (overriding `provider`/`wsEndpoint`) and its own concurrency
+            limit applies. Null = use the Settings default backend.
         fingerprintProfileId:
           type: ["integer", "null"]
           description: >

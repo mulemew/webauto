@@ -12,26 +12,31 @@ import { Switch } from "@/components/ui/switch";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-type Family = "browserless" | "sb" | "fox";
-interface Instance {
+type PType = "playwright" | "puppeteer" | "seleniumbase" | "camoufox";
+interface Provider {
   id: number;
   name: string;
-  family: Family;
-  subtype: string;
+  type: PType;
   url: string;
+  concurrency: number;
   enabled: boolean;
   healthy: boolean | null;
   lastError: string | null;
   lastCheckedAt: string | null;
-  busy?: number;
 }
 
-const FAMILY_LABEL: Record<Family, string> = { browserless: "Browserless (Playwright/Puppeteer)", sb: "SeleniumBase (cf-proxy)", fox: "Camoufox" };
-const EMPTY = { name: "", family: "sb" as Family, subtype: "playwright", url: "", enabled: true };
+const TYPE_LABEL: Record<PType, string> = {
+  playwright: "Playwright (CDP)",
+  puppeteer: "Puppeteer (CDP)",
+  seleniumbase: "SeleniumBase (cf-proxy)",
+  camoufox: "Camoufox",
+};
+const EMPTY = { name: "", type: "seleniumbase" as PType, url: "", concurrency: 1, enabled: true };
+const isBrowserless = (t: PType) => t === "playwright" || t === "puppeteer";
 
-export default function ProviderInstances() {
+export default function Providers() {
   const { toast } = useToast();
-  const [rows, setRows] = useState<Instance[]>([]);
+  const [rows, setRows] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -43,7 +48,7 @@ export default function ProviderInstances() {
 
   const load = () => {
     setLoading(true);
-    fetch(`${BASE}/api/provider-instances`)
+    fetch(`${BASE}/api/providers`)
       .then((r) => r.json())
       .then((data) => setRows(data))
       .catch(() => toast({ title: "Failed to load", variant: "destructive" }))
@@ -52,20 +57,20 @@ export default function ProviderInstances() {
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openCreate = () => { setEditingId(null); setForm(EMPTY); setDialogOpen(true); };
-  const openEdit = (p: Instance) => { setEditingId(p.id); setForm({ name: p.name, family: p.family, subtype: p.subtype || "playwright", url: p.url, enabled: p.enabled }); setDialogOpen(true); };
+  const openEdit = (p: Provider) => { setEditingId(p.id); setForm({ name: p.name, type: p.type, url: p.url, concurrency: p.concurrency, enabled: p.enabled }); setDialogOpen(true); };
 
   const handleSubmit = async () => {
     if (!form.name.trim() || !form.url.trim()) { toast({ title: "Name and URL are required", variant: "destructive" }); return; }
     setSubmitting(true);
     try {
-      const url = editingId ? `${BASE}/api/provider-instances/${editingId}` : `${BASE}/api/provider-instances`;
-      // On edit only name/url/enabled are mutable (family/subtype are fixed once created).
+      const url = editingId ? `${BASE}/api/providers/${editingId}` : `${BASE}/api/providers`;
+      // Type is fixed once created; edit only name/url/concurrency/enabled.
       const body = editingId
-        ? { name: form.name.trim(), url: form.url.trim(), enabled: form.enabled }
-        : { name: form.name.trim(), family: form.family, subtype: form.family === "browserless" ? form.subtype : "", url: form.url.trim(), enabled: form.enabled };
+        ? { name: form.name.trim(), url: form.url.trim(), concurrency: form.concurrency, enabled: form.enabled }
+        : { name: form.name.trim(), type: form.type, url: form.url.trim(), concurrency: form.concurrency, enabled: form.enabled };
       const res = await fetch(url, { method: editingId ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || (await res.text()));
-      toast({ title: editingId ? "Instance updated" : "Instance saved", variant: "success" });
+      toast({ title: editingId ? "Provider updated" : "Provider saved", variant: "success" });
       setDialogOpen(false);
       load();
     } catch (err) {
@@ -76,8 +81,8 @@ export default function ProviderInstances() {
   const handleDelete = async () => {
     if (!deleteId) return;
     try {
-      await fetch(`${BASE}/api/provider-instances/${deleteId}`, { method: "DELETE" });
-      toast({ title: "Instance deleted", variant: "success" });
+      await fetch(`${BASE}/api/providers/${deleteId}`, { method: "DELETE" });
+      toast({ title: "Provider deleted", variant: "success" });
       setDeleteId(null);
       load();
     } catch { toast({ title: "Failed to delete", variant: "destructive" }); }
@@ -86,10 +91,10 @@ export default function ProviderInstances() {
   const checkOne = async (id: number) => {
     setCheckingId(id);
     try {
-      const res = await fetch(`${BASE}/api/provider-instances/${id}/health`, { method: "POST" });
+      const res = await fetch(`${BASE}/api/providers/${id}/health`, { method: "POST" });
       if (!res.ok) throw new Error();
-      const updated: Instance = await res.json();
-      setRows((prev) => prev.map((r) => (r.id === id ? { ...updated, busy: r.busy } : r)));
+      const updated: Provider = await res.json();
+      setRows((prev) => prev.map((r) => (r.id === id ? updated : r)));
     } catch { toast({ title: "Health check failed", variant: "destructive" }); }
     finally { setCheckingId(null); }
   };
@@ -97,7 +102,7 @@ export default function ProviderInstances() {
   const checkAll = async () => {
     setCheckingAll(true);
     try {
-      const res = await fetch(`${BASE}/api/provider-instances/health-all`, { method: "POST" });
+      const res = await fetch(`${BASE}/api/providers/health-all`, { method: "POST" });
       if (!res.ok) throw new Error();
       setRows(await res.json());
       toast({ title: "Health refreshed", variant: "success" });
@@ -115,7 +120,7 @@ export default function ProviderInstances() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Server className="h-5 w-5 text-primary" />
-          <h1 className="text-lg font-semibold">Provider Instances</h1>
+          <h1 className="text-lg font-semibold">Providers</h1>
         </div>
         <div className="flex items-center gap-2">
           {rows.length > 0 && (
@@ -123,11 +128,11 @@ export default function ProviderInstances() {
               <RefreshCw className={`h-4 w-4 ${checkingAll ? "animate-spin" : ""}`} />检测全部
             </Button>
           )}
-          <Button size="sm" className="gap-2" onClick={openCreate}><Plus className="h-4 w-4" />Add instance</Button>
+          <Button size="sm" className="gap-2" onClick={openCreate}><Plus className="h-4 w-4" />Add provider</Button>
         </div>
       </div>
       <p className="text-sm text-muted-foreground">
-        为同一 provider 注册多个后端实例(各自独立容器),并发任务会自动分配到最空闲且健康的那个,实现真正并发。cf-proxy 靠这个避免多任务争抢同一个 Xvfb 鼠标。
+        具名浏览器后端。建好后在任务里下拉选择用哪个跑。每个 provider 有自己的并发上限(例:sb=2、playwright=3),各管各的。没选的任务用 Settings 默认后端。
       </p>
 
       {loading ? (
@@ -136,8 +141,8 @@ export default function ProviderInstances() {
         <Card className="border-dashed border-border">
           <CardContent className="flex flex-col items-center justify-center py-12 gap-3 text-center">
             <Server className="h-8 w-8 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">No instances yet — the env default backend is used.</p>
-            <Button size="sm" variant="outline" onClick={openCreate} className="gap-2 mt-2"><Plus className="h-4 w-4" />Add instance</Button>
+            <p className="text-sm text-muted-foreground">No providers yet — tasks use the Settings default backend.</p>
+            <Button size="sm" variant="outline" onClick={openCreate} className="gap-2 mt-2"><Plus className="h-4 w-4" />Add provider</Button>
           </CardContent>
         </Card>
       ) : (
@@ -146,14 +151,12 @@ export default function ProviderInstances() {
             <Card key={p.id} className="border-border shadow-sm">
               <CardHeader className="pb-2 bg-muted/20 border-b border-border flex-row items-center justify-between py-3 px-4">
                 <div className="min-w-0 space-y-1">
-                  <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                  <CardTitle className="text-sm font-semibold flex items-center gap-2 flex-wrap">
                     <HealthDot h={p.healthy} />
                     {p.name}
-                    <span className="text-[10px] font-mono uppercase text-muted-foreground border border-border rounded px-1 py-0.5">
-                      {p.family}{p.subtype ? `·${p.subtype}` : ""}
-                    </span>
+                    <span className="text-[10px] font-mono uppercase text-muted-foreground border border-border rounded px-1 py-0.5">{p.type}</span>
+                    <span className="text-[10px] text-primary">并发 {p.concurrency}</span>
                     {!p.enabled && <span className="text-[10px] text-muted-foreground">(disabled)</span>}
-                    {p.busy ? <span className="text-[10px] text-primary">busy {p.busy}</span> : null}
                   </CardTitle>
                   <p className="text-xs text-muted-foreground font-mono truncate">{maskUrl(p.url)}</p>
                   {p.healthy === false && p.lastError && <p className="text-[11px] text-destructive truncate">检测失败:{p.lastError}</p>}
@@ -173,44 +176,38 @@ export default function ProviderInstances() {
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
-          <DialogHeader><DialogTitle>{editingId ? "Edit instance" : "Add instance"}</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editingId ? "Edit provider" : "Add provider"}</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1.5">
               <Label>Name</Label>
-              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. cf-proxy #2" />
+              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. browserless #1" />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label>Family</Label>
-                <Select value={form.family} onValueChange={(v) => setForm({ ...form, family: v as Family })} disabled={!!editingId}>
+                <Label>Type</Label>
+                <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v as PType })} disabled={!!editingId}>
                   <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="sb">SeleniumBase (cf-proxy)</SelectItem>
-                    <SelectItem value="fox">Camoufox</SelectItem>
-                    <SelectItem value="browserless">Browserless</SelectItem>
+                    <SelectItem value="seleniumbase">SeleniumBase (cf-proxy)</SelectItem>
+                    <SelectItem value="camoufox">Camoufox</SelectItem>
+                    <SelectItem value="playwright">Playwright (CDP)</SelectItem>
+                    <SelectItem value="puppeteer">Puppeteer (CDP)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-              {form.family === "browserless" && (
-                <div className="space-y-1.5">
-                  <Label>Subtype</Label>
-                  <Select value={form.subtype} onValueChange={(v) => setForm({ ...form, subtype: v })} disabled={!!editingId}>
-                    <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="playwright">Playwright</SelectItem>
-                      <SelectItem value="puppeteer">Puppeteer</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
+              <div className="space-y-1.5">
+                <Label>并发上限</Label>
+                <Input type="number" min={1} max={64} value={form.concurrency}
+                  onChange={(e) => setForm({ ...form, concurrency: Math.max(1, parseInt(e.target.value || "1", 10)) })} />
+              </div>
             </div>
             <div className="space-y-1.5">
               <Label>URL</Label>
               <Input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })}
-                placeholder={form.family === "browserless" ? "ws://browserless-2:3000?token=…" : form.family === "fox" ? "http://camoufox-proxy-2:7318" : "http://cf-proxy-2:7317"}
+                placeholder={isBrowserless(form.type) ? "ws://browserless:3000?token=…" : form.type === "camoufox" ? "http://camoufox-proxy:7318" : "http://cf-proxy:7317"}
                 className="font-mono" />
               <p className="text-xs text-muted-foreground">
-                {form.family === "browserless" ? "CDP WebSocket 端点 (ws:// / wss://)" : "sidecar HTTP 地址 (http:// / https://),健康检查会 GET /health"}
+                {isBrowserless(form.type) ? "CDP WebSocket 端点 (ws:// / wss://)" : "sidecar HTTP 地址 (http:// / https://),健康检查 GET /health"}
               </p>
             </div>
             <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
@@ -230,8 +227,8 @@ export default function ProviderInstances() {
       <AlertDialog open={deleteId !== null} onOpenChange={(o) => !o && setDeleteId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete instance?</AlertDialogTitle>
-            <AlertDialogDescription>Tasks of this family will fall back to other instances or the env default.</AlertDialogDescription>
+            <AlertDialogTitle>Delete provider?</AlertDialogTitle>
+            <AlertDialogDescription>Tasks using it fall back to the Settings default backend.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>

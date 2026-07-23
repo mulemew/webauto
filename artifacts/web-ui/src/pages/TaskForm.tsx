@@ -186,6 +186,9 @@ interface BrowserConfigState {
   fpTimezone: string;
   fpLocale: string;
   fpAutoGeo: boolean;
+  // Named provider (Providers page). When set, its type + URL + concurrency drive the
+  // backend, overriding the inline provider/wsEndpoint below. null = Settings default.
+  providerId: number | null;
   // Saved profiles (override the inline fingerprint/proxy above when set)
   fingerprintProfileId: number | null;
   proxyProfileId: number | null;
@@ -220,6 +223,7 @@ const defaultBrowserConfig: BrowserConfigState = {
   fpTimezone: "",
   fpLocale: "",
   fpAutoGeo: true,
+  providerId: null,
   fingerprintProfileId: null,
   proxyProfileId: null,
   proxySel: "none",
@@ -315,6 +319,7 @@ export default function TaskForm() {
   const [browserConfigExpanded, setBrowserConfigExpanded] = useState(false);
   const [fingerprintProfiles, setFingerprintProfiles] = useState<Array<{ id: number; name: string; os: string }>>([]);
   const [proxyProfiles, setProxyProfiles] = useState<Array<{ id: number; name: string }>>([]);
+  const [providers, setProviders] = useState<Array<{ id: number; name: string; type: string; concurrency: number; enabled: boolean; healthy: boolean | null }>>([]);
 
   useEffect(() => {
     fetch("/api/saved-credentials")
@@ -323,6 +328,7 @@ export default function TaskForm() {
       .catch(() => {});
     fetch("/api/fingerprint-profiles").then((r) => r.json()).then(setFingerprintProfiles).catch(() => {});
     fetch("/api/proxy-profiles").then((r) => r.json()).then(setProxyProfiles).catch(() => {});
+    fetch("/api/providers").then((r) => r.json()).then(setProviders).catch(() => {});
   }, []);
 
   const createTask = useCreateTask();
@@ -446,6 +452,7 @@ export default function TaskForm() {
             ((bc.fingerprint as Record<string, unknown> | undefined)?.locale as string) || "",
           fpAutoGeo:
             ((bc.fingerprint as Record<string, unknown> | undefined)?.autoGeo as boolean) ?? true,
+          providerId: (bc.providerId as number | null) ?? null,
           fingerprintProfileId: (bc.fingerprintProfileId as number | null) ?? null,
           proxyProfileId: (bc.proxyProfileId as number | null) ?? null,
           // Derive the unified dropdown selection from the stored config so existing
@@ -512,6 +519,7 @@ export default function TaskForm() {
     return {
       provider: browserConfig.provider,
       wsEndpoint: browserConfig.wsEndpoint || null,
+      providerId: browserConfig.providerId ?? null,
       fingerprintProfileId,
       proxyProfileId,
       proxyUrl,
@@ -1004,7 +1012,37 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
 
                 {browserConfig.enabled && (
                   <div className="space-y-4">
-                    {/* Provider */}
+                    {/* Named provider (Providers page) — overrides the inline engine + WS
+                        endpoint below. "默认" keeps the inline / Settings backend. */}
+                    <div className="space-y-1.5">
+                      <label className="text-sm font-medium">Provider</label>
+                      <Select
+                        value={browserConfig.providerId != null ? String(browserConfig.providerId) : "default"}
+                        onValueChange={(v) =>
+                          setBrowserConfig((s) => {
+                            if (v === "default") return { ...s, providerId: null };
+                            const p = providers.find((x) => x.id === Number(v));
+                            // Sync the engine to the provider's type so the fields below
+                            // (fingerprint / WS endpoint) match the actual backend.
+                            return { ...s, providerId: Number(v), provider: (p?.type as BrowserProvider) ?? s.provider };
+                          })
+                        }
+                      >
+                        <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="default">默认（Settings 后端）</SelectItem>
+                          {providers.filter((p) => p.enabled).map((p) => (
+                            <SelectItem key={p.id} value={String(p.id)}>
+                              {p.name}（{p.type}，并发 {p.concurrency}）{p.healthy === false ? " ⚠" : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[11px] text-muted-foreground">选一个「Providers」页里配好的后端;选了会覆盖下方的引擎和 WS 端点,并用它自己的并发上限。</p>
+                    </div>
+
+                    {/* Provider (inline engine) — only when no named provider is selected */}
+                    {browserConfig.providerId == null && (
                     <div className="space-y-1.5">
                       <label className="text-sm font-medium">浏览器引擎</label>
                       <Select
@@ -1043,6 +1081,7 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                           "Puppeteer，兼容性好，支持 CDP 端点"}
                       </p>
                     </div>
+                    )}
 
                     {/* Proxy — one dropdown: none / saved profiles / WARP / custom URL.
                         Manual fields appear only after choosing 自定义 or WARP自动轮换. */}
@@ -1183,8 +1222,9 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                       </div>
                     )}
 
-                    {/* WS Endpoint */}
-                    {(browserConfig.provider === "playwright" ||
+                    {/* WS Endpoint — hidden when a named provider supplies the URL */}
+                    {browserConfig.providerId == null &&
+                     (browserConfig.provider === "playwright" ||
                       browserConfig.provider === "puppeteer") && (
                       <div className="space-y-1.5">
                         <label className="text-sm font-medium">

@@ -93,12 +93,13 @@ import { pool } from "@workspace/db";
   ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "retry_at" timestamptz;
   ALTER TABLE "proxy_profiles" ADD COLUMN IF NOT EXISTS "exit_geo" jsonb;
   ALTER TABLE "proxy_profiles" ADD COLUMN IF NOT EXISTS "geo_updated_at" timestamptz;
-  CREATE TABLE IF NOT EXISTS "provider_instances" (
+  DROP TABLE IF EXISTS "provider_instances";
+  CREATE TABLE IF NOT EXISTS "providers" (
     "id"              serial      PRIMARY KEY,
     "name"            text        NOT NULL,
-    "family"          text        NOT NULL,
-    "subtype"         text        NOT NULL DEFAULT '',
-    "url"             text        NOT NULL,
+    "type"            text        NOT NULL,
+    "url"             text        NOT NULL DEFAULT '',
+    "concurrency"     integer     NOT NULL DEFAULT 1,
     "enabled"         boolean     NOT NULL DEFAULT true,
     "healthy"         boolean,
     "last_error"      text,

@@ -92,9 +92,9 @@ import { useLang } from "@/contexts/lang-context";
               <Network className="h-4 w-4" />
               Proxies
             </Link>
-            <Link href="/provider-instances" className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground">
+            <Link href="/providers" className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground">
               <Server className="h-4 w-4" />
-              Instances
+              Providers
             </Link>
             <Link href="/status" className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground">
               <HeartPulse className="h-4 w-4" />

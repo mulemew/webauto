@@ -4,7 +4,7 @@ import path from "path";
   import { logger } from "../lib/logger";
   import { decrypt } from "../lib/encryption";
   import { createBrowserProvider } from "./browser-provider";
-  import { pickInstance, releaseInstance, providerToFamily } from "./provider-instances";
+  import { resolveProvider } from "./providers";
   import { createCaptchaSolverFromConfig } from "./captcha-solver";
   import { loadBrowserConfig, loadCaptchaConfig, loadTaskTimeoutConfig, loadConcurrencyConfig } from "../lib/appSettings";
   import { emitTaskProgress, emitTaskDone, getTaskEmitter, clearTaskEventBuffer } from "../lib/taskEvents";
@@ -145,33 +145,48 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
     return `screenshots/${filename}`;
   }
 
-  let currentConcurrent = 0;
-    const waitQueue: Array<{ resolve: () => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> | null }> = [];
+  // Concurrency is PER-PROVIDER now (there is no global cap). Each key is a provider —
+  // "p<id>" for a named provider, "default" for tasks on the Settings backend — with its
+  // own running count + wait queue. maxQueueDepth / queueTimeoutSecs stay global (Settings).
+  type ConcPool = { current: number; queue: Array<{ resolve: () => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> | null }> };
+  const _pools = new Map<string, ConcPool>();
+  function _pool(key: string): ConcPool {
+    let p = _pools.get(key);
+    if (!p) { p = { current: 0, queue: [] }; _pools.set(key, p); }
+    return p;
+  }
 
-    /** Returns live concurrency status for the Settings UI. */
+    /** Live concurrency status for the Settings UI — summed across all provider pools. */
     export function getConcurrencyStatus(): { running: number; queued: number } {
-      return { running: currentConcurrent, queued: waitQueue.length };
+      let running = 0, queued = 0;
+      for (const p of _pools.values()) { running += p.current; queued += p.queue.length; }
+      return { running, queued };
+    }
+
+    /** Running count for one provider pool (drives the "queued" pre-check). */
+    function poolRunning(key: string): number {
+      return _pools.get(key)?.current ?? 0;
     }
 
     /**
-     * Acquire a semaphore slot before starting a task.
-     * Reads maxConcurrent / maxQueueDepth / queueTimeoutSecs from the DB on each
-     * call so that changes in Settings take effect on the next task start without
-     * requiring a server restart.
+     * Acquire a slot on ONE provider's pool before starting a task. `max` is that
+     * provider's concurrency (or the Settings default for unnamed tasks). Queue depth /
+     * timeout come from Settings on each call so changes take effect without a restart.
      */
-    async function acquireSemaphore(): Promise<void> {
+    async function acquireSemaphore(key: string, max: number): Promise<void> {
       const config = await loadConcurrencyConfig();
-      const max = Math.max(1, config.maxConcurrent);
+      const cap = Math.max(1, max);
+      const pool = _pool(key);
 
-      if (currentConcurrent < max) {
-        currentConcurrent++;
+      if (pool.current < cap) {
+        pool.current++;
         return;
       }
 
       // Queue depth guard
-      if (config.maxQueueDepth > 0 && waitQueue.length >= config.maxQueueDepth) {
+      if (config.maxQueueDepth > 0 && pool.queue.length >= config.maxQueueDepth) {
         throw new Error(
-          `Concurrency queue is full (${waitQueue.length}/${config.maxQueueDepth} tasks waiting). Try again later or increase Max Queue Depth in Settings.`,
+          `Concurrency queue is full (${pool.queue.length}/${config.maxQueueDepth} tasks waiting on this provider). Try again later or raise the provider's concurrency / Max Queue Depth.`,
         );
       }
 
@@ -186,26 +201,27 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
 
         if (config.queueTimeoutSecs > 0) {
           timer = setTimeout(() => {
-            const idx = waitQueue.indexOf(entry);
-            if (idx !== -1) waitQueue.splice(idx, 1);
+            const idx = pool.queue.indexOf(entry);
+            if (idx !== -1) pool.queue.splice(idx, 1);
             entry.reject(
               new Error(
-                `Task waited >${config.queueTimeoutSecs}s in queue and was dropped. Increase Queue Timeout or reduce concurrency load.`,
+                `Task waited >${config.queueTimeoutSecs}s in queue and was dropped. Increase Queue Timeout or the provider's concurrency.`,
               ),
             );
           }, config.queueTimeoutSecs * 1000);
           entry.timer = timer;
         }
 
-        waitQueue.push(entry);
+        pool.queue.push(entry);
       });
 
-      currentConcurrent++;
+      pool.current++;
     }
 
-    function releaseSemaphore(): void {
-      currentConcurrent = Math.max(0, currentConcurrent - 1);
-      const next = waitQueue.shift();
+    function releaseSemaphore(key: string): void {
+      const pool = _pool(key);
+      pool.current = Math.max(0, pool.current - 1);
+      const next = pool.queue.shift();
       if (next) next.resolve();
     }
 
@@ -250,19 +266,28 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
     let outerScreenshotPath: string | undefined;
     emitTaskProgress(taskId, "Task started - fetching configuration-¦");
     let semaphoreAcquired = false;
-    let assignedInstanceId: number | null = null;
+    let concKey = "default";
     const collectedStepLogs: Array<{ stepIndex: number; type: string; success: boolean; message: string; screenshotPath?: string; durationMs?: number }> = [];
 
     try {
-      // ── 排队中状态 ── 槽位满时先将任务标记为 queued ──────────────────
-      if (!dryRun) {
-        const _preConcConfig = await loadConcurrencyConfig();
-        if (currentConcurrent >= Math.max(1, _preConcConfig.maxConcurrent)) {
-          await db.update(tasksTable).set({ status: "queued" }).where(eq(tasksTable.id, taskId));
-          emitTaskProgress(taskId, "Queued — waiting for a browser slot-¦");
-        }
+      // Load the task first so we can resolve its provider (and therefore which pool +
+      // concurrency limit to acquire) BEFORE queueing. A named provider enforces its own
+      // concurrency; an unnamed task uses the Settings default pool.
+      const [task] = await db.select().from(tasksTable).where(eq(tasksTable.id, taskId));
+      if (!task) { logger.error({ taskId }, "Task not found"); return; }
+
+      const _selProviderId = (task.browserConfig as { providerId?: number | null } | null)?.providerId ?? null;
+      const _selProvider = await resolveProvider(_selProviderId);
+      const _concConfig = await loadConcurrencyConfig();
+      concKey = _selProvider ? `p${_selProvider.id}` : "default";
+      const concMax = _selProvider ? _selProvider.concurrency : Math.max(1, _concConfig.maxConcurrent);
+
+      // ── 排队中状态 ── 该 provider 的槽位满时先标记为 queued ──────────────
+      if (!dryRun && poolRunning(concKey) >= concMax) {
+        await db.update(tasksTable).set({ status: "queued" }).where(eq(tasksTable.id, taskId));
+        emitTaskProgress(taskId, "Queued — waiting for a browser slot-¦");
       }
-      await acquireSemaphore();
+      await acquireSemaphore(concKey, concMax);
       semaphoreAcquired = true;
 
       const globalBrowserConfig = await loadBrowserConfig();
@@ -270,9 +295,6 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
       const solver = createCaptchaSolverFromConfig(captchaConfig);
       const timeoutConfig = await loadTaskTimeoutConfig();
       const timeoutMs = timeoutConfig.timeoutMinutes > 0 ? timeoutConfig.timeoutMinutes * 60_000 : null;
-
-      const [task] = await db.select().from(tasksTable).where(eq(tasksTable.id, taskId));
-      if (!task) { logger.error({ taskId }, "Task not found"); return; }
 
       // Merge task-level browserConfig (if set) over the global config.
       // This allows each task to use a different browser backend — e.g. one task
@@ -376,19 +398,16 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
         browserConfig.onContextReady = (dumper) => { dumpStorageState = dumper; };
       }
 
-      // ── Provider-instance auto-distribution ─────────────────────────────────
-      // Spread concurrent tasks across registered backend instances of this provider's
-      // family (least-busy healthy one) so they don't share one backend's resources
-      // (e.g. cf-proxy's single Xvfb mouse). No instances registered → env default.
-      const _fam = providerToFamily(browserConfig.provider);
-      if (_fam) {
-        const inst = await pickInstance(_fam.family, _fam.subtype);
-        if (inst) {
-          assignedInstanceId = inst.id;
-          browserConfig.instanceUrl = inst.url;
-          emitTaskProgress(taskId, `Using provider instance: ${inst.name}`);
-          logger.info({ taskId, instance: inst.name, url: inst.url }, "Task assigned to provider instance");
-        }
+      // ── Named provider (Providers page) ──────────────────────────────────────
+      // When the task selected a provider, its type + URL drive the backend (overriding
+      // the inline/Settings provider). No provider selected → the Settings default is
+      // used unchanged (backward compatible). Concurrency was already enforced above
+      // against this provider's own pool.
+      if (_selProvider) {
+        browserConfig.provider = _selProvider.type as typeof browserConfig.provider;
+        browserConfig.instanceUrl = _selProvider.url;
+        emitTaskProgress(taskId, `Using provider: ${_selProvider.name}`);
+        logger.info({ taskId, provider: _selProvider.name, type: _selProvider.type }, "Task using selected provider");
       }
 
       const browserProvider = createBrowserProvider(browserConfig);
@@ -859,8 +878,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
     } finally {
       runningTasks.delete(taskId);
       cancelRequested.delete(taskId);
-      if (semaphoreAcquired) releaseSemaphore();
-      if (assignedInstanceId !== null) releaseInstance(assignedInstanceId);
+      if (semaphoreAcquired) releaseSemaphore(concKey);
     }
   }
 
