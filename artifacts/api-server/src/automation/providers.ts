@@ -65,53 +65,56 @@ export async function refreshProviderHealth(id: number) {
   return updated ?? null;
 }
 
-const SEED_FLAG_KEY = "providersSeeded";
+// v2: the v1 guard was "only if the table is EMPTY", which skipped everything when the
+// user had already added even one provider by hand. v2 fills PER-TYPE gaps instead.
+const SEED_FLAG_KEY = "providersSeededV2";
 
-/** One-time migration: turn the CURRENT Settings backend into a named provider so the
- *  Providers page isn't empty after the config moved out of Settings. Runs once ever
- *  (a settings flag guards it), so later manual deletions aren't undone. */
+/** One-time migration: for every backend TYPE actually in use (Settings default + each
+ *  task's override), create a provider IF none of that type exists yet — so the page
+ *  reflects your real backends. Idempotent per type; guarded by a flag so it runs once. */
 export async function seedProvidersFromSettings(): Promise<void> {
   try {
     const [flag] = await db.select().from(settingsTable).where(eq(settingsTable.key, SEED_FLAG_KEY));
     if (flag) return;
 
-    const existing = await db.select({ id: providersTable.id }).from(providersTable).limit(1);
-    if (existing.length === 0) {
-      const cfg = await loadBrowserConfig();
-      // Every backend TYPE actually in use = the Settings default + each task's override.
-      const types = new Set<string>([cfg.provider ?? "playwright"]);
-      const tasks = await db.select({ bc: tasksTable.browserConfig }).from(tasksTable);
-      for (const t of tasks) {
-        const p = (t.bc as { provider?: string } | null)?.provider;
-        if (p) types.add(p);
-      }
-      // Resolve each type's backend URL: sb/camoufox behind their sidecar env URLs;
-      // playwright/puppeteer use the Settings wsEndpoint (or BROWSERLESS_URL).
-      const urlFor = (type: string): string => {
-        if (type === "seleniumbase") return (process.env.CF_PROXY_URL ?? "http://cf-proxy:7317").replace(/\/$/, "");
-        if (type === "camoufox") return (process.env.CAMOUFOX_URL ?? "http://camoufox-proxy:7318").replace(/\/$/, "");
-        return ((cfg.wsEndpoint || process.env.BROWSERLESS_URL) ?? "").replace(/\/$/, "");
-      };
-      const conc = Math.max(1, (await loadConcurrencyConfig()).maxConcurrent);
-      // Carry the Settings backend params so the seeded provider matches today's behaviour.
-      const sc = cfg as { stealth?: boolean; blockAds?: boolean; ignoreHTTPS?: boolean; sessionTimeoutMs?: number; viewportWidth?: number; viewportHeight?: number };
-      for (const type of types) {
-        const url = urlFor(type);
-        if (!url) continue;
-        const caps = PROVIDER_TYPE_PARAMS[type] ?? { stealth: false, blockAds: false, ignoreHttps: false, sessionTimeout: false, viewport: false };
-        const { healthy, error } = await checkProviderHealth({ type, url });
-        await db.insert(providersTable).values({
-          name: `Settings（${type}）`, type, url, concurrency: conc, enabled: true,
-          stealth: caps.stealth ? (sc.stealth ?? null) : null,
-          blockAds: caps.blockAds ? (sc.blockAds ?? null) : null,
-          ignoreHttps: caps.ignoreHttps ? (sc.ignoreHTTPS ?? null) : null,
-          sessionTimeoutMs: caps.sessionTimeout ? (sc.sessionTimeoutMs ?? null) : null,
-          viewportWidth: caps.viewport ? (sc.viewportWidth ?? null) : null,
-          viewportHeight: caps.viewport ? (sc.viewportHeight ?? null) : null,
-          healthy, lastError: error, lastCheckedAt: new Date(),
-        });
-        logger.info({ type, url, concurrency: conc }, "Seeded provider from an in-use backend");
-      }
+    const cfg = await loadBrowserConfig();
+    const types = new Set<string>([cfg.provider ?? "playwright"]);
+    const tasks = await db.select({ bc: tasksTable.browserConfig }).from(tasksTable);
+    for (const t of tasks) {
+      const p = (t.bc as { provider?: string } | null)?.provider;
+      if (p) types.add(p);
+    }
+    // Types that ALREADY have a provider — don't duplicate those (e.g. a hand-added fox).
+    const existing = await db.select({ type: providersTable.type }).from(providersTable);
+    const have = new Set(existing.map((r) => r.type));
+
+    // Resolve each type's backend URL: sb/camoufox behind their sidecar env URLs;
+    // playwright/puppeteer use the Settings wsEndpoint (or BROWSERLESS_URL).
+    const urlFor = (type: string): string => {
+      if (type === "seleniumbase") return (process.env.CF_PROXY_URL ?? "http://cf-proxy:7317").replace(/\/$/, "");
+      if (type === "camoufox") return (process.env.CAMOUFOX_URL ?? "http://camoufox-proxy:7318").replace(/\/$/, "");
+      return ((cfg.wsEndpoint || process.env.BROWSERLESS_URL) ?? "").replace(/\/$/, "");
+    };
+    const conc = Math.max(1, (await loadConcurrencyConfig()).maxConcurrent);
+    const sc = cfg as { stealth?: boolean; blockAds?: boolean; ignoreHTTPS?: boolean; sessionTimeoutMs?: number; viewportWidth?: number; viewportHeight?: number };
+    logger.info({ inUse: [...types], alreadyHave: [...have] }, "seedProvidersFromSettings: filling per-type gaps");
+    for (const type of types) {
+      if (have.has(type)) continue; // this type already has a provider
+      const url = urlFor(type);
+      if (!url) continue;
+      const caps = PROVIDER_TYPE_PARAMS[type] ?? { stealth: false, blockAds: false, ignoreHttps: false, sessionTimeout: false, viewport: false };
+      const { healthy, error } = await checkProviderHealth({ type, url });
+      await db.insert(providersTable).values({
+        name: `Settings（${type}）`, type, url, concurrency: conc, enabled: true,
+        stealth: caps.stealth ? (sc.stealth ?? null) : null,
+        blockAds: caps.blockAds ? (sc.blockAds ?? null) : null,
+        ignoreHttps: caps.ignoreHttps ? (sc.ignoreHTTPS ?? null) : null,
+        sessionTimeoutMs: caps.sessionTimeout ? (sc.sessionTimeoutMs ?? null) : null,
+        viewportWidth: caps.viewport ? (sc.viewportWidth ?? null) : null,
+        viewportHeight: caps.viewport ? (sc.viewportHeight ?? null) : null,
+        healthy, lastError: error, lastCheckedAt: new Date(),
+      });
+      logger.info({ type, url, concurrency: conc }, "Seeded provider from an in-use backend");
     }
     await db.insert(settingsTable).values({ key: SEED_FLAG_KEY, value: "1" })
       .onConflictDoUpdate({ target: settingsTable.key, set: { value: "1" } });
@@ -120,7 +123,8 @@ export async function seedProvidersFromSettings(): Promise<void> {
   }
 }
 
-const BIND_FLAG_KEY = "tasksBoundToProviders";
+// v2: re-run after the fixed seed (v1 may have run with no providers to bind to).
+const BIND_FLAG_KEY = "tasksBoundToProvidersV2";
 
 /** One-time migration: bind existing tasks to the provider matching their current engine
  *  type, so you don't have to open each task and pick one. Only binds when there is

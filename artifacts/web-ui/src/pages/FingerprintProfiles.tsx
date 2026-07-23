@@ -213,9 +213,11 @@ export default function FingerprintProfiles() {
               </div>
               {genSummary ? (
                 <div className="text-[11px] font-mono text-muted-foreground space-y-0.5 break-all">
-                  {genSummary.userAgent ? <div>UA: {String(genSummary.userAgent)}</div> : null}
-                  {genSummary.webglRenderer ? <div>GPU: {String(genSummary.webglVendor || "")} — {String(genSummary.webglRenderer)}</div> : null}
+                  {genSummary.webglRenderer || genSummary.webglVendor ? <div>GPU: {[genSummary.webglVendor, genSummary.webglRenderer].filter(Boolean).map(String).join(" · ")}</div> : null}
                   {genSummary.screen ? <div>屏幕: {String(genSummary.screen)}</div> : null}
+                  {genSummary.platform ? <div>平台: {String(genSummary.platform)}</div> : null}
+                  {genSummary.hardwareConcurrency != null ? <div>CPU 核: {String(genSummary.hardwareConcurrency)}</div> : null}
+                  {genSummary.userAgent ? <div>UA: {String(genSummary.userAgent)}</div> : null}
                 </div>
               ) : (
                 <p className="text-[11px] text-muted-foreground">点「生成指纹」产出一套真实一致的指纹(Camoufox 引擎级),保存后固定。不生成则用下方手填(仅 cf-proxy 简单伪装)。</p>
